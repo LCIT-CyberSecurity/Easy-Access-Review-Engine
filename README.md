@@ -47,3 +47,23 @@ Le fichier `reports/campaign-report.html` est autonome et s'ouvre sans backend.
 
 Le modele interne reste generique: les informations AD specifiques sont conservees dans `metadata`
 ou `origin.raw`.
+
+
+## Active Directory support
+
+The AD V1 importer/exporter targets file-based collection from recent enterprise AD DS deployments
+(Windows Server 2019, 2022 and 2025 ActiveDirectory module shapes). Supported observations include:
+
+- users, groups and direct nested group edges;
+- disabled accounts without confusing them with locked or expired accounts;
+- gMSA/MSA as `technical_account` identities;
+- computer principals referenced by group memberships;
+- primary group memberships reconstructed as normal assignments with `MembershipType=primary_group`;
+- Foreign Security Principals preserved by SID when unresolved;
+- cross-domain membership resolution by SID when both providers are available;
+- built-in accounts detected by SID/RID;
+- deterministic optional classification rules for classic service/shared user accounts;
+- locked and expired account findings.
+
+The project does not claim to compute effective NTFS permissions, GPO permissions, AD ACL effective
+rights, Kerberos delegation effective access, Azure/Entra permissions, PAM/JIT or provisioning.

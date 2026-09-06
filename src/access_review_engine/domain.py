@@ -65,10 +65,15 @@ class ComparisonState(StrEnum):
 class Finding(StrEnum):
     DISABLED_WITH_ACCESS = "disabled_with_access"
     DELETED_WITH_ACCESS = "deleted_with_access"
+    ACCOUNT_LOCKED = "account_locked"
+    ACCOUNT_EXPIRED = "account_expired"
     TECHNICAL_ACCOUNT_WITHOUT_OWNER = "technical_account_without_owner"
     SHARED_ACCOUNT_WITHOUT_OWNER = "shared_account_without_owner"
     INVALID_OWNER = "invalid_owner"
     UNKNOWN_IDENTITY = "unknown_identity"
+    UNRESOLVED_FOREIGN_PRINCIPAL = "unresolved_foreign_principal"
+    COLLECTION_INCOMPLETE = "collection_incomplete"
+    UNKNOWN_MEMBER_TYPE = "unknown_member_type"
 
 
 class CampaignStatus(StrEnum):

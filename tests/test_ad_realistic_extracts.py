@@ -171,7 +171,7 @@ def test_multiple_recent_ad_extract_shapes_are_reliably_normalized(tmp_path: Pat
     assert imported[0].accesses[0].description is None
     assert len(imported[1].assignments) == 2
     assert {assignment.identity_identifier for assignment in imported[1].assignments} == {"SQL01", "SQL02"}
-    assert imported[1].accesses[0].control_object.metadata == {}
+    assert imported[1].accesses[0].control_object.metadata["group_category"] == "Security"
 
 
 def _fabrikam_like_zip(tmp_path: Path) -> Path:

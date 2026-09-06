@@ -1,0 +1,12 @@
+Group,GroupSID,Member,MemberSID,MemberType,MemberDN,MembershipType
+GG_FINANCE,S-1-5-21-100-200-300-2101,jean.dupont,S-1-5-21-100-200-300-1101,user,"CN=Jean Dupont,OU=Users,DC=corp,DC=local",direct
+GG_FINANCE,S-1-5-21-100-200-300-2101,disabled.user,S-1-5-21-100-200-300-1102,user,"CN=Disabled User,OU=Users,DC=corp,DC=local",direct
+GG_FINANCE,S-1-5-21-100-200-300-2101,expired.user,S-1-5-21-100-200-300-1103,user,"CN=Expired User,OU=Users,DC=corp,DC=local",direct
+GG_FINANCE,S-1-5-21-100-200-300-2101,locked.user,S-1-5-21-100-200-300-1104,user,"CN=Locked User,OU=Users,DC=corp,DC=local",direct
+GG_FINANCE,S-1-5-21-100-200-300-2101,Dupont.Jerome,S-1-5-21-100-200-300-1105,user,"CN=Dupont\, Jérôme,OU=Users,DC=corp,DC=local",direct
+GG_ALL_FINANCE,S-1-5-21-100-200-300-2102,GG_FINANCE,S-1-5-21-100-200-300-2101,group,"CN=GG_FINANCE,OU=Groups,DC=corp,DC=local",direct
+GG_GMSA,S-1-5-21-100-200-300-2104,gmsa_web$,S-1-5-21-100-200-300-1301,msDS-GroupManagedServiceAccount,"CN=gmsa_web,CN=Managed Service Accounts,DC=corp,DC=local",direct
+GG_GMSA,S-1-5-21-100-200-300-2104,msa_batch$,S-1-5-21-100-200-300-1302,msDS-ManagedServiceAccount,"CN=msa_batch,CN=Managed Service Accounts,DC=corp,DC=local",direct
+GG_COMPUTERS,S-1-5-21-100-200-300-2105,PC001$,S-1-5-21-100-200-300-1401,computer,"CN=PC001,OU=Computers,DC=corp,DC=local",direct
+Domain Users,S-1-5-21-100-200-300-513,jean.dupont,S-1-5-21-100-200-300-1101,user,"CN=Jean Dupont,OU=Users,DC=corp,DC=local",primary_group
+GG_FOREIGN,S-1-5-21-100-200-300-2106,S-1-5-21-900-800-700-1501,S-1-5-21-900-800-700-1501,foreignSecurityPrincipal,"CN=S-1-5-21-900-800-700-1501,CN=ForeignSecurityPrincipals,DC=corp,DC=local",direct

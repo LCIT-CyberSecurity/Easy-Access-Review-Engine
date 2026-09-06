@@ -141,9 +141,15 @@ class Repository:
         ).fetchone()
         return None if row is None else json.loads(row["payload"])
 
-    def replace_assignments(self, assignments: list[AccessAssignment]) -> None:
+    def replace_assignments(
+        self, assignments: list[AccessAssignment], providers: set[str] | None = None
+    ) -> None:
+        scoped_providers = providers or {assignment.provider for assignment in assignments}
+        if not scoped_providers:
+            return
         with self.conn:
-            self.conn.execute("DELETE FROM access_assignments")
+            for provider in scoped_providers:
+                self.conn.execute("DELETE FROM access_assignments WHERE provider = ?", (provider,))
             for assignment in assignments:
                 self.conn.execute(
                     "INSERT INTO access_assignments (id, payload, created_at, provider, name, version) "

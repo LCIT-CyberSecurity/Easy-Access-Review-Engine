@@ -1,0 +1,14 @@
+schema_version: 1
+source_type: active_directory
+provider: corp-ad
+domain: corp.local
+domain_sid: S-1-5-21-100-200-300
+generated_at: 2026-09-06T00:00:00Z
+completeness: unknown
+statistics:
+  users: 1
+  groups: 1
+  service_accounts: 0
+  referenced_computers: 0
+  memberships: 0
+  collection_errors: 1

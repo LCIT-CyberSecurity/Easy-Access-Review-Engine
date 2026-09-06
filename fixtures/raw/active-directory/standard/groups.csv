@@ -1,0 +1,8 @@
+SamAccountName,Name,SID,DistinguishedName,Description,GroupScope,GroupCategory
+Domain Users,Domain Users,S-1-5-21-100-200-300-513,"CN=Domain Users,CN=Users,DC=corp,DC=local",Domain users,Global,Security
+GG_FINANCE,GG_FINANCE,S-1-5-21-100-200-300-2101,"CN=GG_FINANCE,OU=Groups,DC=corp,DC=local",Finance access,Global,Security
+GG_ALL_FINANCE,GG_ALL_FINANCE,S-1-5-21-100-200-300-2102,"CN=GG_ALL_FINANCE,OU=Groups,DC=corp,DC=local",All finance,Universal,Security
+DL_OFFICE,DL_OFFICE,S-1-5-21-100-200-300-2103,"CN=DL_OFFICE,OU=Groups,DC=corp,DC=local",Distribution list,DomainLocal,Distribution
+GG_GMSA,GG_GMSA,S-1-5-21-100-200-300-2104,"CN=GG_GMSA,OU=Groups,DC=corp,DC=local",Managed service accounts,Global,Security
+GG_COMPUTERS,GG_COMPUTERS,S-1-5-21-100-200-300-2105,"CN=GG_COMPUTERS,OU=Groups,DC=corp,DC=local",Computer principals,Global,Security
+GG_FOREIGN,GG_FOREIGN,S-1-5-21-100-200-300-2106,"CN=GG_FOREIGN,OU=Groups,DC=corp,DC=local",Foreign members,Global,Security

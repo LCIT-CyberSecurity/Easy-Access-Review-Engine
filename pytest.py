@@ -31,9 +31,10 @@ class raises:
 def main() -> int:
     root = Path.cwd()
     sys.path.insert(0, str(root / "src"))
+    sys.path.insert(0, str(root / "tests"))
     failures = 0
     tests = 0
-    for path in sorted((root / "tests").glob("test_*.py")):
+    for path in sorted((root / "tests").rglob("test_*.py")):
         module = _load_module(path)
         for name, value in sorted(vars(module).items()):
             if name.startswith("test_") and callable(value):

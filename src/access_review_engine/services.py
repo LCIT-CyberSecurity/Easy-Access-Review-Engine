@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import UTC, datetime
 from typing import Iterable
 
 from access_review_engine.domain import (
@@ -53,6 +54,12 @@ def owner_findings(identity: Identity, identities: dict[tuple[str, str], Identit
     findings: list[str] = []
     if identity.status == IdentityStatus.UNKNOWN:
         findings.append(Finding.UNKNOWN_IDENTITY)
+    if _truthy_metadata(identity.metadata.get("locked_out")):
+        findings.append(Finding.ACCOUNT_LOCKED)
+    if _truthy_metadata(identity.metadata.get("account_expired")) or _is_past_datetime(
+        identity.metadata.get("account_expiration_date")
+    ):
+        findings.append(Finding.ACCOUNT_EXPIRED)
     if identity.account_owner and not validate_owner(identity.account_owner, identity, identities):
         findings.append(Finding.INVALID_OWNER)
     if identity.type == IdentityType.TECHNICAL_ACCOUNT and not identity.built_in and not identity.account_owner:
@@ -60,6 +67,25 @@ def owner_findings(identity: Identity, identities: dict[tuple[str, str], Identit
     if identity.type == IdentityType.SHARED_ACCOUNT and not identity.account_owner:
         findings.append(Finding.SHARED_ACCOUNT_WITHOUT_OWNER)
     return findings
+
+
+def _truthy_metadata(value: object) -> bool:
+    return value is True or str(value).lower() in {"1", "true", "yes", "y"}
+
+
+def _is_past_datetime(value: object) -> bool:
+    if not value:
+        return False
+    text = str(value).strip()
+    for fmt in (None, "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%m/%d/%Y %I:%M:%S %p"):
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00")) if fmt is None else datetime.strptime(text, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return dt < datetime.now(UTC)
+        except ValueError:
+            continue
+    return False
 
 
 def reconcile_identities(
@@ -122,6 +148,9 @@ def compare_snapshot(
     identities = {identity_key(identity): identity for identity in snapshot.identities}
     accesses = {access_key(access): access for access in snapshot.accesses}
     observed = {assignment.comparison_key() for assignment in snapshot.access_assignments}
+    assignment_origins: dict[tuple[str, str, str, str], list[AccessAssignment]] = {}
+    for assignment in snapshot.access_assignments:
+        assignment_origins.setdefault(assignment.comparison_key(), []).append(assignment)
     if golden_version is None:
         expected: set[tuple[str, str, str, str]] = set()
     else:
@@ -146,6 +175,13 @@ def compare_snapshot(
 
         identity = identities.get((identity_provider, identity_identifier))
         findings: list[str] = []
+        for assignment in assignment_origins.get(key, []):
+            if assignment.origin.raw.get("unresolved_foreign_principal"):
+                findings.append(Finding.UNRESOLVED_FOREIGN_PRINCIPAL)
+            if assignment.origin.raw.get("unknown_member_type"):
+                findings.append(Finding.UNKNOWN_MEMBER_TYPE)
+        if import_scope and import_scope.get("completeness") not in {None, "full"}:
+            findings.append(Finding.COLLECTION_INCOMPLETE)
         if identity is None:
             findings.append(Finding.UNKNOWN_IDENTITY)
         else:
@@ -164,7 +200,7 @@ def compare_snapshot(
                 "expected": is_expected,
                 "observed": is_observed,
                 "classification": str(classification),
-                "findings": [str(item) for item in findings],
+                "findings": sorted({str(item) for item in findings}),
                 "access": asdict(accesses[(access_provider, access_name)])
                 if (access_provider, access_name) in accesses
                 else None,
@@ -175,6 +211,8 @@ def compare_snapshot(
 
 
 def _in_authoritative_scope(provider: str, access_name: str, scope: dict[str, object] | None) -> bool:
+    if scope and scope.get("completeness") not in {None, "full"}:
+        return False
     if not scope or scope.get("type") == "all":
         return True
     if scope.get("type") == "providers":
