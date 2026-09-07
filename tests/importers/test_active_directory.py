@@ -104,3 +104,38 @@ def test_classic_service_and_shared_accounts_use_deterministic_rules(tmp_path: P
         zf.writestr("memberships.csv", "Group,GroupSID,Member,MemberSID,MemberType\n")
     shared = import_ad_zip(old, classification_rules=rules)
     assert shared.identities[0].type == IdentityType.SHARED_ACCOUNT
+
+
+def test_manifest_validation_rejects_unsupported_values_and_error_mismatch(tmp_path: Path) -> None:
+    unsupported = tmp_path / "unsupported.zip"
+    with ZipFile(unsupported, "w", ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.yaml", "schema_version: 99\nsource_type: active_directory\nprovider: corp-ad\ncompleteness: full\n")
+        zf.writestr("users.csv", "SamAccountName,Enabled,SID\n")
+        zf.writestr("groups.csv", "SamAccountName,Name,SID\n")
+        zf.writestr("memberships.csv", "Group,GroupSID,Member,MemberSID,MemberType\n")
+    with pytest.raises(ValueError):
+        import_ad_zip(unsupported)
+
+    mismatch = tmp_path / "mismatch.zip"
+    with ZipFile(mismatch, "w", ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.yaml",
+            "schema_version: 1\nsource_type: active_directory\nprovider: corp-ad\ncompleteness: unknown\nstatistics:\n  collection_errors: 1\n",
+        )
+        zf.writestr("users.csv", "SamAccountName,Enabled,SID\n")
+        zf.writestr("groups.csv", "SamAccountName,Name,SID\n")
+        zf.writestr("memberships.csv", "Group,GroupSID,Member,MemberSID,MemberType\n")
+        zf.writestr("collection-errors.csv", "ObjectType,ObjectIdentifier,ObjectSID,Operation,ErrorCode,ErrorMessage\n")
+    with pytest.raises(ValueError):
+        import_ad_zip(mismatch)
+
+
+def test_zip_bomb_declared_uncompressed_size_is_rejected(tmp_path: Path) -> None:
+    archive = tmp_path / "bomb.zip"
+    with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.yaml", "provider: corp-ad\ncompleteness: full\n")
+        zf.writestr("users.csv", "SamAccountName,Enabled,SID\n")
+        zf.writestr("groups.csv", "SamAccountName,Name,SID\n")
+        zf.writestr("memberships.csv", "0" * 25_000_001)
+    with pytest.raises(ValueError):
+        import_ad_zip(archive)

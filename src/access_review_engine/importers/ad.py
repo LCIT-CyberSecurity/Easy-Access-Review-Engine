@@ -28,6 +28,11 @@ from access_review_engine.domain import (
 REQUIRED_AD_FILES = {"manifest.yaml", "users.csv", "groups.csv", "memberships.csv"}
 OPTIONAL_AD_FILES = {"service_accounts.csv", "computers.csv", "collection-errors.csv"}
 ALLOWED_AD_FILES = REQUIRED_AD_FILES | OPTIONAL_AD_FILES
+MAX_AD_ZIP_FILES = 16
+MAX_AD_FILE_BYTES = 25_000_000
+MAX_AD_UNCOMPRESSED_BYTES = 100_000_000
+SUPPORTED_SCHEMA_VERSIONS = {1}
+SUPPORTED_COMPLETENESS = {Completeness.FULL, Completeness.SCOPED, Completeness.UNKNOWN}
 BUILT_IN_ACCOUNT_RIDS = {"500", "501", "502"}
 MANAGED_SERVICE_ACCOUNT_CLASSES = {
     "msds-managedserviceaccount": "msa",
@@ -67,14 +72,18 @@ def import_ad_zip(
             unique_names = set(names)
             if len(names) != len(unique_names):
                 raise ValueError("Archive contains duplicate filenames")
+            if len(names) > MAX_AD_ZIP_FILES:
+                raise ValueError("Archive contains too many files")
             if any(name.startswith("/") or ".." in Path(name).parts for name in names):
                 raise ValueError("Unsafe ZIP path detected")
             if not ALLOWED_AD_FILES.issuperset(unique_names):
                 raise ValueError("Archive contains unexpected files")
+            _validate_zip_members(zf)
             missing = REQUIRED_AD_FILES - unique_names
             if missing:
                 raise ValueError(f"Archive is missing required files: {sorted(missing)}")
             manifest = _read_manifest(zf.read("manifest.yaml").decode("utf-8"))
+            _validate_manifest(manifest)
             provider_name = manifest.get("provider") or manifest.get("provider_name")
             if not provider_name:
                 raise ValueError("manifest.yaml must define provider")
@@ -146,6 +155,7 @@ def import_ad_zip(
             )
         )
 
+    _validate_collection_error_count(manifest, len(collection_errors))
     completeness = str(manifest.get("completeness") or Completeness.UNKNOWN)
     if collection_errors and completeness == Completeness.FULL:
         completeness = Completeness.UNKNOWN
@@ -175,6 +185,39 @@ def import_ad_zip(
 
     batch.completed_at = now_utc()
     return ImportResult(batch, provider, identities, accesses, assignments)
+
+
+def _validate_zip_members(zf: ZipFile) -> None:
+    total = 0
+    for info in zf.infolist():
+        if info.file_size > MAX_AD_FILE_BYTES:
+            raise ValueError("Archive member exceeds configured maximum size")
+        total += info.file_size
+        if total > MAX_AD_UNCOMPRESSED_BYTES:
+            raise ValueError("Archive uncompressed size exceeds configured maximum size")
+
+
+def _validate_manifest(manifest: dict[str, object]) -> None:
+    schema_version = manifest.get("schema_version")
+    if schema_version is not None and schema_version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError("manifest.yaml has unsupported schema_version")
+    source_type = manifest.get("source_type")
+    if source_type is not None and source_type != "active_directory":
+        raise ValueError("manifest.yaml has unsupported source_type")
+    completeness = manifest.get("completeness")
+    if completeness is not None and completeness not in SUPPORTED_COMPLETENESS:
+        raise ValueError("manifest.yaml has unsupported completeness")
+
+
+def _validate_collection_error_count(manifest: dict[str, object], actual_errors: int) -> None:
+    stats = manifest.get("statistics")
+    if not isinstance(stats, dict) or "collection_errors" not in stats:
+        return
+    declared = stats["collection_errors"]
+    if not isinstance(declared, int):
+        raise ValueError("manifest.yaml statistics.collection_errors must be an integer")
+    if declared != actual_errors:
+        raise ValueError("manifest.yaml collection_errors does not match collection-errors.csv")
 
 
 def _read_manifest(text: str) -> dict[str, object]:
@@ -258,6 +301,7 @@ def _service_account_identity(provider: str, row: dict[str, str]) -> Identity:
             "managed_service_account_type": MANAGED_SERVICE_ACCOUNT_CLASSES.get(object_class, "msa"),
             "distinguished_name": row.get("DistinguishedName") or None,
             "service_principal_name": row.get("ServicePrincipalName") or None,
+            "primary_group_id": row.get("PrimaryGroupID") or None,
             "object_class": row.get("ObjectClass") or None,
             "object_guid": row.get("ObjectGUID") or None,
         },
@@ -277,6 +321,7 @@ def _computer_identity(provider: str, row: dict[str, str]) -> Identity:
             "principal_kind": "computer",
             "distinguished_name": row.get("DistinguishedName") or None,
             "dns_host_name": row.get("DNSHostName") or None,
+            "primary_group_id": row.get("PrimaryGroupID") or None,
             "object_guid": row.get("ObjectGUID") or None,
         },
     )
@@ -350,7 +395,7 @@ def _resolve_member(
         raw_flags["unresolved"] = True
         if member_type == "foreignsecurityprincipal":
             raw_flags["unresolved_foreign_principal"] = True
-        return current_provider, member_sid or member, raw_flags
+        return "", member_sid or member, raw_flags
     return current_provider, member, raw_flags
 
 

@@ -126,12 +126,28 @@ class Repository:
             for row in self.conn.execute(f"SELECT payload FROM {table} ORDER BY created_at, id")
         ]
 
+    def list_payloads_by_provider(self, table: str, provider: str) -> list[dict[str, Any]]:
+        return [
+            json.loads(row["payload"])
+            for row in self.conn.execute(
+                f"SELECT payload FROM {table} WHERE provider = ? ORDER BY created_at, id",
+                (provider,),
+            )
+        ]
+
     def get_payload(self, table: str, object_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(f"SELECT payload FROM {table} WHERE id = ?", (object_id,)).fetchone()
         return None if row is None else json.loads(row["payload"])
 
     def find_by_name(self, table: str, name: str) -> dict[str, Any] | None:
         row = self.conn.execute(f"SELECT payload FROM {table} WHERE name = ?", (name,)).fetchone()
+        return None if row is None else json.loads(row["payload"])
+
+    def find_by_provider_name(self, table: str, provider: str, name: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            f"SELECT payload FROM {table} WHERE provider = ? AND name = ?",
+            (provider, name),
+        ).fetchone()
         return None if row is None else json.loads(row["payload"])
 
     def find_version(self, golden_source_id: str, version: int) -> dict[str, Any] | None:

@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from access_review_engine.application import import_file_to_repository, load_classification_rules
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif
 from access_review_engine.reporting import write_reports
-from access_review_engine.services import create_snapshot
 from access_review_engine.storage import Repository
 
 
@@ -21,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     imp = sub.add_parser("import")
     imp.add_argument("file")
     imp.add_argument("--provider", default="openldap")
+    imp.add_argument("--classification-rules")
 
     sub.add_parser("findings-list")
     identities = sub.add_parser("identities-list")
@@ -37,17 +38,14 @@ def main(argv: list[str] | None = None) -> int:
             print("valid")
             return 0
         if args.command == "import":
-            result = import_ad_zip(args.file) if str(args.file).endswith(".zip") else import_openldap_ldif(args.file, args.provider)
-            repo.upsert("providers", result.provider)
-            repo.insert_append_only("imports", result.batch)
-            for identity in result.identities:
-                repo.upsert("identities", identity)
-            for access in result.accesses:
-                repo.upsert("accesses", access)
-            repo.replace_assignments(result.assignments)
-            snapshot = create_snapshot([result.provider], result.identities, [], result.accesses, result.assignments, [result.batch.id])
-            repo.insert_append_only("snapshots", snapshot)
-            print(f"imported provider={result.provider.name} snapshot={snapshot.id}")
+            snapshot = import_file_to_repository(
+                repo,
+                args.file,
+                provider_name=args.provider,
+                classification_rules=load_classification_rules(args.classification_rules),
+            )
+            provider = snapshot.providers[0].name if snapshot.providers else args.provider
+            print(f"imported provider={provider} snapshot={snapshot.id}")
             return 0
         if args.command == "findings-list":
             snapshots = repo.list_payloads("snapshots")

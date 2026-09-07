@@ -1,6 +1,6 @@
 param(
-  [Parameter(Mandatory=$true)][string]$ProviderName,
-  [Parameter(Mandatory=$true)][string]$Output,
+  [string]$ProviderName,
+  [string]$Output,
   [string]$Server,
   [switch]$AllowPartial
 )
@@ -27,6 +27,23 @@ function Get-PrimaryGroupSid {
   return "$(Get-DomainSidFromSid -Sid $PrincipalSid)-$PrimaryGroupID"
 }
 
+
+function ConvertTo-InvariantAdDate {
+  param($Value)
+  if ($null -eq $Value) { return $null }
+  if ($Value -is [datetime]) {
+    return $Value.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
+  }
+  return $Value
+}
+
+function ConvertTo-AdCsvMultiValue {
+  param($Value)
+  if ($null -eq $Value) { return $null }
+  if ($Value -is [string]) { return $Value }
+  return @($Value) -join ';'
+}
+
 function New-CollectionError {
   param($ObjectType, $ObjectIdentifier, $ObjectSID, $Operation, $ErrorRecord)
   [PSCustomObject]@{
@@ -41,7 +58,7 @@ function New-CollectionError {
 
 function Write-Manifest {
   param($Path, $Stats, $Completeness, $Domain, $DomainSid)
-  $generatedAt = (Get-Date).ToUniversalTime().ToString("o")
+  $generatedAt = (Get-Date).ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
   @"
 schema_version: 1
 source_type: active_directory
@@ -60,11 +77,36 @@ statistics:
 "@ | Out-File -Encoding utf8 $Path
 }
 
+
+function Add-PrimaryGroupMembership {
+  param($Memberships, $Principal, $GroupsBySid)
+  if (-not $Principal.SID -or -not $Principal.PrimaryGroupID) { return $Memberships }
+  $primaryGroupSid = Get-PrimaryGroupSid -PrincipalSid $Principal.SID.Value -PrimaryGroupID ([string]$Principal.PrimaryGroupID)
+  if (-not $GroupsBySid.ContainsKey($primaryGroupSid)) { return $Memberships }
+  $group = $GroupsBySid[$primaryGroupSid]
+  $exists = $Memberships | Where-Object { $_.GroupSID -eq $primaryGroupSid -and $_.MemberSID -eq $Principal.SID.Value } | Select-Object -First 1
+  if ($exists) { return $Memberships }
+  $Memberships += [PSCustomObject]@{
+    Group = $group.SamAccountName
+    GroupSID = $group.SID.Value
+    Member = $Principal.SamAccountName
+    MemberSID = $Principal.SID.Value
+    MemberType = $Principal.ObjectClass
+    MemberDN = $Principal.DistinguishedName
+    MembershipType = 'primary_group'
+  }
+  return $Memberships
+}
+
 function Add-ServerArg {
   $params = @{}
   if ($Server) { $params.Server = $Server }
   return $params
 }
+
+if ($MyInvocation.InvocationName -eq '.') { return }
+if (-not $ProviderName) { throw "ProviderName is required" }
+if (-not $Output) { throw "Output is required" }
 
 $tmp = New-Item -ItemType Directory -Path ([System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString()))
 $errors = @()
@@ -77,7 +119,12 @@ try {
 
   $userProps = @('DisplayName','Mail','Enabled','SID','DistinguishedName','LastLogonDate','PasswordLastSet','AccountExpirationDate','WhenCreated','Description','UserPrincipalName','PrimaryGroupID','LockedOut','ServicePrincipalName','ObjectGUID')
   $users = Get-ADUser -Filter * -Properties $userProps @serverArg
-  $users | Select-Object SamAccountName,UserPrincipalName,DisplayName,Mail,Enabled,SID,DistinguishedName,Description,LastLogonDate,PasswordLastSet,AccountExpirationDate,WhenCreated,PrimaryGroupID,LockedOut,ServicePrincipalName,ObjectGUID |
+  $users | Select-Object SamAccountName,UserPrincipalName,DisplayName,Mail,Enabled,SID,DistinguishedName,Description,PrimaryGroupID,LockedOut,ObjectGUID,
+    @{Name='LastLogonDate';Expression={ ConvertTo-InvariantAdDate $_.LastLogonDate }},
+    @{Name='PasswordLastSet';Expression={ ConvertTo-InvariantAdDate $_.PasswordLastSet }},
+    @{Name='AccountExpirationDate';Expression={ ConvertTo-InvariantAdDate $_.AccountExpirationDate }},
+    @{Name='WhenCreated';Expression={ ConvertTo-InvariantAdDate $_.WhenCreated }},
+    @{Name='ServicePrincipalName';Expression={ ConvertTo-AdCsvMultiValue $_.ServicePrincipalName }} |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/users.csv"
 
   $groupProps = @('SamAccountName','Name','SID','DistinguishedName','Description','GroupScope','GroupCategory')
@@ -85,9 +132,10 @@ try {
   $groups | Select-Object SamAccountName,Name,SID,DistinguishedName,Description,GroupScope,GroupCategory |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/groups.csv"
 
-  $svcProps = @('SamAccountName','SID','DistinguishedName','Enabled','Description','ServicePrincipalName','ObjectClass','ObjectGUID','Name','DisplayName')
+  $svcProps = @('SamAccountName','SID','DistinguishedName','Enabled','Description','ServicePrincipalName','ObjectClass','ObjectGUID','Name','DisplayName','PrimaryGroupID')
   $serviceAccounts = Get-ADServiceAccount -Filter * -Properties $svcProps @serverArg
-  $serviceAccounts | Select-Object SamAccountName,Name,DisplayName,SID,DistinguishedName,Enabled,Description,ServicePrincipalName,ObjectClass,ObjectGUID |
+  $serviceAccounts | Select-Object SamAccountName,Name,DisplayName,SID,DistinguishedName,Enabled,Description,ObjectClass,ObjectGUID,PrimaryGroupID,
+    @{Name='ServicePrincipalName';Expression={ ConvertTo-AdCsvMultiValue $_.ServicePrincipalName }} |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/service_accounts.csv"
 
   $memberships = @()
@@ -117,36 +165,22 @@ try {
   $groupsBySid = @{}
   foreach ($group in $groups) { $groupsBySid[$group.SID.Value] = $group }
   foreach ($principal in @($users) + @($serviceAccounts)) {
-    if ($principal.SID -and $principal.PrimaryGroupID) {
-      $primaryGroupSid = Get-PrimaryGroupSid -PrincipalSid $principal.SID.Value -PrimaryGroupID ([string]$principal.PrimaryGroupID)
-      if ($groupsBySid.ContainsKey($primaryGroupSid)) {
-        $group = $groupsBySid[$primaryGroupSid]
-        $exists = $memberships | Where-Object { $_.GroupSID -eq $primaryGroupSid -and $_.MemberSID -eq $principal.SID.Value } | Select-Object -First 1
-        if (-not $exists) {
-          $memberships += [PSCustomObject]@{
-            Group = $group.SamAccountName
-            GroupSID = $group.SID.Value
-            Member = $principal.SamAccountName
-            MemberSID = $principal.SID.Value
-            MemberType = $principal.ObjectClass
-            MemberDN = $principal.DistinguishedName
-            MembershipType = 'primary_group'
-          }
-        }
-      }
-    }
+    $memberships = Add-PrimaryGroupMembership -Memberships $memberships -Principal $principal -GroupsBySid $groupsBySid
   }
 
   $computers = @()
   foreach ($sid in $computerSids.Keys) {
     try {
-      $computers += Get-ADComputer -Identity $sid -Properties SamAccountName,SID,DistinguishedName,Enabled,DNSHostName,Description,ObjectGUID @serverArg
+      $computers += Get-ADComputer -Identity $sid -Properties SamAccountName,SID,DistinguishedName,Enabled,DNSHostName,Description,ObjectGUID,PrimaryGroupID @serverArg
     }
     catch {
       $errors += New-CollectionError -ObjectType 'computer' -ObjectIdentifier $computerSids[$sid] -ObjectSID $sid -Operation 'Get-ADComputer' -ErrorRecord $_
     }
   }
-  $computers | Select-Object SamAccountName,Name,SID,DistinguishedName,Enabled,DNSHostName,Description,ObjectGUID |
+  foreach ($principal in @($computers)) {
+    $memberships = Add-PrimaryGroupMembership -Memberships $memberships -Principal $principal -GroupsBySid $groupsBySid
+  }
+  $computers | Select-Object SamAccountName,Name,SID,DistinguishedName,Enabled,DNSHostName,Description,ObjectGUID,PrimaryGroupID |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/computers.csv"
 
   $memberships | Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/memberships.csv"
