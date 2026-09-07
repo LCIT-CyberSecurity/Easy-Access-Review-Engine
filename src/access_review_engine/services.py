@@ -152,67 +152,169 @@ def compare_snapshot(
 ) -> list[dict[str, object]]:
     identities = {identity_key(identity): identity for identity in snapshot.identities}
     accesses = {access_key(access): access for access in snapshot.accesses}
-    observed = {assignment.comparison_key() for assignment in snapshot.access_assignments}
+    observed_assignments = {assignment.comparison_key(): assignment for assignment in snapshot.access_assignments}
+    observed_legacy = set(observed_assignments)
+    observed_stable: dict[tuple[str, str, str, str], tuple[str, str, str, str] | None] = {}
     assignment_origins: dict[tuple[str, str, str, str], list[AccessAssignment]] = {}
     for assignment in snapshot.access_assignments:
-        assignment_origins.setdefault(assignment.comparison_key(), []).append(assignment)
-    if golden_version is None:
-        expected: set[tuple[str, str, str, str]] = set()
-    else:
-        expected = {assignment.key() for assignment in golden_version.assignments}
+        legacy_key = assignment.comparison_key()
+        assignment_origins.setdefault(legacy_key, []).append(assignment)
+        stable_key = _observed_stable_key(assignment, accesses, identities)
+        if stable_key is None:
+            continue
+        observed_stable[stable_key] = legacy_key if stable_key not in observed_stable else None
 
-    keys = observed | expected
+    expected_items = list(golden_version.assignments) if golden_version else []
+    expected_stable = {
+        stable_key: assignment
+        for assignment in expected_items
+        if (stable_key := assignment.stable_key()) is not None
+    }
+
     rows: list[dict[str, object]] = []
-    for key in sorted(keys):
-        access_provider, access_name, identity_provider, identity_identifier = key
-        is_observed = key in observed
-        is_expected = key in expected
-        if golden_version is None:
-            classification = ComparisonState.NO_REFERENCE
-        elif is_observed and is_expected:
-            classification = ComparisonState.EXPECTED_AND_OBSERVED
-        elif is_observed:
-            classification = ComparisonState.UNEXPECTED
-        elif _in_authoritative_scope(access_provider, access_name, import_scope):
+    matched_observed: set[tuple[str, str, str, str]] = set()
+
+    for expected in sorted(expected_items, key=lambda item: item.key()):
+        expected_key = expected.key()
+        stable_key = expected.stable_key()
+        observed_key: tuple[str, str, str, str] | None = None
+        if stable_key is not None:
+            candidate = observed_stable.get(stable_key)
+            if candidate is not None:
+                observed_key = candidate
+        elif expected_key in observed_legacy:
+            observed_key = expected_key
+
+        row_key = observed_key or expected_key
+        if observed_key is not None:
+            matched_observed.add(observed_key)
+            classification = (
+                ComparisonState.UNKNOWN_DUE_TO_SCOPE
+                if _is_incomplete_scope(import_scope)
+                else ComparisonState.EXPECTED_AND_OBSERVED
+            )
+        elif _in_authoritative_scope(expected.access_provider, expected.access_name, import_scope):
             classification = ComparisonState.MISSING
         else:
             classification = ComparisonState.UNKNOWN_DUE_TO_SCOPE
+        rows.append(_comparison_row(
+            row_key,
+            expected=True,
+            observed=observed_key is not None,
+            classification=classification,
+            identities=identities,
+            accesses=accesses,
+            assignment_origins=assignment_origins,
+            import_scope=import_scope,
+        ))
 
-        identity = identities.get((identity_provider, identity_identifier))
-        findings: list[str] = []
-        for assignment in assignment_origins.get(key, []):
-            if assignment.origin.raw.get("unresolved_foreign_principal"):
-                findings.append(Finding.UNRESOLVED_FOREIGN_PRINCIPAL)
-            if assignment.origin.raw.get("unknown_member_type"):
-                findings.append(Finding.UNKNOWN_MEMBER_TYPE)
-        if _is_incomplete_scope(import_scope):
-            findings.append(Finding.COLLECTION_INCOMPLETE)
-        if identity is None:
-            findings.append(Finding.UNKNOWN_IDENTITY)
+    for observed_key in sorted(observed_legacy):
+        if observed_key in matched_observed:
+            continue
+        assignment = observed_assignments[observed_key]
+        stable_key = _observed_stable_key(assignment, accesses, identities)
+        if stable_key is not None and stable_key in expected_stable:
+            continue
+        if golden_version is None:
+            classification = ComparisonState.NO_REFERENCE
+            expected = False
         else:
-            if is_observed and identity.status == IdentityStatus.DISABLED:
-                findings.append(Finding.DISABLED_WITH_ACCESS)
-            if is_observed and identity.status == IdentityStatus.DELETED:
-                findings.append(Finding.DELETED_WITH_ACCESS)
-            findings.extend(owner_findings(identity, identities))
+            classification = ComparisonState.UNEXPECTED
+            expected = False
+        rows.append(_comparison_row(
+            observed_key,
+            expected=expected,
+            observed=True,
+            classification=classification,
+            identities=identities,
+            accesses=accesses,
+            assignment_origins=assignment_origins,
+            import_scope=import_scope,
+        ))
 
-        rows.append(
-            {
-                "access_provider": access_provider,
-                "access_name": access_name,
-                "identity_provider": identity_provider,
-                "identity_identifier": identity_identifier,
-                "expected": is_expected,
-                "observed": is_observed,
-                "classification": str(classification),
-                "findings": sorted({str(item) for item in findings}),
-                "access": asdict(accesses[(access_provider, access_name)])
-                if (access_provider, access_name) in accesses
-                else None,
-                "identity": asdict(identity) if identity else None,
-            }
-        )
-    return rows
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row["access_provider"]),
+            str(row["access_name"]),
+            str(row["identity_provider"]),
+            str(row["identity_identifier"]),
+            str(row["classification"]),
+        ),
+    )
+
+
+def _comparison_row(
+    key: tuple[str, str, str, str],
+    expected: bool,
+    observed: bool,
+    classification: str,
+    identities: dict[tuple[str, str], Identity],
+    accesses: dict[tuple[str, str], Access],
+    assignment_origins: dict[tuple[str, str, str, str], list[AccessAssignment]],
+    import_scope: dict[str, object] | None,
+) -> dict[str, object]:
+    access_provider, access_name, identity_provider, identity_identifier = key
+    identity = identities.get((identity_provider, identity_identifier))
+    findings: list[str] = []
+    for assignment in assignment_origins.get(key, []):
+        if assignment.origin.raw.get("unresolved_foreign_principal") or assignment.origin.raw.get("unresolved"):
+            findings.append(Finding.UNRESOLVED_FOREIGN_PRINCIPAL)
+        if assignment.origin.raw.get("unknown_member_type"):
+            findings.append(Finding.UNKNOWN_MEMBER_TYPE)
+    if _is_incomplete_scope(import_scope):
+        findings.append(Finding.COLLECTION_INCOMPLETE)
+    if identity is None:
+        findings.append(Finding.UNKNOWN_IDENTITY)
+    else:
+        if observed and identity.status == IdentityStatus.DISABLED:
+            findings.append(Finding.DISABLED_WITH_ACCESS)
+        if observed and identity.status == IdentityStatus.DELETED:
+            findings.append(Finding.DELETED_WITH_ACCESS)
+        findings.extend(owner_findings(identity, identities))
+
+    access = accesses.get((access_provider, access_name))
+    return {
+        "access_provider": access_provider,
+        "access_name": access_name,
+        "identity_provider": identity_provider,
+        "identity_identifier": identity_identifier,
+        "expected": expected,
+        "observed": observed,
+        "classification": str(classification),
+        "findings": sorted({str(item) for item in findings}),
+        "access": asdict(access) if access else None,
+        "identity": asdict(identity) if identity else None,
+    }
+
+
+def _observed_stable_key(
+    assignment: AccessAssignment,
+    accesses: dict[tuple[str, str], Access],
+    identities: dict[tuple[str, str], Identity],
+) -> tuple[str, str, str, str] | None:
+    access = accesses.get((assignment.provider, assignment.access_name))
+    identity = identities.get((assignment.identity_provider, assignment.identity_identifier))
+    if identity is None:
+        return None
+    raw_access_native = assignment.origin.raw.get("GroupSID") or assignment.origin.raw.get("group_native_id")
+    access_native_id = str(raw_access_native) if raw_access_native else None
+    if access_native_id is None and access is not None:
+        access_native_id = access.control_object.native_id
+    permission_id = access.permission.identifier if access is not None else "member"
+    if not access_native_id and not identity.native_id:
+        return None
+    access_ref = (
+        f"native:{access_native_id}:{permission_id}"
+        if access_native_id
+        else f"name:{assignment.access_name}"
+    )
+    identity_ref = (
+        f"native:{identity.native_id}"
+        if identity.native_id
+        else f"identifier:{assignment.identity_identifier}"
+    )
+    return (assignment.provider, access_ref, assignment.identity_provider, identity_ref)
 
 
 def _is_incomplete_scope(scope: dict[str, object] | None) -> bool:
@@ -291,15 +393,23 @@ def promote_snapshot(
     snapshot: Snapshot,
     previous_versions: Iterable[GoldenSourceVersion] = (),
 ) -> GoldenSourceVersion:
-    assignments = [
-        GoldenSourceAssignment(
-            access_provider=item.provider,
-            access_name=item.access_name,
-            identity_provider=item.identity_provider,
-            identity_identifier=item.identity_identifier,
+    identities = {identity_key(identity): identity for identity in snapshot.identities}
+    accesses = {access_key(access): access for access in snapshot.accesses}
+    assignments = []
+    for item in snapshot.access_assignments:
+        access = accesses.get((item.provider, item.access_name))
+        identity = identities.get((item.identity_provider, item.identity_identifier))
+        assignments.append(
+            GoldenSourceAssignment(
+                access_provider=item.provider,
+                access_name=item.access_name,
+                identity_provider=item.identity_provider,
+                identity_identifier=item.identity_identifier,
+                access_native_id=access.control_object.native_id if access else None,
+                access_permission=access.permission.identifier if access else None,
+                identity_native_id=identity.native_id if identity else None,
+            )
         )
-        for item in snapshot.access_assignments
-    ]
     previous = list(previous_versions)
     parent_id = max(previous, key=lambda item: item.version).id if previous else None
     return create_golden_version(

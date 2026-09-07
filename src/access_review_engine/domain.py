@@ -284,6 +284,9 @@ class GoldenSourceAssignment:
     access_name: str
     identity_provider: str
     identity_identifier: str
+    access_native_id: str | None = None
+    access_permission: str | None = None
+    identity_native_id: str | None = None
 
     def key(self) -> tuple[str, str, str, str]:
         return (
@@ -292,6 +295,21 @@ class GoldenSourceAssignment:
             self.identity_provider,
             self.identity_identifier,
         )
+
+    def stable_key(self) -> tuple[str, str, str, str] | None:
+        if not self.access_native_id and not self.identity_native_id:
+            return None
+        access_ref = (
+            f"native:{self.access_native_id}:{self.access_permission or ''}"
+            if self.access_native_id
+            else f"name:{self.access_name}"
+        )
+        identity_ref = (
+            f"native:{self.identity_native_id}"
+            if self.identity_native_id
+            else f"identifier:{self.identity_identifier}"
+        )
+        return (self.access_provider, access_ref, self.identity_provider, identity_ref)
 
 
 @dataclass

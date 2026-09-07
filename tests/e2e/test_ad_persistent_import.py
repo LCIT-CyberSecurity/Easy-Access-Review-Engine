@@ -11,7 +11,7 @@ from access_review_engine.domain import (
     IdentityStatus,
 )
 from access_review_engine.importers.ad import import_ad_zip
-from access_review_engine.services import create_golden_source, create_golden_version
+from access_review_engine.services import create_golden_source, create_golden_version, promote_snapshot
 from access_review_engine.storage import Repository
 from ad_test_helpers import zip_fixture
 
@@ -331,6 +331,61 @@ def test_reused_samaccountname_after_tombstone_keeps_both_identities(tmp_path: P
     finally:
         repo.close()
 
+
+
+def test_ad_golden_identity_rename_same_sid_is_expected_and_observed(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        first = import_file_to_repository(
+            repo,
+            _ad_zip(tmp_path, "corp-ad", [("user.old", _sid(1101))], [("Finance", _sid(2101))], [("Finance", _sid(2101), "user.old", _sid(1101), "user")], suffix="old"),
+        )
+        golden = promote_snapshot(create_golden_source("baseline"), first)
+        snapshot = import_file_to_repository(
+            repo,
+            _ad_zip(tmp_path, "corp-ad", [("user.new", _sid(1101))], [("Finance", _sid(2101))], [("Finance", _sid(2101), "user.new", _sid(1101), "user")], suffix="new"),
+            golden_version=golden,
+        )
+        assert {row["classification"] for row in snapshot.comparison_states} == {"expected_and_observed"}
+    finally:
+        repo.close()
+
+
+def test_ad_golden_group_rename_same_sid_is_expected_and_observed(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        first = import_file_to_repository(
+            repo,
+            _ad_zip(tmp_path, "corp-ad", [("user", _sid(1101))], [("Finance", _sid(2101))], [("Finance", _sid(2101), "user", _sid(1101), "user")], suffix="old"),
+        )
+        golden = promote_snapshot(create_golden_source("baseline"), first)
+        snapshot = import_file_to_repository(
+            repo,
+            _ad_zip(tmp_path, "corp-ad", [("user", _sid(1101))], [("Finance-Renamed", _sid(2101))], [("Finance-Renamed", _sid(2101), "user", _sid(1101), "user")], suffix="new"),
+            golden_version=golden,
+        )
+        assert {row["classification"] for row in snapshot.comparison_states} == {"expected_and_observed"}
+    finally:
+        repo.close()
+
+
+def test_ad_golden_same_group_name_new_sid_is_not_expected_and_observed(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        first = import_file_to_repository(
+            repo,
+            _ad_zip(tmp_path, "corp-ad", [("user", _sid(1101))], [("Finance", _sid(2101))], [("Finance", _sid(2101), "user", _sid(1101), "user")], suffix="old"),
+        )
+        golden = promote_snapshot(create_golden_source("baseline"), first)
+        snapshot = import_file_to_repository(
+            repo,
+            _ad_zip(tmp_path, "corp-ad", [("user", _sid(1101))], [("Finance", _sid(2201))], [("Finance", _sid(2201), "user", _sid(1101), "user")], suffix="new"),
+            golden_version=golden,
+        )
+        assert "expected_and_observed" not in {row["classification"] for row in snapshot.comparison_states}
+        assert {row["classification"] for row in snapshot.comparison_states} == {"missing", "unexpected"}
+    finally:
+        repo.close()
 
 def _ids_by_native(repo: Repository, table: str) -> dict[str, str]:
     return {row["native_id"]: row["id"] for row in repo.list_payloads(table) if row.get("native_id")}

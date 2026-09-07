@@ -21,6 +21,10 @@ LDIF_ATTRIBUTES=(objectClass entryUUID uid cn mail description member uniqueMemb
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+if [[ "$LDAP_URI" == ldaps://* && "$START_TLS" == "1" ]]; then
+  echo "OpenLDAP export cannot combine ldaps:// with START_TLS=1" >&2
+  exit 2
+fi
 if [[ -n "$BIND_DN" && "$LDAP_URI" != ldaps://* && "$START_TLS" != "1" ]]; then
   echo "Authenticated OpenLDAP export requires ldaps:// or START_TLS=1" >&2
   exit 2

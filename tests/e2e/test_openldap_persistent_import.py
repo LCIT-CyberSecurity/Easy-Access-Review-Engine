@@ -11,7 +11,7 @@ import pytest
 
 from access_review_engine.application import import_file_to_repository
 from access_review_engine.domain import Finding, GoldenSourceAssignment, IdentityStatus
-from access_review_engine.services import create_golden_source, create_golden_version
+from access_review_engine.services import create_golden_source, create_golden_version, promote_snapshot
 from access_review_engine.storage import Repository
 
 
@@ -234,12 +234,239 @@ def test_openldap_golden_survives_identity_and_group_rename(tmp_path: Path) -> N
     repo = Repository(tmp_path / "review.db")
     try:
         first = import_file_to_repository(repo, _openldap_zip(tmp_path, _ldif([_user("jdupont", "uuid-u1", ou="Paris"), _group("Finance", "uuid-g1", ["uid=jdupont,ou=Paris,dc=example,dc=com"])]), suffix="first"))
-        golden = create_golden_version(create_golden_source("baseline"), [GoldenSourceAssignment(*a.comparison_key()) for a in first.access_assignments], "test")
+        golden = promote_snapshot(create_golden_source("baseline"), first)
         snapshot = import_file_to_repository(repo, _openldap_zip(tmp_path, _ldif([_user("jean.dupont", "uuid-u1", ou="France"), _group("Finance-Users", "uuid-g1", ["uid=jean.dupont,ou=France,dc=example,dc=com"])]), suffix="renamed"), golden_version=golden)
         assert {row["classification"] for row in snapshot.comparison_states} == {"expected_and_observed"}
     finally:
         repo.close()
 
+
+
+def test_openldap_reduced_base_dn_is_scoped_not_authoritative(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        full = import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_user("global", "uuid-global"), _user("fr", "uuid-fr", ou="France")]),
+                provider="corp-ldap",
+                base_dn="dc=company,dc=com",
+                suffix="full",
+            ),
+        )
+        golden = promote_snapshot(create_golden_source("baseline"), full)
+        snapshot = import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_user("fr", "uuid-fr", ou="France")]),
+                provider="corp-ldap",
+                base_dn="ou=France,dc=company,dc=com",
+                suffix="france",
+            ),
+            golden_version=golden,
+        )
+        assert _by_native(repo, "identities", "uuid-global")["status"] != IdentityStatus.DELETED
+        assert {row["completeness"] for row in repo.list_payloads("imports")} == {"full", "scoped"}
+        classifications = {row["classification"] for row in snapshot.comparison_states}
+        assert "missing" not in classifications
+        assert "expected_and_observed" not in classifications
+    finally:
+        repo.close()
+
+
+def test_openldap_reduced_search_scope_and_filter_are_scoped(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        full = import_file_to_repository(repo, _openldap_zip(tmp_path, _bulk_ldif(3, 3), suffix="full"))
+        golden = promote_snapshot(create_golden_source("baseline"), full)
+        one = import_file_to_repository(
+            repo,
+            _openldap_zip(tmp_path, _bulk_ldif(1, 1), search_scope="one", suffix="one"),
+            golden_version=golden,
+        )
+        filtered = import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _bulk_ldif(1, 1),
+                ldap_filter="(&(objectClass=inetOrgPerson)(departmentNumber=42))",
+                suffix="filtered",
+            ),
+            golden_version=golden,
+        )
+        imports = repo.list_payloads("imports")
+        assert any(row["scope"].get("search_scope") == "one" and row["completeness"] != "full" for row in imports)
+        assert any("departmentNumber=42" in row["scope"].get("filter", "") and row["completeness"] != "full" for row in imports)
+        assert "missing" not in {row["classification"] for row in one.comparison_states}
+        assert "expected_and_observed" not in {row["classification"] for row in one.comparison_states}
+        assert "missing" not in {row["classification"] for row in filtered.comparison_states}
+        assert "expected_and_observed" not in {row["classification"] for row in filtered.comparison_states}
+        assert len(repo.list_payloads_by_provider("access_assignments", "openldap-prod")) == 3
+    finally:
+        repo.close()
+
+
+def test_openldap_memberuid_absent_and_ambiguous_stay_unresolved(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        ldif = _ldif([
+            _user("backup", "uuid-paris", ou="Paris"),
+            _user("backup", "uuid-lyon", ou="Lyon"),
+            _posix_group("ops", "uuid-g1", ["backup", "ghost"]),
+        ])
+        snapshot = import_file_to_repository(repo, _openldap_zip(tmp_path, ldif, manifest_extra="completeness: unknown\nscope:\n  type: all\n  completeness: unknown\n"))
+        rows = {row["identity_identifier"]: row for row in snapshot.comparison_states}
+        assert rows["backup"]["identity"] is None
+        assert rows["ghost"]["identity"] is None
+        assignments = repo.list_payloads_by_provider("access_assignments", "openldap-prod")
+        assert assignments == []
+    finally:
+        repo.close()
+
+
+def test_openldap_multivalued_rdn_order_is_canonicalized(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        ldif = """
+dn: cn=John+uid=jdoe,ou=People,dc=example,dc=com
+objectClass: inetOrgPerson
+entryUUID: uuid-u1
+uid: jdoe
+cn: John
+
+dn: cn=reviewers,ou=Groups,dc=example,dc=com
+objectClass: groupOfNames
+entryUUID: uuid-g1
+cn: reviewers
+member: uid=jdoe+cn=John,ou=People,dc=example,dc=com
+""".strip()
+        snapshot = import_file_to_repository(repo, _openldap_zip(tmp_path, ldif))
+        assert snapshot.comparison_states[0]["identity_identifier"] == "entry:uuid-u1"
+        assert Finding.UNKNOWN_IDENTITY not in snapshot.comparison_states[0]["findings"]
+    finally:
+        repo.close()
+
+
+def test_openldap_unresolved_member_dn_resolves_after_other_provider_import_in_both_orders(tmp_path: Path) -> None:
+    for order in ("a-then-b", "b-then-a"):
+        repo = Repository(tmp_path / f"{order}.db")
+        try:
+            member_dn = "uid=alice,ou=People,dc=b,dc=example,dc=com"
+            a_zip = _openldap_zip(
+                tmp_path,
+                _ldif([_group("remote", "uuid-ga", [member_dn])]),
+                provider="ldap-a",
+                base_dn="dc=a,dc=example,dc=com",
+                suffix=order + "a",
+            )
+            b_zip = _openldap_zip(
+                tmp_path,
+                _ldif([_custom_user("uid=alice,ou=People,dc=b,dc=example,dc=com", "alice", "uuid-b")]),
+                provider="ldap-b",
+                base_dn="dc=b,dc=example,dc=com",
+                suffix=order + "b",
+            )
+            if order == "a-then-b":
+                import_file_to_repository(repo, a_zip)
+                assert repo.list_payloads_by_provider("access_assignments", "ldap-a")[0]["origin"]["raw"]["unresolved"] is True
+                import_file_to_repository(repo, b_zip)
+            else:
+                import_file_to_repository(repo, b_zip)
+                import_file_to_repository(repo, a_zip)
+            assignment = repo.list_payloads_by_provider("access_assignments", "ldap-a")[0]
+            assert assignment["identity_provider"] == "ldap-b"
+            assert assignment["identity_identifier"] == "entry:uuid-b"
+            assert "unresolved" not in assignment["origin"]["raw"]
+        finally:
+            repo.close()
+
+
+def test_openldap_ambiguous_member_dn_remains_unresolved(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        member_dn = "uid=alice,ou=People,dc=shared,dc=example,dc=com"
+        import_file_to_repository(repo, _openldap_zip(tmp_path, _ldif([_custom_user(member_dn, "alice", "uuid-a")]), provider="ldap-a", base_dn="dc=a,dc=example,dc=com", suffix="a"))
+        import_file_to_repository(repo, _openldap_zip(tmp_path, _ldif([_custom_user(member_dn, "alice", "uuid-b")]), provider="ldap-b", base_dn="dc=b,dc=example,dc=com", suffix="b"))
+        import_file_to_repository(repo, _openldap_zip(tmp_path, _ldif([_group("remote", "uuid-g", [member_dn])]), provider="ldap-c", base_dn="dc=c,dc=example,dc=com", suffix="c"))
+        assignment = repo.list_payloads_by_provider("access_assignments", "ldap-c")[0]
+        assert assignment["identity_provider"] == "ldap-c"
+        assert assignment["identity_identifier"] == member_dn
+        assert assignment["origin"]["raw"]["unresolved"] is True
+    finally:
+        repo.close()
+
+
+def test_openldap_full_with_unresolved_member_inside_scope_becomes_unknown(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        snapshot = import_file_to_repository(
+            repo,
+            _openldap_zip(tmp_path, _ldif([_group("admins", "uuid-g", ["uid=ghost,ou=People,dc=example,dc=com"])])),
+        )
+        assert repo.list_payloads("imports")[0]["completeness"] == "unknown"
+        assert snapshot.comparison_states[0]["classification"] == "no_reference"
+        assert Finding.COLLECTION_INCOMPLETE in snapshot.comparison_states[0]["findings"]
+    finally:
+        repo.close()
+
+
+def test_openldap_member_outside_scope_does_not_degrade_full_scope(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_group("remote", "uuid-g", ["uid=alice,ou=People,dc=other,dc=example,dc=com"])]),
+                provider="ldap-a",
+                base_dn="dc=a,dc=example,dc=com",
+            ),
+        )
+        import_row = repo.list_payloads("imports")[0]
+        assignment = repo.list_payloads_by_provider("access_assignments", "ldap-a")[0]
+        assert import_row["completeness"] == "full"
+        assert assignment["origin"]["raw"]["out_of_scope"] is True
+    finally:
+        repo.close()
+
+
+def test_openldap_exporter_rejects_ldaps_with_starttls(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "ldapsearch"
+    fake.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "BASE_DN": "dc=example,dc=com",
+        "BIND_DN": "cn=admin,dc=example,dc=com",
+        "LDAP_URI": "ldaps://ldap.example.test",
+        "START_TLS": "1",
+    }
+    result = subprocess.run(
+        ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "bad.zip")],
+        cwd=Path.cwd(),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "cannot combine ldaps:// with START_TLS=1" in result.stderr
+
+
+def test_openldap_golden_recreate_same_cn_new_uuid_is_not_expected_and_observed(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        first = import_file_to_repository(repo, _openldap_zip(tmp_path, _ldif([_user("alice", "uuid-u"), _group("Finance", "uuid-g1", ["uid=alice,ou=People,dc=example,dc=com"])]), suffix="first"))
+        golden = promote_snapshot(create_golden_source("baseline"), first)
+        snapshot = import_file_to_repository(repo, _openldap_zip(tmp_path, _ldif([_user("alice", "uuid-u"), _group("Finance", "uuid-g2", ["uid=alice,ou=People,dc=example,dc=com"])]), suffix="recreated"), golden_version=golden)
+        assert "expected_and_observed" not in {row["classification"] for row in snapshot.comparison_states}
+        assert {row["classification"] for row in snapshot.comparison_states} == {"missing", "unexpected"}
+    finally:
+        repo.close()
 
 def test_openldap_change_records_are_rejected(tmp_path: Path) -> None:
     ldif = tmp_path / "change.ldif"
@@ -398,15 +625,26 @@ def _by_access_native(repo: Repository, native_id: str) -> dict[str, object]:
     return [row for row in repo.list_payloads("accesses") if row["control_object"].get("native_id") == native_id][0]
 
 
-def _openldap_zip(tmp_path: Path, ldif: str, provider: str = "openldap-prod", suffix: str = "", manifest_extra: str | None = None) -> Path:
+def _openldap_zip(
+    tmp_path: Path,
+    ldif: str,
+    provider: str = "openldap-prod",
+    suffix: str = "",
+    manifest_extra: str | None = None,
+    base_dn: str = "dc=example,dc=com",
+    search_scope: str = "sub",
+    ldap_filter: str = "(objectClass=*)",
+) -> Path:
     archive = tmp_path / f"{provider}{suffix}.zip"
     manifest = manifest_extra or "completeness: full\nscope:\n  type: all\n  completeness: full\nstatistics:\n  collection_errors: 0\n"
     with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.yaml", f"schema_version: 1\nsource_type: openldap\nprovider: {provider}\nbase_dn: dc=example,dc=com\nsearch_scope: sub\nfilter: (objectClass=*)\nldapsearch_exit_code: 0\nlimited: false\n{manifest}")
+        zf.writestr(
+            "manifest.yaml",
+            f"schema_version: 1\nsource_type: openldap\nprovider: {provider}\nbase_dn: {base_dn}\nsearch_scope: {search_scope}\nfilter: {ldap_filter}\nldapsearch_exit_code: 0\nlimited: false\n{manifest}",
+        )
         zf.writestr("directory.ldif", ldif)
         zf.writestr("collection-errors.csv", "ObjectType,ObjectIdentifier,ObjectSID,Operation,ErrorCode,ErrorMessage\n")
     return archive
-
 
 def _ldif(entries: list[str]) -> str:
     return "\n\n".join(entries)
@@ -443,3 +681,20 @@ def _bulk_ldif(user_count: int, assignment_count: int, provider: str = "openldap
     while len(members) < assignment_count:
         members.append("uid=user000,ou=People,dc=example,dc=com")
     return _ldif([*users, _group("all", f"{provider}-uuid-g", members)])
+
+
+def _posix_group(cn: str, uuid: str, members: list[str]) -> str:
+    member_lines = "\n".join(f"memberUid: {member}" for member in members)
+    return f"""dn: cn={cn},ou=Groups,dc=example,dc=com
+objectClass: posixGroup
+entryUUID: {uuid}
+cn: {cn}
+{member_lines}""".strip()
+
+
+def _custom_user(dn: str, uid: str, uuid: str) -> str:
+    return f"""dn: {dn}
+objectClass: inetOrgPerson
+entryUUID: {uuid}
+uid: {uid}
+cn: {uid}"""

@@ -12,9 +12,10 @@ from access_review_engine.domain import (
     GoldenSourceVersion,
     Identity,
     Provider,
+    ProviderType,
 )
 from access_review_engine.importers.ad import ImportResult, import_ad_zip
-from access_review_engine.importers.openldap import import_openldap_ldif, import_openldap_zip
+from access_review_engine.importers.openldap import _canonical_dn, import_openldap_ldif, import_openldap_zip
 from access_review_engine.services import create_snapshot, reconcile_identities
 from access_review_engine.storage import (
     Repository,
@@ -110,6 +111,8 @@ def persist_import_result(
 
 def _is_authoritative_full(result: ImportResult) -> bool:
     scope = result.batch.scope or {}
+    if result.provider.type == ProviderType.OPENLDAP and not _is_openldap_provider_wide_scope(scope):
+        return False
     return (
         result.batch.completeness == Completeness.FULL
         and scope.get("completeness") in {None, Completeness.FULL, "full"}
@@ -123,9 +126,25 @@ def _provider_import_scope(provider: str, scope: dict[str, object] | None) -> di
     source = dict(scope or {})
     completeness = str(source.get("completeness") or Completeness.UNKNOWN)
     if source.get("type", "all") == "all":
-        return {"type": "providers", "values": [provider], "completeness": completeness}
+        source["type"] = "providers"
+        source["values"] = [provider]
+    source.setdefault("provider", provider)
     source["completeness"] = completeness
     return source
+
+
+def _is_openldap_provider_wide_scope(scope: dict[str, object]) -> bool:
+    base_dn = str(scope.get("base_dn") or "").strip().lower()
+    search_scope = str(scope.get("search_scope") or "sub").strip().lower()
+    ldap_filter = "".join(str(scope.get("filter") or "(objectClass=*)").split()).lower()
+    if search_scope != "sub":
+        return False
+    if ldap_filter not in {"(objectclass=*)", "objectclass=*"}:
+        return False
+    if not base_dn:
+        return False
+    rdns = [part.strip() for part in base_dn.split(",") if part.strip()]
+    return bool(rdns) and all(part.startswith(("dc=", "o=")) for part in rdns)
 
 
 def _load_identities(repo: Repository, provider: str | None = None) -> list[Identity]:
@@ -208,12 +227,19 @@ def _reconcile_assignments(
 
 
 def _resolve_unresolved_assignments(repo: Repository) -> None:
-    identities_by_sid = _unique_identities_by_sid(_load_identities(repo))
+    identities = _load_identities(repo)
+    identities_by_sid = _unique_identities_by_native_id(identities)
+    identities_by_ldap_dn = _unique_identities_by_ldap_dn(identities)
     for assignment in _load_assignments(repo):
-        sid = assignment.origin.raw.get("member_sid")
-        if not sid or not assignment.origin.raw.get("unresolved"):
+        if not assignment.origin.raw.get("unresolved"):
             continue
-        identity = identities_by_sid.get(str(sid))
+        identity = None
+        sid = assignment.origin.raw.get("member_sid")
+        if sid:
+            identity = identities_by_sid.get(str(sid))
+        member_dn = assignment.origin.raw.get("member_dn")
+        if identity is None and member_dn:
+            identity = identities_by_ldap_dn.get(_canonical_dn(str(member_dn)))
         if identity is None:
             continue
         assignment.identity_provider = identity.provider
@@ -221,10 +247,11 @@ def _resolve_unresolved_assignments(repo: Repository) -> None:
         assignment.origin.raw["cross_domain_resolved"] = identity.provider != assignment.provider
         assignment.origin.raw.pop("unresolved", None)
         assignment.origin.raw.pop("unresolved_foreign_principal", None)
+        assignment.origin.raw.pop("ambiguous", None)
         repo.upsert("access_assignments", assignment)
 
 
-def _unique_identities_by_sid(identities: Iterable[Identity]) -> dict[str, Identity]:
+def _unique_identities_by_native_id(identities: Iterable[Identity]) -> dict[str, Identity]:
     found: dict[str, Identity | None] = {}
     for identity in identities:
         if not identity.native_id:
@@ -233,7 +260,21 @@ def _unique_identities_by_sid(identities: Iterable[Identity]) -> dict[str, Ident
             found[identity.native_id] = None
         else:
             found[identity.native_id] = identity
-    return {sid: identity for sid, identity in found.items() if identity is not None}
+    return {native_id: identity for native_id, identity in found.items() if identity is not None}
+
+
+def _unique_identities_by_ldap_dn(identities: Iterable[Identity]) -> dict[str, Identity]:
+    found: dict[str, Identity | None] = {}
+    for identity in identities:
+        dn = identity.metadata.get("dn")
+        if not dn:
+            continue
+        canonical = _canonical_dn(str(dn))
+        if canonical in found:
+            found[canonical] = None
+        else:
+            found[canonical] = identity
+    return {dn: identity for dn, identity in found.items() if identity is not None}
 
 
 def load_classification_rules(path: str | Path | None) -> dict[str, object] | None:

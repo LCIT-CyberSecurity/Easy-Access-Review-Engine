@@ -149,7 +149,7 @@ def _import_openldap_entries(
     by_dn = {_canonical_dn(_first(entry, "dn") or ""): entry for entry in entries if _first(entry, "dn")}
     identities: list[Identity] = []
     identity_by_dn: dict[str, Identity] = {}
-    identity_by_uid: dict[str, Identity] = {}
+    identity_by_uid: dict[str, list[Identity]] = {}
     groups: list[dict[str, list[str]]] = []
 
     for entry in entries:
@@ -162,7 +162,7 @@ def _import_openldap_entries(
             if dn:
                 identity_by_dn[_canonical_dn(dn)] = identity
             if uid:
-                identity_by_uid[uid] = identity
+                identity_by_uid.setdefault(uid, []).append(identity)
         if classes & {"groupofnames", "groupofuniquenames", "posixgroup"}:
             groups.append(entry)
             identity = _group_identity(provider.name, entry)
@@ -173,6 +173,8 @@ def _import_openldap_entries(
 
     accesses: list[Access] = []
     assignments: list[AccessAssignment] = []
+    unresolved_in_scope = 0
+    unresolved_total = 0
     for group in groups:
         group_identity = identity_by_dn[_canonical_dn(_first(group, "dn") or "")]
         cn = _first(group, "cn") or _first(group, "dn") or group_identity.identifier
@@ -195,14 +197,31 @@ def _import_openldap_entries(
                 raw = {attr: member_dn, "member_dn": member_dn}
                 if identity is None:
                     raw["unresolved"] = True
+                    unresolved_total += 1
+                    if _member_dn_in_scope(member_dn, scope):
+                        unresolved_in_scope += 1
+                    else:
+                        raw["out_of_scope"] = True
                 assignments.append(_assignment(provider.name, access_name, identity_identifier, cn, raw))
         for uid in group.get("memberuid", []):
-            identity = identity_by_uid.get(uid)
+            candidates = identity_by_uid.get(uid, [])
+            identity = candidates[0] if len(candidates) == 1 else None
             identity_identifier = identity.identifier if identity else uid
-            raw = {"memberUid": uid}
+            raw = {"memberUid": uid, "member_uid": uid}
             if identity is None:
                 raw["unresolved"] = True
+                unresolved_total += 1
+                unresolved_in_scope += 1
+                if len(candidates) > 1:
+                    raw["ambiguous"] = True
             assignments.append(_assignment(provider.name, access_name, identity_identifier, cn, raw))
+
+    if unresolved_total:
+        scope["unresolved_memberships"] = unresolved_total
+    if unresolved_in_scope and completeness == str(Completeness.FULL):
+        completeness = str(Completeness.UNKNOWN)
+        scope["completeness"] = completeness
+        scope["unresolved_memberships_in_scope"] = unresolved_in_scope
 
     checksum_payload = {
         "entries": entries,
@@ -312,8 +331,8 @@ def _validate_manifest(manifest: dict[str, object]) -> None:
 
 def _effective_completeness(manifest: dict[str, object], collection_errors: list[dict[str, str]]) -> str:
     values = [str(manifest.get("completeness") or Completeness.UNKNOWN)]
-    scope = manifest.get("scope")
-    if isinstance(scope, dict) and scope.get("completeness") is not None:
+    scope = _manifest_scope(manifest)
+    if scope.get("completeness") is not None:
         values.append(str(scope["completeness"]))
     stats = manifest.get("statistics")
     if isinstance(stats, dict) and stats.get("collection_errors") not in {None, 0, "0"}:
@@ -325,17 +344,61 @@ def _effective_completeness(manifest: dict[str, object], collection_errors: list
     if collection_errors:
         values.append(str(Completeness.UNKNOWN))
     precedence = {str(Completeness.UNKNOWN): 0, str(Completeness.SCOPED): 1, str(Completeness.FULL): 2}
-    return min(values, key=lambda value: precedence.get(value, 0))
+    completeness = min(values, key=lambda value: precedence.get(value, 0))
+    if completeness == str(Completeness.FULL) and not _is_provider_wide_scope(scope):
+        return str(Completeness.SCOPED)
+    return completeness
 
 
 def _effective_scope(
     manifest: dict[str, object], completeness: str, collection_errors: list[dict[str, str]]
 ) -> dict[str, object]:
-    scope = dict(manifest.get("scope")) if isinstance(manifest.get("scope"), dict) else {"type": "all"}
+    scope = _manifest_scope(manifest)
     scope["completeness"] = completeness
     if collection_errors:
         scope["collection_errors"] = len(collection_errors)
     return scope
+
+
+def _manifest_scope(manifest: dict[str, object]) -> dict[str, object]:
+    scope = dict(manifest.get("scope")) if isinstance(manifest.get("scope"), dict) else {"type": "all"}
+    for key in ("base_dn", "search_scope", "filter"):
+        if key not in scope and manifest.get(key) is not None:
+            scope[key] = manifest[key]
+    return scope
+
+
+def _is_provider_wide_scope(scope: dict[str, object]) -> bool:
+    base_dn = str(scope.get("base_dn") or "").strip().lower()
+    search_scope = str(scope.get("search_scope") or "sub").strip().lower()
+    ldap_filter = "".join(str(scope.get("filter") or "(objectClass=*)").split()).lower()
+    if search_scope != "sub":
+        return False
+    if ldap_filter not in {"(objectclass=*)", "objectclass=*"}:
+        return False
+    if not base_dn:
+        return False
+    rdns = [part.strip() for part in _split_unescaped(base_dn, ",") if part.strip()]
+    return bool(rdns) and all(part.startswith(("dc=", "o=")) for part in rdns)
+
+
+def _member_dn_in_scope(member_dn: str, scope: dict[str, object]) -> bool:
+    base_dn = str(scope.get("base_dn") or "").strip()
+    if not base_dn:
+        return True
+    member = _canonical_dn(member_dn)
+    base = _canonical_dn(base_dn)
+    search_scope = str(scope.get("search_scope") or "sub").strip().lower()
+    if search_scope == "base":
+        return member == base
+    if search_scope == "one":
+        return _dn_parent(member) == base
+    return member == base or member.endswith(f",{base}")
+
+
+def _dn_parent(canonical_dn: str) -> str:
+    parts = _split_unescaped(canonical_dn, ",")
+    return ",".join(parts[1:]) if len(parts) > 1 else ""
 
 
 def _read_manifest(text: str) -> dict[str, object]:
@@ -439,8 +502,9 @@ def _canonical_dn(value: str) -> str:
         rdns = []
         for rdn in _split_unescaped(part.strip(), "+"):
             attr, raw_value = _split_unescaped_once(rdn.strip(), "=")
-            rdns.append(f"{attr.strip().lower()}={raw_value.strip().lower()}")
-        canonical_parts.append("+".join(rdns))
+            normalized_value = _normalize_dn_value(raw_value)
+            rdns.append(f"{attr.strip().lower()}={normalized_value}")
+        canonical_parts.append("+".join(sorted(rdns)))
     return ",".join(canonical_parts)
 
 
@@ -478,3 +542,26 @@ def _split_unescaped_once(value: str, separator: str) -> tuple[str, str]:
         if char == separator:
             return value[:index], value[index + 1 :]
     return value, ""
+
+
+def _normalize_dn_value(value: str) -> str:
+    text = value.strip().strip('"').lower()
+    chars: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char != "\\":
+            chars.append(char)
+            index += 1
+            continue
+        escaped = text[index + 1 : index + 3]
+        if len(escaped) == 2 and all(item in "0123456789abcdef" for item in escaped):
+            chars.append(chr(int(escaped, 16)))
+            index += 3
+        elif index + 1 < len(text):
+            chars.append(text[index + 1])
+            index += 2
+        else:
+            chars.append(char)
+            index += 1
+    return "".join(chars)
