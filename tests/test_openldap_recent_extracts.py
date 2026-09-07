@@ -47,14 +47,13 @@ memberUid: alice
 
     result = import_openldap_ldif(ldif, "openldap-prod")
 
-    assert {identity.identifier for identity in result.identities} >= {
-        "alice",
-        "bob",
+    assert {identity.identifier for identity in result.identities} >= {"alice", "bob"}
+    assert {identity.display_name for identity in result.identities if identity.type == IdentityType.GROUP} == {
         "crm-readers",
         "finance-approvers",
         "linux-admins",
     }
-    assert {access.name for access in result.accesses} == {
+    assert {access.display_name for access in result.accesses} == {
         "crm-readers:member",
         "finance-approvers:member",
         "linux-admins:member",
@@ -94,9 +93,9 @@ member: uid=carol,ou=people,dc=example,dc=org
 
     result = import_openldap_ldif(ldif, "openldap-prod")
     identities = {identity.identifier: identity for identity in result.identities}
-    assert identities["carol"].native_id == "11111111-2222-3333-4444-555555555555"
-    assert identities["ops"].native_id == "99999999-8888-7777-6666-555555555555"
-    assert result.assignments[0].identity_identifier == "carol"
+    assert identities["entry:11111111-2222-3333-4444-555555555555"].native_id == "11111111-2222-3333-4444-555555555555"
+    assert identities["group:99999999-8888-7777-6666-555555555555"].native_id == "99999999-8888-7777-6666-555555555555"
+    assert result.assignments[0].identity_identifier == "entry:11111111-2222-3333-4444-555555555555"
 
 
 def test_openldap_ldif_continuation_attribute_options_and_base64_values(tmp_path: Path) -> None:
@@ -125,7 +124,7 @@ member: uid=diane,ou=people,dc=example,dc=org
     identities = {identity.identifier: identity for identity in result.identities}
     assert identities["diane"].display_name == "Diane Example"
     assert identities["diane"].description == "First linesecond line"
-    assert "reporting:member" in {access.name for access in result.accesses}
+    assert "reporting:member" in {access.display_name for access in result.accesses}
     assert result.accesses[0].description == "Reporting users"
 
 
@@ -152,9 +151,44 @@ member: cn=team-a,ou=groups,dc=example,dc=org
     )
 
     result = import_openldap_ldif(ldif, "openldap-prod")
-    group_identities = {identity.identifier for identity in result.identities if identity.type == IdentityType.GROUP}
+    group_identities = {identity.display_name for identity in result.identities if identity.type == IdentityType.GROUP}
     assert group_identities == {"team-a", "all-staff"}
+    access_by_display = {access.display_name: access.name for access in result.accesses}
+    group_by_display = {identity.display_name: identity.identifier for identity in result.identities if identity.type == IdentityType.GROUP}
     assignments = {(assignment.access_name, assignment.identity_identifier) for assignment in result.assignments}
-    assert ("team-a:member", "erin") in assignments
-    assert ("all-staff:member", "team-a") in assignments
-    assert ("all-staff:member", "erin") not in assignments
+    assert (access_by_display["team-a:member"], "erin") in assignments
+    assert (access_by_display["all-staff:member"], group_by_display["team-a"]) in assignments
+    assert (access_by_display["all-staff:member"], "erin") not in assignments
+
+
+def test_openldap_ignores_unused_binary_base64_attribute(tmp_path: Path) -> None:
+    ldif = tmp_path / "binary.ldif"
+    ldif.write_text(
+        """
+dn: uid=bin,ou=people,dc=example,dc=org
+objectClass: inetOrgPerson
+uid: bin
+cn: Binary User
+jpegPhoto:: //79
+
+dn: cn=readers,ou=groups,dc=example,dc=org
+objectClass: groupOfNames
+cn: readers
+member: uid=bin,ou=people,dc=example,dc=org
+""".strip(),
+        encoding="utf-8",
+    )
+    result = import_openldap_ldif(ldif, "openldap-prod")
+    assert len(result.assignments) == 1
+
+
+def test_openldap_ldif_change_records_are_rejected(tmp_path: Path) -> None:
+    import pytest
+
+    ldif = tmp_path / "change.ldif"
+    ldif.write_text("dn: uid=alice,dc=example,dc=org\nchangetype: modify\nreplace: cn\ncn: Alice\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        import_openldap_ldif(ldif, "openldap-prod")
+    ldif.write_text("dn: uid=alice,dc=example,dc=org\nchangetype: delete\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        import_openldap_ldif(ldif, "openldap-prod")

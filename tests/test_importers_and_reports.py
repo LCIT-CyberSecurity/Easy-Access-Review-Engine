@@ -62,7 +62,7 @@ memberUid: jean
         encoding="utf-8",
     )
     result = import_openldap_ldif(ldif, "internal-ldap")
-    assert {access.name for access in result.accesses} == {"crm:member", "ops:member"}
+    assert {access.display_name for access in result.accesses} == {"crm:member", "ops:member"}
     assert {assignment.identity_identifier for assignment in result.assignments} == {"jean"}
 
 

@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from access_review_engine.application import import_file_to_repository, load_classification_rules
+from access_review_engine.application import import_file_to_repository, load_classification_rules, _zip_source_type
 from access_review_engine.importers.ad import import_ad_zip
-from access_review_engine.importers.openldap import import_openldap_ldif
+from access_review_engine.importers.openldap import import_openldap_ldif, import_openldap_zip
 from access_review_engine.reporting import write_reports
 from access_review_engine.storage import Repository
 
@@ -52,6 +52,9 @@ def main(argv: list[str] | None = None) -> int:
             for row in (snapshots[-1]["comparison_states"] if snapshots else []):
                 if row["findings"] or row["classification"] != "expected_and_observed":
                     print(row)
+            imports = repo.list_payloads("imports")
+            if imports and imports[-1].get("completeness") != "full":
+                print({"finding": "collection_incomplete", "import_id": imports[-1]["id"], "provider": imports[-1]["provider"]})
             return 0
         if args.command == "identities-list":
             for row in repo.list_payloads("identities"):
@@ -79,7 +82,13 @@ def main(argv: list[str] | None = None) -> int:
 
 def _validate(path: Path) -> None:
     if path.suffix == ".zip":
-        import_ad_zip(path)
+        source_type = _zip_source_type(path)
+        if source_type == "active_directory":
+            import_ad_zip(path)
+        elif source_type == "openldap":
+            import_openldap_zip(path)
+        else:
+            raise ValueError(f"Unsupported ZIP source_type: {source_type or 'missing'}")
     elif path.suffix.lower() in {".ldif", ".ldap"}:
         import_openldap_ldif(path)
     else:

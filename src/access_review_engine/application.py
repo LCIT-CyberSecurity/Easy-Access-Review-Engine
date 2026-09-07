@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from zipfile import BadZipFile, ZipFile
 from typing import Iterable
 
 from access_review_engine.domain import (
@@ -13,7 +14,7 @@ from access_review_engine.domain import (
     Provider,
 )
 from access_review_engine.importers.ad import ImportResult, import_ad_zip
-from access_review_engine.importers.openldap import import_openldap_ldif
+from access_review_engine.importers.openldap import import_openldap_ldif, import_openldap_zip
 from access_review_engine.services import create_snapshot, reconcile_identities
 from access_review_engine.storage import (
     Repository,
@@ -33,11 +34,18 @@ def import_file_to_repository(
 ):
     file_path = Path(path)
     known_identities = _load_identities(repo)
-    result = (
-        import_ad_zip(file_path, known_identities=known_identities, classification_rules=classification_rules)
-        if file_path.suffix.lower() == ".zip"
-        else import_openldap_ldif(file_path, provider_name)
-    )
+    if file_path.suffix.lower() == ".zip":
+        source_type = _zip_source_type(file_path)
+        if source_type == "active_directory":
+            result = import_ad_zip(
+                file_path, known_identities=known_identities, classification_rules=classification_rules
+            )
+        elif source_type == "openldap":
+            result = import_openldap_zip(file_path)
+        else:
+            raise ValueError(f"Unsupported ZIP source_type: {source_type or 'missing'}")
+    else:
+        result = import_openldap_ldif(file_path, provider_name)
     return persist_import_result(repo, result, golden_version=golden_version)
 
 
@@ -235,3 +243,66 @@ def load_classification_rules(path: str | Path | None) -> dict[str, object] | No
     if not isinstance(data, dict):
         raise ValueError("classification rules must be a JSON object")
     return data
+
+
+def _zip_source_type(path: Path) -> str | None:
+    if path.stat().st_size > 500_000_000:
+        raise ValueError("Import archive exceeds configured maximum size")
+    try:
+        with ZipFile(path) as zf:
+            names = zf.namelist()
+            if len(names) != len(set(names)):
+                raise ValueError("Archive contains duplicate filenames")
+            if len(names) > 16:
+                raise ValueError("Archive contains too many files")
+            if any(name.startswith("/") or ".." in Path(name).parts for name in names):
+                raise ValueError("Unsafe ZIP path detected")
+            if "manifest.yaml" not in names:
+                raise ValueError("Archive is missing required files: ['manifest.yaml']")
+            total = 0
+            for info in zf.infolist():
+                if info.file_size > 1_000_000_000:
+                    raise ValueError("Archive member exceeds configured maximum size")
+                total += info.file_size
+                if total > 1_500_000_000:
+                    raise ValueError("Archive uncompressed size exceeds configured maximum size")
+            manifest = _read_manifest(zf.read("manifest.yaml").decode("utf-8-sig"))
+    except BadZipFile as exc:
+        raise ValueError("Invalid ZIP archive") from exc
+    value = manifest.get("source_type")
+    if value is not None:
+        return str(value)
+    names_set = set(names)
+    if {"users.csv", "groups.csv", "memberships.csv"}.issubset(names_set):
+        return "active_directory"
+    if "directory.ldif" in names_set:
+        return "openldap"
+    return None
+
+
+def _read_manifest(text: str) -> dict[str, object]:
+    result: dict[str, object] = {}
+    stack: list[str] = []
+    for line in text.splitlines():
+        if not line.strip() or line.strip().startswith("#") or ":" not in line:
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if indent == 0:
+            stack = [key]
+            result[key] = {} if value == "" else _manifest_value(value)
+        elif stack:
+            parent = result.setdefault(stack[0], {})
+            if isinstance(parent, dict):
+                parent[key] = _manifest_value(value)
+    return result
+
+
+def _manifest_value(value: str) -> object:
+    if value.lower() in {"true", "false"}:
+        return value.lower() == "true"
+    if value.isdigit():
+        return int(value)
+    return value

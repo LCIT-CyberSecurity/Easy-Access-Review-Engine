@@ -39,7 +39,7 @@ def test_unknown_enabled_identity_with_access_is_not_reported_disabled() -> None
     snapshot = create_snapshot([], [identity], [], [access], [assignment], ["import-1"])
     findings = snapshot.comparison_states[0]["findings"]
     assert Finding.DISABLED_WITH_ACCESS not in findings
-    assert Finding.UNKNOWN_IDENTITY in findings
+    assert Finding.UNKNOWN_IDENTITY not in findings
 
 
 def test_ad_account_findings_are_distinct_and_cumulative() -> None:

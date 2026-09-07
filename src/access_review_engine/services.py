@@ -53,8 +53,6 @@ def validate_owner(owner: OwnerRef | None, subject: Identity, identities: dict[t
 
 def owner_findings(identity: Identity, identities: dict[tuple[str, str], Identity]) -> list[str]:
     findings: list[str] = []
-    if identity.status == IdentityStatus.UNKNOWN:
-        findings.append(Finding.UNKNOWN_IDENTITY)
     if _truthy_metadata(identity.metadata.get("locked_out")):
         findings.append(Finding.ACCOUNT_LOCKED)
     if _truthy_metadata(identity.metadata.get("account_expired")) or _is_past_datetime(
