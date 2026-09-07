@@ -9,6 +9,7 @@ from access_review_engine.domain import (
     Finding,
     GoldenSourceAssignment,
     IdentityStatus,
+    Snapshot,
 )
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.services import create_golden_source, create_golden_version, promote_snapshot
@@ -162,16 +163,13 @@ def test_provider_full_import_is_authoritative_only_for_that_provider(tmp_path: 
                 tmp_path,
                 "provider-b",
                 [("b1", _sid(1201)), ("b2", _sid(1202))],
-                ["B1", "B2"],
+                [("B1", _sid(2201)), ("B2", _sid(2202))],
                 [("B1", _sid(2201), "b1", _sid(1201), "user"), ("B2", _sid(2202), "b2", _sid(1202), "user")],
             ),
         )
         golden = create_golden_version(
             create_golden_source("baseline"),
-            [
-                GoldenSourceAssignment(*assignment.comparison_key())
-                for assignment in [*first_a.access_assignments, *first_b.access_assignments]
-            ],
+            _stable_golden_assignments(first_a) + _stable_golden_assignments(first_b),
             "test",
         )
 
@@ -181,7 +179,7 @@ def test_provider_full_import_is_authoritative_only_for_that_provider(tmp_path: 
                 tmp_path,
                 "provider-b",
                 [("b1", _sid(1201))],
-                ["B1", "B2"],
+                [("B1", _sid(2201)), ("B2", _sid(2202))],
                 [("B1", _sid(2201), "b1", _sid(1201), "user")],
                 suffix="-b1-only",
             ),
@@ -333,6 +331,33 @@ def test_reused_samaccountname_after_tombstone_keeps_both_identities(tmp_path: P
 
 
 
+def test_ad_legacy_golden_same_name_new_sid_is_not_expected_and_observed(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        golden = create_golden_version(
+            create_golden_source("legacy-baseline"),
+            [GoldenSourceAssignment("corp-ad", "Finance:member", "corp-ad", "jdupont")],
+            "legacy_import",
+        )
+        snapshot = import_file_to_repository(
+            repo,
+            _ad_zip(
+                tmp_path,
+                "corp-ad",
+                [("jdupont", _sid(1101))],
+                [("Finance", _sid(2201))],
+                [("Finance", _sid(2201), "jdupont", _sid(1101), "user")],
+                suffix="-legacy-new-sid",
+            ),
+            golden_version=golden,
+        )
+        classifications = {row["classification"] for row in snapshot.comparison_states}
+        assert "expected_and_observed" not in classifications
+        assert "unknown_due_to_scope" in classifications
+        assert "unexpected" in classifications
+    finally:
+        repo.close()
+
 def test_ad_golden_identity_rename_same_sid_is_expected_and_observed(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "review.db")
     try:
@@ -387,6 +412,82 @@ def test_ad_golden_same_group_name_new_sid_is_not_expected_and_observed(tmp_path
     finally:
         repo.close()
 
+
+
+def test_promote_provider_scoped_snapshot_refuses_to_drop_other_golden_providers(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        snapshot_a = import_file_to_repository(
+            repo,
+            _ad_zip(
+                tmp_path,
+                "provider-a",
+                [("a1", _sid(1101))],
+                ["A"],
+                [("A", _sid(2101), "a1", _sid(1101), "user")],
+            ),
+        )
+        snapshot_b = import_file_to_repository(
+            repo,
+            _ad_zip(
+                tmp_path,
+                "provider-b",
+                [("b1", _sid(1201))],
+                ["B"],
+                [("B", _sid(2201), "b1", _sid(1201), "user")],
+            ),
+        )
+        golden_source = create_golden_source("baseline")
+        golden = create_golden_version(
+            golden_source,
+            [
+                GoldenSourceAssignment(*assignment.comparison_key())
+                for assignment in [*snapshot_a.access_assignments, *snapshot_b.access_assignments]
+            ],
+            "test",
+        )
+        provider_b_only = import_file_to_repository(
+            repo,
+            _ad_zip(
+                tmp_path,
+                "provider-b",
+                [("b1", _sid(1201))],
+                ["B"],
+                [("B", _sid(2201), "b1", _sid(1201), "user")],
+                suffix="-again",
+            ),
+        )
+
+        try:
+            promote_snapshot(golden_source, provider_b_only, [golden])
+        except ValueError as exc:
+            assert "provider-scoped" in str(exc)
+        else:
+            raise AssertionError("provider-scoped snapshot dropped other Golden providers")
+    finally:
+        repo.close()
+
+
+def test_promote_provider_scoped_snapshot_allows_single_provider_golden(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        snapshot = import_file_to_repository(
+            repo,
+            _ad_zip(
+                tmp_path,
+                "provider-b",
+                [("b1", _sid(1201))],
+                ["B"],
+                [("B", _sid(2201), "b1", _sid(1201), "user")],
+            ),
+        )
+        golden_source = create_golden_source("baseline")
+        golden = promote_snapshot(golden_source, snapshot)
+        promoted = promote_snapshot(golden_source, snapshot, [golden])
+        assert promoted.version == 2
+        assert {assignment.access_provider for assignment in promoted.assignments} == {"provider-b"}
+    finally:
+        repo.close()
 
 def test_ad_enabled_absent_with_access_is_unknown_without_false_findings(tmp_path: Path) -> None:
     archive = tmp_path / "ad-enabled-absent.zip"
@@ -522,3 +623,29 @@ def _group_sid(group: str | tuple[str, str], index: int) -> str:
 
 def _sid(rid: int) -> str:
     return f"S-1-5-21-100-200-300-{rid}"
+
+
+def _stable_golden_assignments(snapshot: Snapshot) -> list[GoldenSourceAssignment]:
+    identities = {
+        (identity.provider, identity.identifier): identity
+        for identity in snapshot.identities
+    }
+    accesses = {(access.provider, access.name): access for access in snapshot.accesses}
+    return [
+        GoldenSourceAssignment(
+            assignment.provider,
+            assignment.access_name,
+            assignment.identity_provider,
+            assignment.identity_identifier,
+            access_native_id=accesses[
+                (assignment.provider, assignment.access_name)
+            ].control_object.native_id,
+            access_permission=accesses[
+                (assignment.provider, assignment.access_name)
+            ].permission.identifier,
+            identity_native_id=identities[
+                (assignment.identity_provider, assignment.identity_identifier)
+            ].native_id,
+        )
+        for assignment in snapshot.access_assignments
+    ]

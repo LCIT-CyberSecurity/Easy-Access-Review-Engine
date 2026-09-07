@@ -154,16 +154,37 @@ def compare_snapshot(
     accesses = {access_key(access): access for access in snapshot.accesses}
     observed_assignments = {assignment.comparison_key(): assignment for assignment in snapshot.access_assignments}
     observed_legacy = set(observed_assignments)
+    observed_legacy_aliases: set[tuple[str, str, str, str]] = set()
     observed_legacy_without_stable: set[tuple[str, str, str, str]] = set()
     observed_stable: dict[tuple[str, str, str, str], tuple[str, str, str, str] | None] = {}
     assignment_origins: dict[tuple[str, str, str, str], list[AccessAssignment]] = {}
     for assignment in snapshot.access_assignments:
         legacy_key = assignment.comparison_key()
         assignment_origins.setdefault(legacy_key, []).append(assignment)
+        access = accesses.get((assignment.provider, assignment.access_name))
+        legacy_alias = (
+            (
+                assignment.provider,
+                access.display_name,
+                assignment.identity_provider,
+                assignment.identity_identifier,
+            )
+            if (
+                access is not None
+                and access.display_name
+                and access.display_name != assignment.access_name
+            )
+            else None
+        )
         stable_key = _observed_stable_key(assignment, accesses, identities)
         if stable_key is None:
             observed_legacy_without_stable.add(legacy_key)
+            if legacy_alias is not None:
+                observed_legacy_aliases.add(legacy_alias)
+                observed_legacy_without_stable.add(legacy_alias)
             continue
+        if legacy_alias is not None:
+            observed_legacy_aliases.add(legacy_alias)
         observed_stable[stable_key] = legacy_key if stable_key not in observed_stable else None
 
     expected_items = list(golden_version.assignments) if golden_version else []
@@ -186,7 +207,7 @@ def compare_snapshot(
                 observed_key = candidate
             elif expected_key in observed_legacy_without_stable:
                 observed_key = expected_key
-        elif expected_key in observed_legacy:
+        elif expected_key in observed_legacy_without_stable:
             observed_key = expected_key
 
         row_key = observed_key or expected_key
@@ -197,6 +218,8 @@ def compare_snapshot(
                 if _is_incomplete_scope(import_scope)
                 else ComparisonState.EXPECTED_AND_OBSERVED
             )
+        elif stable_key is None and expected_key in (observed_legacy | observed_legacy_aliases):
+            classification = ComparisonState.UNKNOWN_DUE_TO_SCOPE
         elif _in_authoritative_scope(expected.access_provider, expected.access_name, import_scope):
             classification = ComparisonState.MISSING
         else:
@@ -377,7 +400,9 @@ def create_golden_version(
 ) -> GoldenSourceVersion:
     previous = list(previous_versions)
     version = max((item.version for item in previous), default=0) + 1
-    ordered = sorted(set(assignments), key=lambda item: item.key())
+    incoming = list(assignments)
+    _reject_duplicate_stable_golden_keys(incoming)
+    ordered = sorted(set(incoming), key=lambda item: item.key())
     checksum = stable_checksum([asdict(item) for item in ordered])
     return GoldenSourceVersion(
         golden_source_id=golden_source.id,
@@ -404,6 +429,16 @@ def promote_snapshot(
         for row in snapshot.comparison_states
     ):
         raise ValueError("Cannot promote a scoped or incomplete snapshot to Golden Source")
+    previous = list(previous_versions)
+    if previous:
+        latest = max(previous, key=lambda item: item.version)
+        snapshot_providers = {provider.name for provider in snapshot.providers}
+        golden_providers = {assignment.access_provider for assignment in latest.assignments}
+        if snapshot_providers and golden_providers - snapshot_providers:
+            raise ValueError(
+                "Cannot promote provider-scoped snapshot over a Golden Source "
+                "containing other providers"
+            )
     assignments = []
     for item in snapshot.access_assignments:
         access = accesses.get((item.provider, item.access_name))
@@ -419,7 +454,6 @@ def promote_snapshot(
                 identity_native_id=identity.native_id if identity else None,
             )
         )
-    previous = list(previous_versions)
     parent_id = max(previous, key=lambda item: item.version).id if previous else None
     return create_golden_version(
         golden_source,
@@ -429,6 +463,17 @@ def promote_snapshot(
         source_snapshot_id=snapshot.id,
         parent_version_id=parent_id,
     )
+
+
+def _reject_duplicate_stable_golden_keys(assignments: Iterable[GoldenSourceAssignment]) -> None:
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in assignments:
+        stable_key = item.stable_key()
+        if stable_key is None:
+            continue
+        if stable_key in seen:
+            raise ValueError("Golden Source contains duplicate stable assignment key")
+        seen.add(stable_key)
 
 
 def golden_diff(

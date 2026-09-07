@@ -198,6 +198,25 @@ def test_promote_snapshot_rejects_incomplete_snapshot() -> None:
     else:
         raise AssertionError("incomplete snapshot was promoted")
 
+
+def test_create_golden_version_rejects_duplicate_stable_keys() -> None:
+    source = create_golden_source("baseline")
+    duplicate = GoldenSourceAssignment(
+        "corp-ad",
+        "Finance:member",
+        "corp-ad",
+        "jdupont",
+        access_native_id="SID-G",
+        access_permission="member",
+        identity_native_id="SID-U",
+    )
+    try:
+        create_golden_version(source, [duplicate, duplicate], "test")
+    except ValueError as exc:
+        assert "duplicate stable" in str(exc)
+    else:
+        raise AssertionError("duplicate stable Golden key was accepted")
+
 def test_campaign_rejects_pending_promotion_and_close() -> None:
     owner = OwnerRef("corp-ad", "owner")
     owner_identity = Identity("corp-ad", "owner", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)

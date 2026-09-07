@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 from typing import Iterable
@@ -113,7 +114,10 @@ def persist_import_result(
         repo.replace_assignments(assignments, providers={result.provider.name})
         snapshot_assignments = assignments
 
-    _resolve_unresolved_assignments(repo)
+    resolved_authoritative = _resolve_unresolved_assignments(repo)
+    _resolve_non_authoritative_unresolved_observations(repo)
+    if authoritative and resolved_authoritative:
+        snapshot_assignments = _load_assignments(repo, result.provider.name)
 
     snapshot = create_snapshot(
         [result.provider],
@@ -313,58 +317,106 @@ def _reconcile_assignments(
     return reconciled
 
 
-def _resolve_unresolved_assignments(repo: Repository) -> None:
-    identities = _load_identities(repo)
-    identities_by_sid = _unique_identities_by_native_id(identities)
-    identities_by_ldap_dn = _unique_identities_by_ldap_dn(identities)
-    identities_by_provider_uid = _unique_identities_by_provider_uid(identities)
+def _resolve_unresolved_assignments(repo: Repository) -> bool:
+    resolver = _assignment_resolver(repo)
+    changed = False
     for assignment in _unresolved_assignments_for_resolution(repo):
-        if not assignment.origin.raw.get("unresolved"):
+        if _resolve_assignment(assignment, resolver):
+            repo.upsert("access_assignments", assignment)
+            changed = True
+    return changed
+
+
+def _resolve_non_authoritative_unresolved_observations(repo: Repository) -> None:
+    resolver = _assignment_resolver(repo)
+    for row in repo.list_payloads("imports"):
+        scope = row.get("scope", {})
+        if not isinstance(scope, dict):
             continue
-        identity = None
-        sid = assignment.origin.raw.get("member_sid")
-        if sid:
-            identity = identities_by_sid.get(str(sid))
-        member_uuid = assignment.origin.raw.get("member_entry_uuid") or assignment.origin.raw.get(
-            "entryUUID"
-        )
-        if identity is None and member_uuid:
-            identity = identities_by_sid.get(str(member_uuid))
-        member_dn = assignment.origin.raw.get("member_dn")
-        if identity is None and member_dn:
-            identity = identities_by_ldap_dn.get(_canonical_dn(str(member_dn)))
-        member_uid = assignment.origin.raw.get("member_uid") or assignment.origin.raw.get(
-            "memberUid"
-        )
-        if identity is None and member_uid:
-            identity = identities_by_provider_uid.get((assignment.provider, str(member_uid)))
-        if identity is None:
+        retained = scope.get("non_authoritative_unresolved_assignments", [])
+        if not isinstance(retained, list):
             continue
-        assignment.identity_provider = identity.provider
-        assignment.identity_identifier = identity.identifier
-        assignment.origin.raw["cross_domain_resolved"] = identity.provider != assignment.provider
-        assignment.origin.raw.pop("unresolved", None)
-        assignment.origin.raw.pop("unresolved_foreign_principal", None)
-        assignment.origin.raw.pop("ambiguous", None)
-        repo.upsert("access_assignments", assignment)
+        resolved: list[dict[str, object]] = []
+        for payload in retained:
+            if not isinstance(payload, dict):
+                continue
+            assignment = hydrate_assignment(deepcopy(payload))
+            if _resolve_assignment(assignment, resolver):
+                resolved.append(asdict(assignment))
+        if resolved:
+            scope["resolved_non_authoritative_unresolved_assignments"] = resolved
+            repo.upsert("imports", row)
+
+
+def _assignment_resolver(repo: Repository) -> tuple[
+    dict[str, Identity],
+    dict[str, Identity],
+    dict[tuple[str, str], Identity],
+]:
+    identities = _load_identities(repo)
+    return (
+        _unique_identities_by_native_id(identities),
+        _unique_identities_by_ldap_dn(identities),
+        _unique_identities_by_provider_uid(identities),
+    )
+
+
+def _resolve_assignment(
+    assignment: AccessAssignment,
+    resolver: tuple[
+        dict[str, Identity],
+        dict[str, Identity],
+        dict[tuple[str, str], Identity],
+    ],
+) -> bool:
+    if not assignment.origin.raw.get("unresolved"):
+        return False
+    identities_by_sid, identities_by_ldap_dn, identities_by_provider_uid = resolver
+    identity = None
+    sid = assignment.origin.raw.get("member_sid")
+    if sid:
+        identity = identities_by_sid.get(str(sid))
+    member_uuid = assignment.origin.raw.get("member_entry_uuid") or assignment.origin.raw.get(
+        "entryUUID"
+    )
+    if identity is None and member_uuid:
+        identity = identities_by_sid.get(str(member_uuid))
+    member_dn = assignment.origin.raw.get("member_dn")
+    if identity is None and member_dn:
+        identity = identities_by_ldap_dn.get(_canonical_dn(str(member_dn)))
+    member_uid = assignment.origin.raw.get("member_uid") or assignment.origin.raw.get("memberUid")
+    if identity is None and member_uid:
+        identity = identities_by_provider_uid.get((assignment.provider, str(member_uid)))
+    if identity is None:
+        return False
+    assignment.identity_provider = identity.provider
+    assignment.identity_identifier = identity.identifier
+    assignment.origin.raw["cross_domain_resolved"] = identity.provider != assignment.provider
+    assignment.origin.raw.pop("unresolved", None)
+    assignment.origin.raw.pop("unresolved_foreign_principal", None)
+    assignment.origin.raw.pop("ambiguous", None)
+    return True
 
 
 def _retain_non_authoritative_unresolved(result: ImportResult) -> None:
-    unresolved = [asdict(item) for item in result.assignments if item.origin.raw.get("unresolved")]
+    unresolved = []
+    for item in result.assignments:
+        if not item.origin.raw.get("unresolved"):
+            continue
+        payload = asdict(item)
+        raw = payload["origin"]["raw"]
+        raw["authoritative_source"] = False
+        raw["batch_id"] = result.batch.id
+        raw["source_provider"] = result.provider.name
+        raw["source_completeness"] = result.batch.completeness
+        raw["source_scope"] = dict(result.batch.scope)
+        unresolved.append(payload)
     if unresolved:
         result.batch.scope["non_authoritative_unresolved_assignments"] = unresolved
 
 
 def _unresolved_assignments_for_resolution(repo: Repository) -> list[AccessAssignment]:
-    assignments = [item for item in _load_assignments(repo) if item.origin.raw.get("unresolved")]
-    for row in repo.list_payloads("imports"):
-        scope = row.get("scope", {})
-        if not isinstance(scope, dict):
-            continue
-        for payload in scope.get("non_authoritative_unresolved_assignments", []):
-            if isinstance(payload, dict):
-                assignments.append(hydrate_assignment(payload))
-    return assignments
+    return [item for item in _load_assignments(repo) if item.origin.raw.get("unresolved")]
 
 
 def _unique_identities_by_native_id(identities: Iterable[Identity]) -> dict[str, Identity]:

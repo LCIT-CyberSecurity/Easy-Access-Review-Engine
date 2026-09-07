@@ -444,7 +444,7 @@ def test_openldap_unresolved_member_dn_resolves_after_other_provider_import_in_b
 
 
 
-def test_openldap_unknown_import_retains_unresolved_for_later_resolution(tmp_path: Path) -> None:
+def test_openldap_unknown_import_retains_unresolved_without_authoritative_replay(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "review.db")
     try:
         member_dn = "uid=alice,ou=People,dc=b,dc=example,dc=com"
@@ -460,6 +460,7 @@ def test_openldap_unknown_import_retains_unresolved_for_later_resolution(tmp_pat
         assert repo.list_payloads_by_provider("access_assignments", "ldap-a") == []
         retained = repo.list_payloads("imports")[0]["scope"]["non_authoritative_unresolved_assignments"]
         assert retained[0]["identity_provider"] == ""
+        assert retained[0]["origin"]["raw"]["authoritative_source"] is False
         assert retained[0]["origin"]["raw"]["member_dn"] == member_dn
 
         import_file_to_repository(
@@ -472,10 +473,128 @@ def test_openldap_unknown_import_retains_unresolved_for_later_resolution(tmp_pat
                 suffix="full-b",
             ),
         )
+        assert repo.list_payloads_by_provider("access_assignments", "ldap-a") == []
+        ldap_a_import = [row for row in repo.list_payloads("imports") if row["provider"] == "ldap-a"][0]
+        resolved = ldap_a_import["scope"]["resolved_non_authoritative_unresolved_assignments"]
+        assert resolved[0]["identity_provider"] == "ldap-b"
+        assert resolved[0]["identity_identifier"] == "entry:uuid-b"
+        assert "unresolved" not in resolved[0]["origin"]["raw"]
+    finally:
+        repo.close()
+
+
+def test_openldap_partial_relation_removed_before_foreign_identity_import_creates_no_assignment(
+    tmp_path: Path,
+) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        member_dn = "uid=alice,ou=People,dc=b,dc=example,dc=com"
+        import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_group("remote", "uuid-ga", [member_dn])]),
+                provider="ldap-a",
+                base_dn="dc=a,dc=example,dc=com",
+                manifest_extra="completeness: unknown\nscope:\n  type: all\n  completeness: unknown\n",
+                suffix="partial-a",
+            ),
+        )
+        import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_custom_user(member_dn, "alice", "uuid-b")]),
+                provider="ldap-b",
+                base_dn="dc=b,dc=example,dc=com",
+                suffix="full-b",
+            ),
+        )
+        assert repo.list_payloads_by_provider("access_assignments", "ldap-a") == []
+    finally:
+        repo.close()
+
+
+def test_openldap_unresolved_becomes_authoritative_only_after_full_source_confirmation(
+    tmp_path: Path,
+) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        member_dn = "uid=alice,ou=People,dc=b,dc=example,dc=com"
+        import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_group("remote", "uuid-ga", [member_dn])]),
+                provider="ldap-a",
+                base_dn="dc=a,dc=example,dc=com",
+                manifest_extra="completeness: unknown\nscope:\n  type: all\n  completeness: unknown\n",
+                suffix="partial-a",
+            ),
+        )
+        import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_custom_user(member_dn, "alice", "uuid-b")]),
+                provider="ldap-b",
+                base_dn="dc=b,dc=example,dc=com",
+                suffix="full-b",
+            ),
+        )
+        assert repo.list_payloads_by_provider("access_assignments", "ldap-a") == []
+
+        snapshot = import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_group("remote", "uuid-ga", [member_dn])]),
+                provider="ldap-a",
+                base_dn="dc=a,dc=example,dc=com",
+                suffix="full-a-confirmed",
+            ),
+        )
         assignment = repo.list_payloads_by_provider("access_assignments", "ldap-a")[0]
         assert assignment["identity_provider"] == "ldap-b"
         assert assignment["identity_identifier"] == "entry:uuid-b"
-        assert "unresolved" not in assignment["origin"]["raw"]
+        assert snapshot.access_assignments[0].identity_provider == "ldap-b"
+        assert snapshot.access_assignments[0].identity_identifier == "entry:uuid-b"
+    finally:
+        repo.close()
+
+
+def test_openldap_snapshot_matches_db_after_immediate_cross_provider_resolution(
+    tmp_path: Path,
+) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        member_dn = "uid=alice,ou=People,dc=b,dc=example,dc=com"
+        import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_custom_user(member_dn, "alice", "uuid-b")]),
+                provider="ldap-b",
+                base_dn="dc=b,dc=example,dc=com",
+                suffix="full-b",
+            ),
+        )
+        snapshot = import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_group("remote", "uuid-ga", [member_dn])]),
+                provider="ldap-a",
+                base_dn="dc=a,dc=example,dc=com",
+                suffix="full-a",
+            ),
+        )
+        assignment = repo.list_payloads_by_provider("access_assignments", "ldap-a")[0]
+        assert assignment["identity_provider"] == "ldap-b"
+        assert assignment["identity_identifier"] == "entry:uuid-b"
+        assert snapshot.access_assignments[0].identity_provider == "ldap-b"
+        assert snapshot.access_assignments[0].identity_identifier == "entry:uuid-b"
+        assert Finding.UNKNOWN_IDENTITY not in snapshot.comparison_states[0]["findings"]
     finally:
         repo.close()
 
@@ -552,6 +671,45 @@ def test_openldap_exporter_rejects_ldaps_with_starttls(tmp_path: Path) -> None:
     assert result.returncode == 2
     assert "cannot combine ldaps:// with START_TLS=1" in result.stderr
 
+
+
+def test_openldap_legacy_golden_same_cn_new_uuid_is_not_expected_and_observed(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        golden = create_golden_version(
+            create_golden_source("legacy-baseline"),
+            [
+                GoldenSourceAssignment(
+                    "openldap-prod",
+                    "Finance:member",
+                    "openldap-prod",
+                    "entry:uuid-u",
+                )
+            ],
+            "legacy_import",
+        )
+        snapshot = import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([
+                    _user("alice", "uuid-u"),
+                    _group(
+                        "Finance",
+                        "uuid-g2",
+                        ["uid=alice,ou=People,dc=example,dc=com"],
+                    ),
+                ]),
+                suffix="legacy-new-uuid",
+            ),
+            golden_version=golden,
+        )
+        classifications = {row["classification"] for row in snapshot.comparison_states}
+        assert "expected_and_observed" not in classifications
+        assert "unknown_due_to_scope" in classifications
+        assert "unexpected" in classifications
+    finally:
+        repo.close()
 
 def test_openldap_golden_recreate_same_cn_new_uuid_is_not_expected_and_observed(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "review.db")
