@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
 from pathlib import Path
-from zipfile import BadZipFile, ZipFile
 from typing import Iterable
+from zipfile import BadZipFile, ZipFile
 
 from access_review_engine.domain import (
     Access,
@@ -15,7 +16,12 @@ from access_review_engine.domain import (
     ProviderType,
 )
 from access_review_engine.importers.ad import ImportResult, import_ad_zip
-from access_review_engine.importers.openldap import _canonical_dn, import_openldap_ldif, import_openldap_zip
+from access_review_engine.importers.openldap import (
+    DEFAULT_OPENLDAP_FILTER,
+    _canonical_dn,
+    import_openldap_ldif,
+    import_openldap_zip,
+)
 from access_review_engine.services import create_snapshot, reconcile_identities
 from access_review_engine.storage import (
     Repository,
@@ -39,7 +45,9 @@ def import_file_to_repository(
         source_type = _zip_source_type(file_path)
         if source_type == "active_directory":
             result = import_ad_zip(
-                file_path, known_identities=known_identities, classification_rules=classification_rules
+                file_path,
+                known_identities=known_identities,
+                classification_rules=classification_rules,
             )
         elif source_type == "openldap":
             result = import_openldap_zip(file_path)
@@ -61,9 +69,21 @@ def persist_import_result(
         result.provider.id = existing_provider.id
         result.provider.created_at = existing_provider.created_at
 
-    result.batch.scope = _provider_import_scope(result.provider.name, result.batch.scope)
-    result.batch.completeness = str(result.batch.scope.get("completeness", result.batch.completeness))
+    previous_import_scopes = [
+        row.get("scope", {}) for row in repo.list_payloads_by_provider("imports", result.provider.name)
+    ]
+    result.batch.scope = _provider_import_scope(
+        result.provider.name,
+        result.provider.type,
+        result.batch.scope,
+        previous_import_scopes,
+    )
+    result.batch.completeness = str(
+        result.batch.scope.get("completeness", result.batch.completeness)
+    )
     authoritative = _is_authoritative_full(result)
+    if not authoritative:
+        _retain_non_authoritative_unresolved(result)
 
     repo.upsert("providers", result.provider)
     repo.insert_append_only("imports", result.batch)
@@ -111,7 +131,10 @@ def persist_import_result(
 
 def _is_authoritative_full(result: ImportResult) -> bool:
     scope = result.batch.scope or {}
-    if result.provider.type == ProviderType.OPENLDAP and not _is_openldap_provider_wide_scope(scope):
+    if (
+        result.provider.type == ProviderType.OPENLDAP
+        and not _matches_openldap_authoritative_scope(scope)
+    ):
         return False
     return (
         result.batch.completeness == Completeness.FULL
@@ -122,7 +145,12 @@ def _is_authoritative_full(result: ImportResult) -> bool:
     )
 
 
-def _provider_import_scope(provider: str, scope: dict[str, object] | None) -> dict[str, object]:
+def _provider_import_scope(
+    provider: str,
+    provider_type: str,
+    scope: dict[str, object] | None,
+    previous_scopes: Iterable[dict[str, object]] = (),
+) -> dict[str, object]:
     source = dict(scope or {})
     completeness = str(source.get("completeness") or Completeness.UNKNOWN)
     if source.get("type", "all") == "all":
@@ -130,30 +158,89 @@ def _provider_import_scope(provider: str, scope: dict[str, object] | None) -> di
         source["values"] = [provider]
     source.setdefault("provider", provider)
     source["completeness"] = completeness
+
+    if provider_type == ProviderType.OPENLDAP:
+        _apply_openldap_authoritative_scope(source, previous_scopes)
     return source
 
 
-def _is_openldap_provider_wide_scope(scope: dict[str, object]) -> bool:
-    base_dn = str(scope.get("base_dn") or "").strip().lower()
-    search_scope = str(scope.get("search_scope") or "sub").strip().lower()
-    ldap_filter = "".join(str(scope.get("filter") or "(objectClass=*)").split()).lower()
-    if search_scope != "sub":
-        return False
-    if ldap_filter not in {"(objectclass=*)", "objectclass=*"}:
-        return False
-    if not base_dn:
-        return False
-    rdns = [part.strip() for part in base_dn.split(",") if part.strip()]
-    return bool(rdns) and all(part.startswith(("dc=", "o=")) for part in rdns)
+def _apply_openldap_authoritative_scope(
+    scope: dict[str, object], previous_scopes: Iterable[dict[str, object]]
+) -> None:
+    expected = _configured_openldap_authoritative_scope(scope, previous_scopes)
+    if expected is None:
+        return
+    scope["authoritative_scope"] = expected
+    current = _canonical_openldap_scope(scope)
+    if current != expected and scope.get("completeness") == str(Completeness.FULL):
+        scope["completeness"] = str(Completeness.SCOPED)
+
+
+def _configured_openldap_authoritative_scope(
+    scope: dict[str, object], previous_scopes: Iterable[dict[str, object]]
+) -> dict[str, str] | None:
+    declared = scope.get("authoritative_scope")
+    if isinstance(declared, dict):
+        return _canonical_openldap_scope(declared)
+    for previous in reversed(list(previous_scopes)):
+        previous_declared = (
+            previous.get("authoritative_scope") if isinstance(previous, dict) else None
+        )
+        if isinstance(previous_declared, dict):
+            return _canonical_openldap_scope(previous_declared)
+    if (
+        scope.get("completeness") == str(Completeness.FULL)
+        and _supported_openldap_authoritative_candidate(scope)
+    ):
+        return _canonical_openldap_scope(scope)
+    return None
+
+
+def _matches_openldap_authoritative_scope(scope: dict[str, object]) -> bool:
+    expected = scope.get("authoritative_scope")
+    return (
+        isinstance(expected, dict)
+        and _canonical_openldap_scope(scope) == _canonical_openldap_scope(expected)
+    )
+
+
+def _supported_openldap_authoritative_candidate(scope: dict[str, object]) -> bool:
+    canonical = _canonical_openldap_scope(scope)
+    return (
+        bool(canonical["base_dn"])
+        and canonical["search_scope"] == "sub"
+        and canonical["filter"] in {
+            "".join(DEFAULT_OPENLDAP_FILTER.split()).lower(),
+            "(objectclass=*)",
+            "objectclass=*",
+        }
+    )
+
+
+def _canonical_openldap_scope(scope: dict[str, object]) -> dict[str, str]:
+    base_dn = str(scope.get("base_dn") or "").strip()
+    return {
+        "base_dn": _canonical_dn(base_dn) if base_dn else "",
+        "search_scope": str(scope.get("search_scope") or "sub").strip().lower(),
+        "filter": "".join(str(scope.get("filter") or "").split()).lower(),
+    }
 
 
 def _load_identities(repo: Repository, provider: str | None = None) -> list[Identity]:
-    rows = repo.list_payloads_by_provider("identities", provider) if provider else repo.list_payloads("identities")
+    rows = (
+        repo.list_payloads_by_provider("identities", provider)
+        if provider
+        else repo.list_payloads("identities")
+    )
     return [hydrate_identity(row) for row in rows]
 
 
 def _load_accesses(repo: Repository, provider: str | None = None) -> list[Access]:
-    rows = repo.list_payloads_by_provider("accesses", provider) if provider else repo.list_payloads("accesses")
+    rows = (
+        repo.list_payloads_by_provider("accesses", provider)
+        if provider
+        else repo.list_payloads("accesses")
+    )
     return [hydrate_access(row) for row in rows]
 
 
@@ -230,16 +317,27 @@ def _resolve_unresolved_assignments(repo: Repository) -> None:
     identities = _load_identities(repo)
     identities_by_sid = _unique_identities_by_native_id(identities)
     identities_by_ldap_dn = _unique_identities_by_ldap_dn(identities)
-    for assignment in _load_assignments(repo):
+    identities_by_provider_uid = _unique_identities_by_provider_uid(identities)
+    for assignment in _unresolved_assignments_for_resolution(repo):
         if not assignment.origin.raw.get("unresolved"):
             continue
         identity = None
         sid = assignment.origin.raw.get("member_sid")
         if sid:
             identity = identities_by_sid.get(str(sid))
+        member_uuid = assignment.origin.raw.get("member_entry_uuid") or assignment.origin.raw.get(
+            "entryUUID"
+        )
+        if identity is None and member_uuid:
+            identity = identities_by_sid.get(str(member_uuid))
         member_dn = assignment.origin.raw.get("member_dn")
         if identity is None and member_dn:
             identity = identities_by_ldap_dn.get(_canonical_dn(str(member_dn)))
+        member_uid = assignment.origin.raw.get("member_uid") or assignment.origin.raw.get(
+            "memberUid"
+        )
+        if identity is None and member_uid:
+            identity = identities_by_provider_uid.get((assignment.provider, str(member_uid)))
         if identity is None:
             continue
         assignment.identity_provider = identity.provider
@@ -249,6 +347,24 @@ def _resolve_unresolved_assignments(repo: Repository) -> None:
         assignment.origin.raw.pop("unresolved_foreign_principal", None)
         assignment.origin.raw.pop("ambiguous", None)
         repo.upsert("access_assignments", assignment)
+
+
+def _retain_non_authoritative_unresolved(result: ImportResult) -> None:
+    unresolved = [asdict(item) for item in result.assignments if item.origin.raw.get("unresolved")]
+    if unresolved:
+        result.batch.scope["non_authoritative_unresolved_assignments"] = unresolved
+
+
+def _unresolved_assignments_for_resolution(repo: Repository) -> list[AccessAssignment]:
+    assignments = [item for item in _load_assignments(repo) if item.origin.raw.get("unresolved")]
+    for row in repo.list_payloads("imports"):
+        scope = row.get("scope", {})
+        if not isinstance(scope, dict):
+            continue
+        for payload in scope.get("non_authoritative_unresolved_assignments", []):
+            if isinstance(payload, dict):
+                assignments.append(hydrate_assignment(payload))
+    return assignments
 
 
 def _unique_identities_by_native_id(identities: Iterable[Identity]) -> dict[str, Identity]:
@@ -275,6 +391,22 @@ def _unique_identities_by_ldap_dn(identities: Iterable[Identity]) -> dict[str, I
         else:
             found[canonical] = identity
     return {dn: identity for dn, identity in found.items() if identity is not None}
+
+
+def _unique_identities_by_provider_uid(
+    identities: Iterable[Identity],
+) -> dict[tuple[str, str], Identity]:
+    found: dict[tuple[str, str], Identity | None] = {}
+    for identity in identities:
+        uid = identity.metadata.get("uid")
+        if not uid:
+            continue
+        key = (identity.provider, str(uid))
+        if key in found:
+            found[key] = None
+        else:
+            found[key] = identity
+    return {key: identity for key, identity in found.items() if identity is not None}
 
 
 def load_classification_rules(path: str | Path | None) -> dict[str, object] | None:
@@ -313,11 +445,6 @@ def _zip_source_type(path: Path) -> str | None:
     value = manifest.get("source_type")
     if value is not None:
         return str(value)
-    names_set = set(names)
-    if {"users.csv", "groups.csv", "memberships.csv"}.issubset(names_set):
-        return "active_directory"
-    if "directory.ldif" in names_set:
-        return "openldap"
     return None
 
 

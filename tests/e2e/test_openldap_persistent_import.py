@@ -11,6 +11,7 @@ import pytest
 
 from access_review_engine.application import import_file_to_repository
 from access_review_engine.domain import Finding, GoldenSourceAssignment, IdentityStatus
+from access_review_engine.importers.openldap import DEFAULT_OPENLDAP_FILTER
 from access_review_engine.services import create_golden_source, create_golden_version, promote_snapshot
 from access_review_engine.storage import Repository
 
@@ -46,6 +47,65 @@ def test_zip_router_keeps_ad_and_rejects_unknown_source(tmp_path: Path) -> None:
     finally:
         repo.close()
 
+
+
+def test_zip_router_rejects_missing_manifest_through_application_import(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    archive = tmp_path / "missing-manifest.zip"
+    with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
+        zf.writestr("directory.ldif", "")
+    try:
+        try:
+            import_file_to_repository(repo, archive)
+        except ValueError as exc:
+            assert "manifest.yaml" in str(exc)
+        else:
+            raise AssertionError("missing manifest ZIP was accepted")
+    finally:
+        repo.close()
+
+
+def test_openldap_exporter_default_filter_routes_as_authoritative(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "ldapsearch"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'dn: uid=alice,ou=Accounts,dc=example,dc=com\n'\n"
+        "printf 'objectClass: inetOrgPerson\nentryUUID: uuid-u1\nuid: alice\ncn: Alice\n\n'\n"
+        "printf 'dn: cn=admins,ou=Accounts,dc=example,dc=com\n'\n"
+        "printf 'objectClass: groupOfNames\nentryUUID: uuid-g1\ncn: admins\n'\n"
+        "printf 'member: uid=alice,ou=Accounts,dc=example,dc=com\n'\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    archive = tmp_path / "exporter.zip"
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "BASE_DN": "ou=Accounts,dc=example,dc=com",
+        "ALLOW_ANONYMOUS": "1",
+        "PROVIDER_NAME": "corp-ldap",
+    }
+    subprocess.run(
+        ["bash", "exporters/openldap/export-openldap.sh", str(archive)],
+        cwd=Path.cwd(),
+        env=env,
+        check=True,
+    )
+    repo = Repository(tmp_path / "review.db")
+    try:
+        snapshot = import_file_to_repository(repo, archive)
+        imported = repo.list_payloads("imports")[0]
+        assert imported["source_type"] == "openldap_zip"
+        assert imported["completeness"] == "full"
+        assert imported["scope"]["authoritative_scope"] == {
+            "base_dn": "ou=accounts,dc=example,dc=com",
+            "search_scope": "sub",
+            "filter": "".join(DEFAULT_OPENLDAP_FILTER.split()).lower(),
+        }
+        assert {row["classification"] for row in snapshot.comparison_states} == {"no_reference"}
+    finally:
+        repo.close()
 
 def test_openldap_same_export_twice_is_idempotent(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "review.db")
@@ -383,6 +443,42 @@ def test_openldap_unresolved_member_dn_resolves_after_other_provider_import_in_b
             repo.close()
 
 
+
+def test_openldap_unknown_import_retains_unresolved_for_later_resolution(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        member_dn = "uid=alice,ou=People,dc=b,dc=example,dc=com"
+        partial = _openldap_zip(
+            tmp_path,
+            _ldif([_group("remote", "uuid-ga", [member_dn])]),
+            provider="ldap-a",
+            base_dn="dc=a,dc=example,dc=com",
+            manifest_extra="completeness: unknown\nscope:\n  type: all\n  completeness: unknown\n",
+            suffix="partial-a",
+        )
+        import_file_to_repository(repo, partial)
+        assert repo.list_payloads_by_provider("access_assignments", "ldap-a") == []
+        retained = repo.list_payloads("imports")[0]["scope"]["non_authoritative_unresolved_assignments"]
+        assert retained[0]["identity_provider"] == ""
+        assert retained[0]["origin"]["raw"]["member_dn"] == member_dn
+
+        import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                _ldif([_custom_user(member_dn, "alice", "uuid-b")]),
+                provider="ldap-b",
+                base_dn="dc=b,dc=example,dc=com",
+                suffix="full-b",
+            ),
+        )
+        assignment = repo.list_payloads_by_provider("access_assignments", "ldap-a")[0]
+        assert assignment["identity_provider"] == "ldap-b"
+        assert assignment["identity_identifier"] == "entry:uuid-b"
+        assert "unresolved" not in assignment["origin"]["raw"]
+    finally:
+        repo.close()
+
 def test_openldap_ambiguous_member_dn_remains_unresolved(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "review.db")
     try:
@@ -391,7 +487,7 @@ def test_openldap_ambiguous_member_dn_remains_unresolved(tmp_path: Path) -> None
         import_file_to_repository(repo, _openldap_zip(tmp_path, _ldif([_custom_user(member_dn, "alice", "uuid-b")]), provider="ldap-b", base_dn="dc=b,dc=example,dc=com", suffix="b"))
         import_file_to_repository(repo, _openldap_zip(tmp_path, _ldif([_group("remote", "uuid-g", [member_dn])]), provider="ldap-c", base_dn="dc=c,dc=example,dc=com", suffix="c"))
         assignment = repo.list_payloads_by_provider("access_assignments", "ldap-c")[0]
-        assert assignment["identity_provider"] == "ldap-c"
+        assert assignment["identity_provider"] == ""
         assert assignment["identity_identifier"] == member_dn
         assert assignment["origin"]["raw"]["unresolved"] is True
     finally:
@@ -633,7 +729,7 @@ def _openldap_zip(
     manifest_extra: str | None = None,
     base_dn: str = "dc=example,dc=com",
     search_scope: str = "sub",
-    ldap_filter: str = "(objectClass=*)",
+    ldap_filter: str = DEFAULT_OPENLDAP_FILTER,
 ) -> Path:
     archive = tmp_path / f"{provider}{suffix}.zip"
     manifest = manifest_extra or "completeness: full\nscope:\n  type: all\n  completeness: full\nstatistics:\n  collection_errors: 0\n"

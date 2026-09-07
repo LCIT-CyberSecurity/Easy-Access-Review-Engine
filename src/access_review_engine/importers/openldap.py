@@ -47,6 +47,10 @@ USED_LDIF_ATTRIBUTES = {
     "changetype",
 }
 TEXT_LDIF_ATTRIBUTES = USED_LDIF_ATTRIBUTES
+DEFAULT_OPENLDAP_FILTER = (
+    "(|(objectClass=inetOrgPerson)(objectClass=posixAccount)"
+    "(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))"
+)
 
 
 def import_openldap_ldif(path: str | Path, provider_name: str = "openldap") -> ImportResult:
@@ -193,6 +197,7 @@ def _import_openldap_entries(
         for attr in ("member", "uniquemember"):
             for member_dn in group.get(attr, []):
                 identity = identity_by_dn.get(_canonical_dn(member_dn))
+                identity_provider = identity.provider if identity else ""
                 identity_identifier = identity.identifier if identity else member_dn
                 raw = {attr: member_dn, "member_dn": member_dn}
                 if identity is None:
@@ -202,10 +207,13 @@ def _import_openldap_entries(
                         unresolved_in_scope += 1
                     else:
                         raw["out_of_scope"] = True
-                assignments.append(_assignment(provider.name, access_name, identity_identifier, cn, raw))
+                assignments.append(
+                    _assignment(provider.name, access_name, identity_identifier, cn, raw, identity_provider)
+                )
         for uid in group.get("memberuid", []):
             candidates = identity_by_uid.get(uid, [])
             identity = candidates[0] if len(candidates) == 1 else None
+            identity_provider = identity.provider if identity else ""
             identity_identifier = identity.identifier if identity else uid
             raw = {"memberUid": uid, "member_uid": uid}
             if identity is None:
@@ -214,7 +222,9 @@ def _import_openldap_entries(
                 unresolved_in_scope += 1
                 if len(candidates) > 1:
                     raw["ambiguous"] = True
-            assignments.append(_assignment(provider.name, access_name, identity_identifier, cn, raw))
+            assignments.append(
+                _assignment(provider.name, access_name, identity_identifier, cn, raw, identity_provider)
+            )
 
     if unresolved_total:
         scope["unresolved_memberships"] = unresolved_total
@@ -280,11 +290,18 @@ def _group_identity(provider: str, entry: dict[str, list[str]]) -> Identity:
     )
 
 
-def _assignment(provider: str, access_name: str, identity_identifier: str, source: str, raw: dict[str, object]) -> AccessAssignment:
+def _assignment(
+    provider: str,
+    access_name: str,
+    identity_identifier: str,
+    source: str,
+    raw: dict[str, object],
+    identity_provider: str | None = None,
+) -> AccessAssignment:
     return AccessAssignment(
         provider=provider,
         access_name=access_name,
-        identity_provider=provider,
+        identity_provider=provider if identity_provider is None else identity_provider,
         identity_identifier=identity_identifier,
         origin=Origin(
             assignment_type=AssignmentType.GROUP,
@@ -345,8 +362,6 @@ def _effective_completeness(manifest: dict[str, object], collection_errors: list
         values.append(str(Completeness.UNKNOWN))
     precedence = {str(Completeness.UNKNOWN): 0, str(Completeness.SCOPED): 1, str(Completeness.FULL): 2}
     completeness = min(values, key=lambda value: precedence.get(value, 0))
-    if completeness == str(Completeness.FULL) and not _is_provider_wide_scope(scope):
-        return str(Completeness.SCOPED)
     return completeness
 
 
@@ -374,7 +389,11 @@ def _is_provider_wide_scope(scope: dict[str, object]) -> bool:
     ldap_filter = "".join(str(scope.get("filter") or "(objectClass=*)").split()).lower()
     if search_scope != "sub":
         return False
-    if ldap_filter not in {"(objectclass=*)", "objectclass=*"}:
+    if ldap_filter not in {
+        "(objectclass=*)",
+        "objectclass=*",
+        "".join(DEFAULT_OPENLDAP_FILTER.split()).lower(),
+    }:
         return False
     if not base_dn:
         return False

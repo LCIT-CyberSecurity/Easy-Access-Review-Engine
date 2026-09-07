@@ -154,6 +154,7 @@ def compare_snapshot(
     accesses = {access_key(access): access for access in snapshot.accesses}
     observed_assignments = {assignment.comparison_key(): assignment for assignment in snapshot.access_assignments}
     observed_legacy = set(observed_assignments)
+    observed_legacy_without_stable: set[tuple[str, str, str, str]] = set()
     observed_stable: dict[tuple[str, str, str, str], tuple[str, str, str, str] | None] = {}
     assignment_origins: dict[tuple[str, str, str, str], list[AccessAssignment]] = {}
     for assignment in snapshot.access_assignments:
@@ -161,6 +162,7 @@ def compare_snapshot(
         assignment_origins.setdefault(legacy_key, []).append(assignment)
         stable_key = _observed_stable_key(assignment, accesses, identities)
         if stable_key is None:
+            observed_legacy_without_stable.add(legacy_key)
             continue
         observed_stable[stable_key] = legacy_key if stable_key not in observed_stable else None
 
@@ -182,6 +184,8 @@ def compare_snapshot(
             candidate = observed_stable.get(stable_key)
             if candidate is not None:
                 observed_key = candidate
+            elif expected_key in observed_legacy_without_stable:
+                observed_key = expected_key
         elif expected_key in observed_legacy:
             observed_key = expected_key
 
@@ -395,6 +399,11 @@ def promote_snapshot(
 ) -> GoldenSourceVersion:
     identities = {identity_key(identity): identity for identity in snapshot.identities}
     accesses = {access_key(access): access for access in snapshot.accesses}
+    if any(
+        Finding.COLLECTION_INCOMPLETE in set(row.get("findings", []))
+        for row in snapshot.comparison_states
+    ):
+        raise ValueError("Cannot promote a scoped or incomplete snapshot to Golden Source")
     assignments = []
     for item in snapshot.access_assignments:
         access = accesses.get((item.provider, item.access_name))
@@ -425,26 +434,89 @@ def promote_snapshot(
 def golden_diff(
     old: GoldenSourceVersion, new: GoldenSourceVersion
 ) -> list[dict[str, str]]:
-    old_keys = {item.key(): item for item in old.assignments}
-    new_keys = {item.key(): item for item in new.assignments}
+    old_remaining = set(old.assignments)
+    new_remaining = set(new.assignments)
     rows: list[dict[str, str]] = []
-    for key in sorted(old_keys.keys() | new_keys.keys()):
-        if key in old_keys and key in new_keys:
-            status = "unchanged"
-        elif key in new_keys:
-            status = "added"
-        else:
-            status = "removed"
-        rows.append(
-            {
-                "status": status,
-                "access_provider": key[0],
-                "access_name": key[1],
-                "identity_provider": key[2],
-                "identity_identifier": key[3],
-            }
-        )
-    return rows
+
+    for _, old_item, new_item in _matching_golden_stable_items(old_remaining, new_remaining):
+        old_remaining.discard(old_item)
+        new_remaining.discard(new_item)
+        rows.append(_golden_diff_row("unchanged", new_item))
+
+    for _, old_item, new_item in _matching_golden_legacy_items(old_remaining, new_remaining):
+        old_remaining.discard(old_item)
+        new_remaining.discard(new_item)
+        rows.append(_golden_diff_row("unchanged", new_item))
+
+    rows.extend(_golden_diff_row("removed", item) for item in old_remaining)
+    rows.extend(_golden_diff_row("added", item) for item in new_remaining)
+    return sorted(
+        rows,
+        key=lambda row: (
+            row["access_provider"],
+            row["access_name"],
+            row["identity_provider"],
+            row["identity_identifier"],
+            row["status"],
+        ),
+    )
+
+
+def _matching_golden_stable_items(
+    old_items: set[GoldenSourceAssignment], new_items: set[GoldenSourceAssignment]
+) -> list[tuple[tuple[str, str, str, str], GoldenSourceAssignment, GoldenSourceAssignment]]:
+    old_by_key = _unique_golden_by_key(
+        (item for item in old_items if item.stable_key()), stable=True
+    )
+    new_by_key = _unique_golden_by_key(
+        (item for item in new_items if item.stable_key()), stable=True
+    )
+    return [
+        (key, old_by_key[key], new_by_key[key])
+        for key in sorted(old_by_key.keys() & new_by_key.keys())
+    ]
+
+
+def _matching_golden_legacy_items(
+    old_items: set[GoldenSourceAssignment], new_items: set[GoldenSourceAssignment]
+) -> list[tuple[tuple[str, str, str, str], GoldenSourceAssignment, GoldenSourceAssignment]]:
+    old_by_key = _unique_golden_by_key(old_items, stable=False)
+    new_by_key = _unique_golden_by_key(new_items, stable=False)
+    matches = []
+    for key in sorted(old_by_key.keys() & new_by_key.keys()):
+        old_item = old_by_key[key]
+        new_item = new_by_key[key]
+        if old_item.stable_key() is not None and new_item.stable_key() is not None:
+            continue
+        matches.append((key, old_item, new_item))
+    return matches
+
+
+def _unique_golden_by_key(
+    assignments: Iterable[GoldenSourceAssignment], stable: bool
+) -> dict[tuple[str, str, str, str], GoldenSourceAssignment]:
+    result: dict[tuple[str, str, str, str], GoldenSourceAssignment] = {}
+    ambiguous: set[tuple[str, str, str, str]] = set()
+    for item in assignments:
+        key = item.stable_key() if stable else item.key()
+        if key is None:
+            continue
+        if key in result:
+            ambiguous.add(key)
+        result[key] = item
+    for key in ambiguous:
+        result.pop(key, None)
+    return result
+
+
+def _golden_diff_row(status: str, item: GoldenSourceAssignment) -> dict[str, str]:
+    return {
+        "status": status,
+        "access_provider": item.access_provider,
+        "access_name": item.access_name,
+        "identity_provider": item.identity_provider,
+        "identity_identifier": item.identity_identifier,
+    }
 
 
 def open_campaign(

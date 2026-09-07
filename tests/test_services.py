@@ -121,6 +121,83 @@ def test_golden_source_promote_diff_and_campaign_rules() -> None:
     assert remediation_from_decisions(items, [decision])[0].action == "revoke"
 
 
+
+def test_golden_diff_uses_stable_keys_and_rejects_stable_mismatch() -> None:
+    old = create_golden_version(
+        create_golden_source("baseline"),
+        [
+            GoldenSourceAssignment(
+                "corp-ad",
+                "Finance:member",
+                "corp-ad",
+                "user.old",
+                access_native_id="SID-G1",
+                access_permission="member",
+                identity_native_id="SID-U1",
+            )
+        ],
+        "test",
+    )
+    renamed = create_golden_version(
+        create_golden_source("baseline"),
+        [
+            GoldenSourceAssignment(
+                "corp-ad",
+                "Finance-Renamed:member",
+                "corp-ad",
+                "user.new",
+                access_native_id="SID-G1",
+                access_permission="member",
+                identity_native_id="SID-U1",
+            )
+        ],
+        "test",
+    )
+    recreated = create_golden_version(
+        create_golden_source("baseline"),
+        [
+            GoldenSourceAssignment(
+                "corp-ad",
+                "Finance:member",
+                "corp-ad",
+                "user.old",
+                access_native_id="SID-G2",
+                access_permission="member",
+                identity_native_id="SID-U1",
+            )
+        ],
+        "test",
+    )
+
+    assert [row["status"] for row in golden_diff(old, renamed)] == ["unchanged"]
+    assert sorted(row["status"] for row in golden_diff(old, recreated)) == ["added", "removed"]
+
+
+def test_promote_snapshot_rejects_incomplete_snapshot() -> None:
+    access = _access("finance")
+    golden = create_golden_version(
+        create_golden_source("baseline"),
+        [GoldenSourceAssignment("corp-ad", "finance", "corp-ad", "expected.user")],
+        "manual",
+    )
+    snapshot = create_snapshot(
+        [Provider("corp-ad", "active_directory")],
+        [],
+        [],
+        [access],
+        [],
+        ["import-1"],
+        golden,
+        {"type": "providers", "values": ["corp-ad"], "completeness": "unknown"},
+    )
+
+    try:
+        promote_snapshot(create_golden_source("target"), snapshot)
+    except ValueError as exc:
+        assert "Cannot promote" in str(exc)
+    else:
+        raise AssertionError("incomplete snapshot was promoted")
+
 def test_campaign_rejects_pending_promotion_and_close() -> None:
     owner = OwnerRef("corp-ad", "owner")
     owner_identity = Identity("corp-ad", "owner", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)

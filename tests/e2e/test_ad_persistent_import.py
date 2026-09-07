@@ -387,6 +387,44 @@ def test_ad_golden_same_group_name_new_sid_is_not_expected_and_observed(tmp_path
     finally:
         repo.close()
 
+
+def test_ad_enabled_absent_with_access_is_unknown_without_false_findings(tmp_path: Path) -> None:
+    archive = tmp_path / "ad-enabled-absent.zip"
+    with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.yaml",
+            "schema_version: 1\nsource_type: active_directory\nprovider: corp-ad\ncompleteness: full\nstatistics:\n  collection_errors: 0\n",
+        )
+        zf.writestr(
+            "users.csv",
+            _csv(["SamAccountName", "SID", "DistinguishedName"], [
+                {"SamAccountName": "known.user", "SID": _sid(1101), "DistinguishedName": "CN=known.user,DC=example,DC=test"}
+            ]),
+        )
+        zf.writestr(
+            "groups.csv",
+            _csv(["SamAccountName", "Name", "SID", "GroupScope", "GroupCategory"], [
+                {"SamAccountName": "GG", "Name": "GG", "SID": _sid(2101), "GroupScope": "Global", "GroupCategory": "Security"}
+            ]),
+        )
+        zf.writestr(
+            "memberships.csv",
+            _csv(["Group", "GroupSID", "Member", "MemberSID", "MemberType", "MemberDN", "MembershipType"], [
+                {"Group": "GG", "GroupSID": _sid(2101), "Member": "known.user", "MemberSID": _sid(1101), "MemberType": "user", "MemberDN": "CN=known.user", "MembershipType": "direct"}
+            ]),
+        )
+        zf.writestr("collection-errors.csv", "ObjectType,ObjectIdentifier,ObjectSID,Operation,ErrorCode,ErrorMessage\n")
+    repo = Repository(tmp_path / "review.db")
+    try:
+        snapshot = import_file_to_repository(repo, archive)
+        identity = [row for row in repo.list_payloads("identities") if row["identifier"] == "known.user"][0]
+        findings = snapshot.comparison_states[0]["findings"]
+        assert identity["status"] == IdentityStatus.UNKNOWN
+        assert Finding.DISABLED_WITH_ACCESS not in findings
+        assert Finding.UNKNOWN_IDENTITY not in findings
+    finally:
+        repo.close()
+
 def _ids_by_native(repo: Repository, table: str) -> dict[str, str]:
     return {row["native_id"]: row["id"] for row in repo.list_payloads(table) if row.get("native_id")}
 
