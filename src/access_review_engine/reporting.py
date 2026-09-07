@@ -73,7 +73,13 @@ def render_html_report(
     campaign: Campaign, rows: list[dict[str, object]], golden_version: GoldenSourceVersion | None = None
 ) -> str:
     summary = _summary(rows)
-    data_json = json.dumps(rows).replace("</", "<\\/")
+    data_json = (
+        json.dumps(rows)
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("</", "<\\/")
+    )
     options = {
         "owner": sorted({str(row["owner"]) for row in rows}),
         "service": sorted({str(row["service"]) for row in rows}),
@@ -130,23 +136,42 @@ function match(row) {{
   if (finding && !String(row.findings).toLowerCase().includes(finding)) return false;
   return true;
 }}
+function textEl(tag, value) {{
+  const el = document.createElement(tag);
+  el.textContent = value == null ? "" : String(value);
+  return el;
+}}
 function render() {{
   const out = document.getElementById("grouped");
   const visible = rows.filter(match);
-  let html = "";
+  out.replaceChildren();
+  if (!visible.length) {{
+    out.appendChild(textEl("p", "No matching rows."));
+    return;
+  }}
   let current = "";
+  let tbody = null;
   for (const row of visible) {{
     const group = row.owner + " / " + row.service + " / " + row.access;
     if (group !== current) {{
-      if (current) html += "</tbody></table>";
       current = group;
-      html += `<h2>Owner: ${{row.owner || "unassigned"}}</h2><h3>Service: ${{row.service || "none"}} - Access: ${{row.access}}</h3>`;
-      html += "<table><thead><tr><th>Identity</th><th>Status</th><th>Expected</th><th>Observed</th><th>Classification</th><th>Findings</th><th>Decision</th><th>Reviewer</th><th>Comment</th></tr></thead><tbody>";
+      out.appendChild(textEl("h2", "Owner: " + (row.owner || "unassigned")));
+      out.appendChild(textEl("h3", "Service: " + (row.service || "none") + " - Access: " + row.access));
+      const table = document.createElement("table");
+      const thead = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      ["Identity","Status","Expected","Observed","Classification","Findings","Decision","Reviewer","Comment"].forEach(label => headRow.appendChild(textEl("th", label)));
+      thead.appendChild(headRow);
+      tbody = document.createElement("tbody");
+      table.appendChild(thead);
+      table.appendChild(tbody);
+      out.appendChild(table);
     }}
-    html += `<tr data-classification="${{row.classification}}"><td>${{row.identity}}</td><td>${{row.identity_status}}</td><td>${{row.expected}}</td><td>${{row.observed}}</td><td>${{row.classification}}</td><td>${{row.findings}}</td><td>${{row.decision}}</td><td>${{row.reviewer}}</td><td>${{row.comment || ""}}</td></tr>`;
+    const tr = document.createElement("tr");
+    tr.dataset.classification = String(row.classification || "");
+    ["identity","identity_status","expected","observed","classification","findings","decision","reviewer","comment"].forEach(key => tr.appendChild(textEl("td", row[key])));
+    tbody.appendChild(tr);
   }}
-  if (current) html += "</tbody></table>";
-  out.innerHTML = html || "<p>No matching rows.</p>";
 }}
 document.querySelectorAll("select,input").forEach(el => el.addEventListener("input", render));
 render();

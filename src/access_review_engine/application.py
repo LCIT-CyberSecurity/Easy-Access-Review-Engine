@@ -52,6 +52,10 @@ def persist_import_result(
         result.provider.id = existing_provider.id
         result.provider.created_at = existing_provider.created_at
 
+    result.batch.scope = _provider_import_scope(result.provider.name, result.batch.scope)
+    result.batch.completeness = str(result.batch.scope.get("completeness", result.batch.completeness))
+    authoritative = _is_authoritative_full(result)
+
     repo.upsert("providers", result.provider)
     repo.insert_append_only("imports", result.batch)
 
@@ -62,15 +66,15 @@ def persist_import_result(
         imported_identities,
         completeness=result.batch.completeness,
         scope=result.batch.scope,
+        authoritative=authoritative,
     )
-    for identity in merged_identities:
+    for identity in sorted(merged_identities, key=lambda item: item.status != "deleted"):
         repo.upsert("identities", identity)
 
     accesses = _reconcile_accesses(_load_accesses(repo, result.provider.name), result.accesses)
     for access in accesses:
         repo.upsert("accesses", access)
 
-    authoritative = _is_authoritative_full(result)
     snapshot_assignments = list(result.assignments)
     if authoritative:
         assignments = _reconcile_assignments(
@@ -101,9 +105,19 @@ def _is_authoritative_full(result: ImportResult) -> bool:
     return (
         result.batch.completeness == Completeness.FULL
         and scope.get("completeness") in {None, Completeness.FULL, "full"}
-        and scope.get("type", "all") == "all"
+        and scope.get("type") == "providers"
+        and result.provider.name in set(scope.get("values", []))
         and not scope.get("collection_errors")
     )
+
+
+def _provider_import_scope(provider: str, scope: dict[str, object] | None) -> dict[str, object]:
+    source = dict(scope or {})
+    completeness = str(source.get("completeness") or Completeness.UNKNOWN)
+    if source.get("type", "all") == "all":
+        return {"type": "providers", "values": [provider], "completeness": completeness}
+    source["completeness"] = completeness
+    return source
 
 
 def _load_identities(repo: Repository, provider: str | None = None) -> list[Identity]:
@@ -154,7 +168,8 @@ def _reconcile_accesses(existing: Iterable[Access], imported: Iterable[Access]) 
             previous = existing_by_native.get(
                 (access.provider, access.control_object.native_id, access.permission.identifier)
             )
-        previous = previous or existing_by_name.get((access.provider, access.name))
+        else:
+            previous = existing_by_name.get((access.provider, access.name))
         if previous is not None:
             access.id = previous.id
         key = (access.provider, access.name)

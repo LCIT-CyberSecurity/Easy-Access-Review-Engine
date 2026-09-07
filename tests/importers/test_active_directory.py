@@ -106,6 +106,83 @@ def test_classic_service_and_shared_accounts_use_deterministic_rules(tmp_path: P
     assert shared.identities[0].type == IdentityType.SHARED_ACCOUNT
 
 
+def test_enabled_status_distinguishes_true_false_unknown_and_missing(tmp_path: Path) -> None:
+    archive = tmp_path / "enabled-values.zip"
+    with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.yaml", "provider: corp-ad\ncompleteness: full\n")
+        zf.writestr(
+            "users.csv",
+            "SamAccountName,Enabled,SID\n"
+            "active,true,S-1-5-21-1-2-3-1101\n"
+            "disabled,false,S-1-5-21-1-2-3-1102\n"
+            "empty,,S-1-5-21-1-2-3-1103\n"
+            "invalid,not-a-bool,S-1-5-21-1-2-3-1104\n",
+        )
+        zf.writestr(
+            "service_accounts.csv",
+            "SamAccountName,Enabled,SID,ObjectClass\nsvc_active$,True,S-1-5-21-1-2-3-2101,msDS-GroupManagedServiceAccount\nsvc_unknown$,,S-1-5-21-1-2-3-2102,msDS-ManagedServiceAccount\n",
+        )
+        zf.writestr(
+            "computers.csv",
+            "SamAccountName,Enabled,SID,DNSHostName\npc_active$,True,S-1-5-21-1-2-3-3101,pc.example.test\npc_unknown$,bogus,S-1-5-21-1-2-3-3102,pc2.example.test\n",
+        )
+        zf.writestr("groups.csv", "SamAccountName,Name,SID\nGG,GG,S-1-5-21-1-2-3-2200\n")
+        zf.writestr("memberships.csv", "Group,GroupSID,Member,MemberSID,MemberType\n")
+
+    result = import_ad_zip(archive)
+    identities = {identity.identifier: identity for identity in result.identities}
+    assert identities["active"].status == IdentityStatus.ACTIVE
+    assert identities["disabled"].status == IdentityStatus.DISABLED
+    assert identities["empty"].status == IdentityStatus.UNKNOWN
+    assert identities["invalid"].status == IdentityStatus.UNKNOWN
+    assert identities["svc_active$"].status == IdentityStatus.ACTIVE
+    assert identities["svc_unknown$"].status == IdentityStatus.UNKNOWN
+    assert identities["pc_active$"].status == IdentityStatus.ACTIVE
+    assert identities["pc_unknown$"].status == IdentityStatus.UNKNOWN
+
+
+def test_missing_enabled_column_is_unknown(tmp_path: Path) -> None:
+    archive = tmp_path / "missing-enabled.zip"
+    with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.yaml", "provider: corp-ad\ncompleteness: full\n")
+        zf.writestr("users.csv", "SamAccountName,SID\nlegacy,S-1-5-21-1-2-3-1101\n")
+        zf.writestr("groups.csv", "SamAccountName,Name,SID\nGG,GG,S-1-5-21-1-2-3-2200\n")
+        zf.writestr("memberships.csv", "Group,GroupSID,Member,MemberSID,MemberType\nGG,S-1-5-21-1-2-3-2200,legacy,S-1-5-21-1-2-3-1101,user\n")
+
+    result = import_ad_zip(archive)
+    assert {identity.identifier: identity for identity in result.identities}["legacy"].status == IdentityStatus.UNKNOWN
+
+
+def test_manifest_utf8_bom_is_supported(tmp_path: Path) -> None:
+    archive = tmp_path / "bom.zip"
+    with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.yaml", "\ufeffprovider: corp-ad\ncompleteness: full\n")
+        zf.writestr("users.csv", "SamAccountName,Enabled,SID\n")
+        zf.writestr("groups.csv", "SamAccountName,Name,SID\n")
+        zf.writestr("memberships.csv", "Group,GroupSID,Member,MemberSID,MemberType\n")
+
+    assert import_ad_zip(archive).provider.name == "corp-ad"
+
+
+def test_configurable_zip_limits_accept_large_memberships_and_reject_excessive(tmp_path: Path) -> None:
+    accepted = tmp_path / "accepted-large.zip"
+    with ZipFile(accepted, "w", ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.yaml", "provider: corp-ad\ncompleteness: full\n")
+        zf.writestr("users.csv", "SamAccountName,Enabled,SID\n")
+        zf.writestr("groups.csv", "SamAccountName,Name,SID\n")
+        zf.writestr("memberships.csv", "Group,GroupSID,Member,MemberSID,MemberType\n" + "\n".join("GG,SID-G,missing,SID-M,user" for _ in range(5_000)))
+    assert import_ad_zip(accepted, max_memberships_file_bytes=200_000).assignments == []
+
+    rejected = tmp_path / "rejected-large.zip"
+    with ZipFile(rejected, "w", ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.yaml", "provider: corp-ad\ncompleteness: full\n")
+        zf.writestr("users.csv", "SamAccountName,Enabled,SID\n")
+        zf.writestr("groups.csv", "SamAccountName,Name,SID\n")
+        zf.writestr("memberships.csv", "Group,GroupSID,Member,MemberSID,MemberType\n" + "\n".join("GG,SID-G,missing,SID-M,user" for _ in range(5_000)))
+    with pytest.raises(ValueError):
+        import_ad_zip(rejected, max_memberships_file_bytes=100_000)
+
+
 def test_manifest_validation_rejects_unsupported_values_and_error_mismatch(tmp_path: Path) -> None:
     unsupported = tmp_path / "unsupported.zip"
     with ZipFile(unsupported, "w", ZIP_DEFLATED) as zf:
@@ -138,4 +215,4 @@ def test_zip_bomb_declared_uncompressed_size_is_rejected(tmp_path: Path) -> None
         zf.writestr("groups.csv", "SamAccountName,Name,SID\n")
         zf.writestr("memberships.csv", "0" * 25_000_001)
     with pytest.raises(ValueError):
-        import_ad_zip(archive)
+        import_ad_zip(archive, max_memberships_file_bytes=25_000_000)

@@ -66,6 +66,36 @@ memberUid: jean
     assert {assignment.identity_identifier for assignment in result.assignments} == {"jean"}
 
 
+def test_html_report_treats_dynamic_values_as_text() -> None:
+    payload = "<img src=x onerror=alert(1)>"
+    campaign = Campaign("xss", "snapshot-1", display_name=payload)
+    html = render_html_report(
+        campaign,
+        [
+            {
+                "owner": payload,
+                "service": payload,
+                "provider": "corp-ad",
+                "classification": "unexpected",
+                "decision": "pending",
+                "access": payload,
+                "identity": payload,
+                "identity_provider": "corp-ad",
+                "identity_status": "unknown",
+                "expected": "no",
+                "observed": "yes",
+                "findings": payload,
+                "reviewer": payload,
+                "comment": payload,
+            }
+        ],
+    )
+    assert "<img src=x onerror=alert(1)>" not in html
+    assert "\\u003cimg src=x onerror=alert(1)\\u003e" in html
+    assert "textContent" in html
+    assert "innerHTML" not in html
+
+
 def test_html_report_contains_required_sections_and_filters(tmp_path: Path) -> None:
     result = import_ad_zip(_ad_zip(tmp_path))
     owner = OwnerRef("corp-ad", "jean.dupont")

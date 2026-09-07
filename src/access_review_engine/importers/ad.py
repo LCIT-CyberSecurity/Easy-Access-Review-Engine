@@ -29,8 +29,10 @@ REQUIRED_AD_FILES = {"manifest.yaml", "users.csv", "groups.csv", "memberships.cs
 OPTIONAL_AD_FILES = {"service_accounts.csv", "computers.csv", "collection-errors.csv"}
 ALLOWED_AD_FILES = REQUIRED_AD_FILES | OPTIONAL_AD_FILES
 MAX_AD_ZIP_FILES = 16
-MAX_AD_FILE_BYTES = 25_000_000
-MAX_AD_UNCOMPRESSED_BYTES = 100_000_000
+DEFAULT_AD_ARCHIVE_BYTES = 500_000_000
+DEFAULT_AD_FILE_BYTES = 250_000_000
+DEFAULT_AD_MEMBERSHIPS_FILE_BYTES = 1_000_000_000
+DEFAULT_AD_UNCOMPRESSED_BYTES = 1_500_000_000
 SUPPORTED_SCHEMA_VERSIONS = {1}
 SUPPORTED_COMPLETENESS = {Completeness.FULL, Completeness.SCOPED, Completeness.UNKNOWN}
 BUILT_IN_ACCOUNT_RIDS = {"500", "501", "502"}
@@ -59,8 +61,11 @@ class ImportResult:
 
 def import_ad_zip(
     path: str | Path,
-    max_size_bytes: int = 50_000_000,
+    max_size_bytes: int = DEFAULT_AD_ARCHIVE_BYTES,
     known_identities: list[Identity] | None = None,
+    max_file_bytes: int = DEFAULT_AD_FILE_BYTES,
+    max_memberships_file_bytes: int = DEFAULT_AD_MEMBERSHIPS_FILE_BYTES,
+    max_uncompressed_bytes: int = DEFAULT_AD_UNCOMPRESSED_BYTES,
     classification_rules: dict[str, object] | None = None,
 ) -> ImportResult:
     archive = Path(path)
@@ -78,11 +83,16 @@ def import_ad_zip(
                 raise ValueError("Unsafe ZIP path detected")
             if not ALLOWED_AD_FILES.issuperset(unique_names):
                 raise ValueError("Archive contains unexpected files")
-            _validate_zip_members(zf)
+            _validate_zip_members(
+                zf,
+                max_file_bytes=max_file_bytes,
+                max_memberships_file_bytes=max_memberships_file_bytes,
+                max_uncompressed_bytes=max_uncompressed_bytes,
+            )
             missing = REQUIRED_AD_FILES - unique_names
             if missing:
                 raise ValueError(f"Archive is missing required files: {sorted(missing)}")
-            manifest = _read_manifest(zf.read("manifest.yaml").decode("utf-8"))
+            manifest = _read_manifest(zf.read("manifest.yaml").decode("utf-8-sig"))
             _validate_manifest(manifest)
             provider_name = manifest.get("provider") or manifest.get("provider_name")
             if not provider_name:
@@ -156,9 +166,7 @@ def import_ad_zip(
         )
 
     _validate_collection_error_count(manifest, len(collection_errors))
-    completeness = str(manifest.get("completeness") or Completeness.UNKNOWN)
-    if collection_errors and completeness == Completeness.FULL:
-        completeness = Completeness.UNKNOWN
+    completeness = _effective_completeness(manifest, collection_errors)
     checksum = stable_checksum(
         {
             "manifest": manifest,
@@ -175,10 +183,10 @@ def import_ad_zip(
         source_type="active_directory_zip",
         status=ImportStatus.COMPLETED,
         completeness=completeness,
-        scope=manifest.get("scope") if isinstance(manifest.get("scope"), dict) else {"type": "all", "completeness": completeness},
+        scope=_effective_scope(manifest, completeness),
         checksum=checksum,
     )
-    batch.scope.setdefault("completeness", completeness)
+    batch.scope["completeness"] = completeness
     if collection_errors:
         batch.scope["collection_errors"] = len(collection_errors)
     from access_review_engine.domain import now_utc
@@ -187,13 +195,19 @@ def import_ad_zip(
     return ImportResult(batch, provider, identities, accesses, assignments)
 
 
-def _validate_zip_members(zf: ZipFile) -> None:
+def _validate_zip_members(
+    zf: ZipFile,
+    max_file_bytes: int,
+    max_memberships_file_bytes: int,
+    max_uncompressed_bytes: int,
+) -> None:
     total = 0
     for info in zf.infolist():
-        if info.file_size > MAX_AD_FILE_BYTES:
+        member_limit = max_memberships_file_bytes if info.filename == "memberships.csv" else max_file_bytes
+        if info.file_size > member_limit:
             raise ValueError("Archive member exceeds configured maximum size")
         total += info.file_size
-        if total > MAX_AD_UNCOMPRESSED_BYTES:
+        if total > max_uncompressed_bytes:
             raise ValueError("Archive uncompressed size exceeds configured maximum size")
 
 
@@ -207,6 +221,29 @@ def _validate_manifest(manifest: dict[str, object]) -> None:
     completeness = manifest.get("completeness")
     if completeness is not None and completeness not in SUPPORTED_COMPLETENESS:
         raise ValueError("manifest.yaml has unsupported completeness")
+    scope = manifest.get("scope")
+    if isinstance(scope, dict):
+        scope_completeness = scope.get("completeness")
+        if scope_completeness is not None and scope_completeness not in SUPPORTED_COMPLETENESS:
+            raise ValueError("manifest.yaml scope.completeness has unsupported completeness")
+
+
+def _effective_completeness(manifest: dict[str, object], collection_errors: list[dict[str, str]]) -> str:
+    values = [str(manifest.get("completeness") or Completeness.UNKNOWN)]
+    scope = manifest.get("scope")
+    if isinstance(scope, dict) and scope.get("completeness") is not None:
+        values.append(str(scope["completeness"]))
+    if collection_errors:
+        values.append(str(Completeness.UNKNOWN))
+    precedence = {str(Completeness.UNKNOWN): 0, str(Completeness.SCOPED): 1, str(Completeness.FULL): 2}
+    return min(values, key=lambda value: precedence.get(value, 0))
+
+
+def _effective_scope(manifest: dict[str, object], completeness: str) -> dict[str, object]:
+    scope = manifest.get("scope")
+    effective = dict(scope) if isinstance(scope, dict) else {"type": "all"}
+    effective["completeness"] = completeness
+    return effective
 
 
 def _validate_collection_error_count(manifest: dict[str, object], actual_errors: int) -> None:
@@ -264,7 +301,7 @@ def _user_identity(provider: str, row: dict[str, str], rules: dict[str, object])
         identifier=row["SamAccountName"],
         native_id=sid,
         type=identity_type,
-        status=IdentityStatus.ACTIVE if _truthy(row.get("Enabled")) else IdentityStatus.DISABLED,
+        status=_enabled_status(row),
         display_name=row.get("DisplayName") or row.get("SamAccountName"),
         email=row.get("Mail") or None,
         description=row.get("Description") or None,
@@ -293,7 +330,7 @@ def _service_account_identity(provider: str, row: dict[str, str]) -> Identity:
         identifier=row["SamAccountName"],
         native_id=row.get("SID") or None,
         type=IdentityType.TECHNICAL_ACCOUNT,
-        status=IdentityStatus.ACTIVE if _truthy(row.get("Enabled")) else IdentityStatus.DISABLED,
+        status=_enabled_status(row),
         display_name=row.get("Name") or row.get("DisplayName") or row.get("SamAccountName"),
         description=row.get("Description") or None,
         metadata={
@@ -314,7 +351,7 @@ def _computer_identity(provider: str, row: dict[str, str]) -> Identity:
         identifier=row["SamAccountName"],
         native_id=row.get("SID") or None,
         type=IdentityType.TECHNICAL_ACCOUNT,
-        status=IdentityStatus.ACTIVE if _truthy(row.get("Enabled")) else IdentityStatus.DISABLED,
+        status=_enabled_status(row),
         display_name=row.get("Name") or row.get("SamAccountName"),
         description=row.get("Description") or None,
         metadata={
@@ -456,6 +493,18 @@ def _is_past_datetime(value: str | None) -> bool:
         except ValueError:
             continue
     return False
+
+
+def _enabled_status(row: dict[str, str]) -> str:
+    value = row.get("Enabled")
+    if value is None or not str(value).strip():
+        return IdentityStatus.UNKNOWN
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y"}:
+        return IdentityStatus.ACTIVE
+    if normalized in {"0", "false", "no", "n"}:
+        return IdentityStatus.DISABLED
+    return IdentityStatus.UNKNOWN
 
 
 def _truthy(value: str | None) -> bool:

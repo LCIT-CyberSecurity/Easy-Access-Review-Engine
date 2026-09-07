@@ -15,6 +15,7 @@ from access_review_engine.domain import (
     GoldenSource,
     GoldenSourceVersion,
     Identity,
+    IdentityStatus,
     ImportBatch,
     Provider,
     RemediationAction,
@@ -184,6 +185,12 @@ class Repository:
         data = json.loads(payload)
         provider = data.get("provider") or data.get("access_provider") or data.get("identity_provider")
         name = data.get("name") or data.get("identifier") or data.get("golden_source_id")
+        if isinstance(obj, Identity) and data.get("status") == IdentityStatus.DELETED:
+            name = f"{name}#deleted:{data.get('native_id') or data['id']}"
+        if isinstance(obj, Access) and data.get("control_object", {}).get("native_id"):
+            native_id = data["control_object"]["native_id"]
+            permission = data.get("permission", {}).get("identifier", "")
+            name = f"{name}#native:{native_id}:{permission}"
         if isinstance(obj, GoldenSourceVersion):
             name = obj.golden_source_id
         if isinstance(obj, AccessAssignment):

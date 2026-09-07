@@ -104,11 +104,15 @@ function Add-ServerArg {
   return $params
 }
 
-if ($MyInvocation.InvocationName -eq '.') { return }
-if (-not $ProviderName) { throw "ProviderName is required" }
-if (-not $Output) { throw "Output is required" }
+function Invoke-ActiveDirectoryExport {
+  param(
+    [Parameter(Mandatory=$true)][string]$ProviderName,
+    [Parameter(Mandatory=$true)][string]$Output,
+    [string]$Server,
+    [switch]$AllowPartial
+  )
 
-$tmp = New-Item -ItemType Directory -Path ([System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString()))
+  $tmp = New-Item -ItemType Directory -Path ([System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString()))
 $errors = @()
 try {
   Import-Module ActiveDirectory -ErrorAction Stop
@@ -198,12 +202,17 @@ try {
   Write-Manifest -Path "$tmp/manifest.yaml" -Stats $stats -Completeness $completeness -Domain $domainName -DomainSid $domainSid
 
   if ($errors.Count -gt 0 -and -not $AllowPartial) {
-    Write-Error "Active Directory collection failed for $($errors.Count) object(s). Re-run with -AllowPartial to keep a diagnostic ZIP marked completeness: unknown."
-    exit 1
+    throw "Active Directory collection failed for $($errors.Count) object(s). Re-run with -AllowPartial to keep a diagnostic ZIP marked completeness: unknown."
   }
 
   Compress-Archive -Path "$tmp/manifest.yaml","$tmp/users.csv","$tmp/groups.csv","$tmp/service_accounts.csv","$tmp/computers.csv","$tmp/memberships.csv","$tmp/collection-errors.csv" -DestinationPath $Output -Force
 }
 finally {
-  Remove-Item -Recurse -Force $tmp
+    Remove-Item -Recurse -Force $tmp
+  }
 }
+
+if ($MyInvocation.InvocationName -eq '.') { return }
+if (-not $ProviderName) { throw "ProviderName is required" }
+if (-not $Output) { throw "Output is required" }
+Invoke-ActiveDirectoryExport -ProviderName $ProviderName -Output $Output -Server $Server -AllowPartial:$AllowPartial

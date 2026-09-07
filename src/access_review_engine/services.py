@@ -11,6 +11,7 @@ from access_review_engine.domain import (
     Campaign,
     CampaignStatus,
     ComparisonState,
+    Completeness,
     Decision,
     DecisionValue,
     Finding,
@@ -93,6 +94,7 @@ def reconcile_identities(
     imported: Iterable[Identity],
     completeness: str = "full",
     scope: dict[str, object] | None = None,
+    authoritative: bool | None = None,
 ) -> list[Identity]:
     """Merge imported identities while preserving internal ids across provider/native_id renames."""
     existing_list = list(existing)
@@ -118,11 +120,14 @@ def reconcile_identities(
         imported_refs.add(identity_key(identity))
         merged.append(identity)
 
-    if completeness == "full":
+    if authoritative is None:
+        authoritative = completeness == "full"
+
+    if authoritative:
         for identity in existing_list:
             if (
                 identity.id not in preserved_existing_ids
-                and identity_key(identity) not in imported_refs
+                and (identity.native_id is not None or identity_key(identity) not in imported_refs)
                 and _identity_in_scope(identity, scope)
             ):
                 deleted = Identity(**(asdict(identity) | {"status": IdentityStatus.DELETED}))
@@ -131,7 +136,9 @@ def reconcile_identities(
 
 
 def _identity_in_scope(identity: Identity, scope: dict[str, object] | None) -> bool:
-    if not scope or scope.get("type") == "all":
+    if not scope:
+        return True
+    if scope.get("type") == "all":
         return True
     if scope.get("type") == "providers":
         return identity.provider in set(scope.get("values", []))
@@ -180,7 +187,7 @@ def compare_snapshot(
                 findings.append(Finding.UNRESOLVED_FOREIGN_PRINCIPAL)
             if assignment.origin.raw.get("unknown_member_type"):
                 findings.append(Finding.UNKNOWN_MEMBER_TYPE)
-        if import_scope and import_scope.get("completeness") not in {None, "full"}:
+        if _is_incomplete_scope(import_scope):
             findings.append(Finding.COLLECTION_INCOMPLETE)
         if identity is None:
             findings.append(Finding.UNKNOWN_IDENTITY)
@@ -210,10 +217,16 @@ def compare_snapshot(
     return rows
 
 
+def _is_incomplete_scope(scope: dict[str, object] | None) -> bool:
+    return bool(scope and scope.get("completeness") not in {None, "full", Completeness.FULL})
+
+
 def _in_authoritative_scope(provider: str, access_name: str, scope: dict[str, object] | None) -> bool:
-    if scope and scope.get("completeness") not in {None, "full"}:
+    if _is_incomplete_scope(scope):
         return False
-    if not scope or scope.get("type") == "all":
+    if not scope:
+        return True
+    if scope.get("type") == "all":
         return True
     if scope.get("type") == "providers":
         return provider in set(scope.get("values", []))

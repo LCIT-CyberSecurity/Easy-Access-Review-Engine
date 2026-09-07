@@ -27,6 +27,21 @@ def test_unknown_collection_cannot_produce_missing() -> None:
     assert Finding.COLLECTION_INCOMPLETE in snapshot.comparison_states[0]["findings"]
 
 
+def test_unknown_enabled_identity_with_access_is_not_reported_disabled() -> None:
+    identity = Identity(
+        "corp-ad",
+        "enabled.unknown",
+        IdentityType.USER_ACCOUNT,
+        IdentityStatus.UNKNOWN,
+    )
+    access = Access("finance", "corp-ad", ControlObject("group", "GG_FINANCE"), Permission("member"))
+    assignment = AccessAssignment("corp-ad", "finance", "corp-ad", "enabled.unknown", Origin("group", True, False))
+    snapshot = create_snapshot([], [identity], [], [access], [assignment], ["import-1"])
+    findings = snapshot.comparison_states[0]["findings"]
+    assert Finding.DISABLED_WITH_ACCESS not in findings
+    assert Finding.UNKNOWN_IDENTITY in findings
+
+
 def test_ad_account_findings_are_distinct_and_cumulative() -> None:
     identity = Identity(
         "corp-ad",
