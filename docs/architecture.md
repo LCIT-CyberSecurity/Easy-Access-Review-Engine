@@ -37,6 +37,18 @@ pas de champ AD, LDAP, cloud ou application-specifique. Une appartenance AD/LDAP
 observee est un `AccessAssignment`. Les groupes peuvent eux-memes etre titulaires d'assignments, ce
 qui preserve les groupes imbriques sans aplatir les chemins.
 
+## Collecte distante
+
+La collecte distante reste une couche d'acquisition uniquement:
+
+```text
+remote directory -> collector script -> existing offline export format -> existing importer and offline pipeline
+```
+
+Les collecteurs Active Directory et OpenLDAP ne creent ni second modele de donnees ni moteur metier
+remote. Ils produisent les fichiers deja acceptes par les importeurs offline, puis les memes etapes
+normalisees gerent DB, snapshot, Golden Source, campagnes et findings.
+
 ## Frontieres
 
 - `domain`: objets metier, enums, fingerprints et checksums deterministes.
@@ -49,9 +61,16 @@ qui preserve les groupes imbriques sans aplatir les chemins.
 
 ## Scope et completude
 
-Chaque import cree un `ImportBatch` avec `completeness` et `scope`. Un export partiel ne produit pas
-de faux `missing`: si la Golden Source attend un acces hors du scope autoritaire de l'import, la
-classification est `unknown_due_to_scope`.
+Chaque import cree un `ImportBatch` avec `completeness` et `scope`. Les valeurs conservees sont:
+
+- `full`: le collecteur et l'importeur peuvent raisonnablement traiter le provider comme complet
+  pour le scope declare.
+- `scoped`: l'import couvre volontairement un sous-ensemble et ne doit pas remplacer l'etat global.
+- `unknown`: erreur, timeout, limite serveur, page manquante, resultat tronque ou incoherence de
+  collecte; l'import ne doit pas etre authoritative.
+
+Un export partiel ne produit pas de faux `missing`: si la Golden Source attend un acces hors du scope
+autoritaire de l'import, la classification est `unknown_due_to_scope`.
 
 ## Immutabilite
 

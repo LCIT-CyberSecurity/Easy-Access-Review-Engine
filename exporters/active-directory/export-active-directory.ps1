@@ -2,6 +2,7 @@ param(
   [string]$ProviderName,
   [string]$Output,
   [string]$Server,
+  [int]$OperationTimeoutSeconds = 300,
   [switch]$AllowPartial
 )
 
@@ -71,7 +72,7 @@ statistics:
   users: $($Stats.Users)
   groups: $($Stats.Groups)
   service_accounts: $($Stats.ServiceAccounts)
-  referenced_computers: $($Stats.ReferencedComputers)
+  computers: $($Stats.Computers)
   memberships: $($Stats.Memberships)
   collection_errors: $($Stats.CollectionErrors)
 "@ | Out-File -Encoding utf8 $Path
@@ -104,23 +105,35 @@ function Add-ServerArg {
   return $params
 }
 
+function Assert-CollectionWithinTimeout {
+  param($Stopwatch, [int]$OperationTimeoutSeconds, [string]$Operation)
+  if ($OperationTimeoutSeconds -le 0) { return }
+  if ($Stopwatch.Elapsed.TotalSeconds -gt $OperationTimeoutSeconds) {
+    throw "Active Directory collection timeout after $OperationTimeoutSeconds second(s) during $Operation"
+  }
+}
+
 function Invoke-ActiveDirectoryExport {
   param(
     [Parameter(Mandatory=$true)][string]$ProviderName,
     [Parameter(Mandatory=$true)][string]$Output,
     [string]$Server,
+    [int]$OperationTimeoutSeconds = 300,
     [switch]$AllowPartial
   )
 
   $tmp = New-Item -ItemType Directory -Path ([System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString()))
 $errors = @()
+$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 try {
   Import-Module ActiveDirectory -ErrorAction Stop
   $serverArg = Add-ServerArg
+  Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation 'Get-ADDomain'
   $domain = Get-ADDomain @serverArg
   $domainName = $domain.DNSRoot
   $domainSid = $domain.DomainSID.Value
 
+  Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation 'Get-ADUser'
   $userProps = @('DisplayName','Mail','Enabled','SID','DistinguishedName','LastLogonDate','PasswordLastSet','AccountExpirationDate','WhenCreated','Description','UserPrincipalName','PrimaryGroupID','LockedOut','ServicePrincipalName','ObjectGUID')
   $users = Get-ADUser -Filter * -Properties $userProps @serverArg
   $users | Select-Object SamAccountName,UserPrincipalName,DisplayName,Mail,Enabled,SID,DistinguishedName,Description,PrimaryGroupID,LockedOut,ObjectGUID,
@@ -131,11 +144,13 @@ try {
     @{Name='ServicePrincipalName';Expression={ ConvertTo-AdCsvMultiValue $_.ServicePrincipalName }} |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/users.csv"
 
+  Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation 'Get-ADGroup'
   $groupProps = @('SamAccountName','Name','SID','DistinguishedName','Description','GroupScope','GroupCategory')
   $groups = Get-ADGroup -Filter * -Properties $groupProps @serverArg
   $groups | Select-Object SamAccountName,Name,SID,DistinguishedName,Description,GroupScope,GroupCategory |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/groups.csv"
 
+  Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation 'Get-ADServiceAccount'
   $svcProps = @('SamAccountName','SID','DistinguishedName','Enabled','Description','ServicePrincipalName','ObjectClass','ObjectGUID','Name','DisplayName','PrimaryGroupID')
   $serviceAccounts = Get-ADServiceAccount -Filter * -Properties $svcProps @serverArg
   $serviceAccounts | Select-Object SamAccountName,Name,DisplayName,SID,DistinguishedName,Enabled,Description,ObjectClass,ObjectGUID,PrimaryGroupID,
@@ -143,13 +158,12 @@ try {
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/service_accounts.csv"
 
   $memberships = @()
-  $computerSids = @{}
   foreach ($group in $groups) {
     try {
+      Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation "Get-ADGroupMember $($group.SamAccountName)"
       $members = Get-ADGroupMember -Identity $group -ErrorAction Stop @serverArg
       foreach ($member in $members) {
         $memberSid = if ($member.SID) { $member.SID.Value } else { $null }
-        if ($member.objectClass -eq 'computer' -and $memberSid) { $computerSids[$memberSid] = $member.SamAccountName }
         $memberships += [PSCustomObject]@{
           Group = $group.SamAccountName
           GroupSID = $group.SID.Value
@@ -172,14 +186,13 @@ try {
     $memberships = Add-PrimaryGroupMembership -Memberships $memberships -Principal $principal -GroupsBySid $groupsBySid
   }
 
-  $computers = @()
-  foreach ($sid in $computerSids.Keys) {
-    try {
-      $computers += Get-ADComputer -Identity $sid -Properties SamAccountName,SID,DistinguishedName,Enabled,DNSHostName,Description,ObjectGUID,PrimaryGroupID @serverArg
-    }
-    catch {
-      $errors += New-CollectionError -ObjectType 'computer' -ObjectIdentifier $computerSids[$sid] -ObjectSID $sid -Operation 'Get-ADComputer' -ErrorRecord $_
-    }
+  try {
+    Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation 'Get-ADComputer'
+    $computers = Get-ADComputer -Filter * -Properties SamAccountName,SID,DistinguishedName,Enabled,DNSHostName,Description,ObjectGUID,PrimaryGroupID @serverArg
+  }
+  catch {
+    $computers = @()
+    $errors += New-CollectionError -ObjectType 'computer' -ObjectIdentifier '*' -ObjectSID $null -Operation 'Get-ADComputer -Filter *' -ErrorRecord $_
   }
   foreach ($principal in @($computers)) {
     $memberships = Add-PrimaryGroupMembership -Memberships $memberships -Principal $principal -GroupsBySid $groupsBySid
@@ -195,7 +208,7 @@ try {
     Users = @($users).Count
     Groups = @($groups).Count
     ServiceAccounts = @($serviceAccounts).Count
-    ReferencedComputers = @($computers).Count
+    Computers = @($computers).Count
     Memberships = @($memberships).Count
     CollectionErrors = @($errors).Count
   }
@@ -215,4 +228,4 @@ finally {
 if ($MyInvocation.InvocationName -eq '.') { return }
 if (-not $ProviderName) { throw "ProviderName is required" }
 if (-not $Output) { throw "Output is required" }
-Invoke-ActiveDirectoryExport -ProviderName $ProviderName -Output $Output -Server $Server -AllowPartial:$AllowPartial
+Invoke-ActiveDirectoryExport -ProviderName $ProviderName -Output $Output -Server $Server -OperationTimeoutSeconds $OperationTimeoutSeconds -AllowPartial:$AllowPartial

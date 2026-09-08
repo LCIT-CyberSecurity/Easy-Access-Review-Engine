@@ -133,6 +133,18 @@ Describe 'Active Directory exporter' -Tag 'unit' {
           ObjectGUID = '33333333-3333-3333-3333-333333333333'
           PrimaryGroupID = '515'
           ObjectClass = 'computer'
+        },
+        [PSCustomObject]@{
+          SamAccountName = 'PC002$'
+          Name = 'PC002'
+          SID = [PSCustomObject]@{ Value = 'S-1-5-21-100-200-300-4102' }
+          DistinguishedName = 'CN=PC002,DC=corp,DC=example,DC=test'
+          Enabled = $true
+          DNSHostName = 'pc002.example.test'
+          Description = 'Ungrouped workstation'
+          ObjectGUID = '44444444-4444-4444-4444-444444444444'
+          PrimaryGroupID = '515'
+          ObjectClass = 'computer'
         }
       )
     }
@@ -163,7 +175,7 @@ Describe 'Active Directory exporter' -Tag 'unit' {
     Import-Csv (Join-Path $expanded 'collection-errors.csv') | Should -HaveCount 4
   }
 
-  It 'exports gMSA, computer, dates, FSP SID and primary group memberships through the real exporter' {
+  It 'exports gMSA, all computers, dates, FSP SID and primary group memberships through the real exporter' {
     $out = Join-Path $TestDrive 'full.zip'
     $expanded = Join-Path $TestDrive 'full'
 
@@ -178,13 +190,18 @@ Describe 'Active Directory exporter' -Tag 'unit' {
     $users[0].AccountExpirationDate | Should -Match '^2026-01-02T03:04:05\.0000000Z$'
     $serviceAccounts[0].ObjectClass | Should -Be 'msDS-GroupManagedServiceAccount'
     $serviceAccounts[0].PrimaryGroupID | Should -Be '513'
-    $computers[0].PrimaryGroupID | Should -Be '515'
+    $computers | Should -HaveCount 2
+    ($computers | Where-Object { $_.SamAccountName -eq 'PC001$' }).PrimaryGroupID | Should -Be '515'
+    ($computers | Where-Object { $_.SamAccountName -eq 'PC002$' }).PrimaryGroupID | Should -Be '515'
     ($memberships | Where-Object { $_.MemberSID -eq 'S-1-5-21-900-800-700-1501' }).MemberType |
       Should -Be 'foreignSecurityPrincipal'
     ($memberships | Where-Object { $_.Member -eq 'gmsa_web$' -and $_.MembershipType -eq 'primary_group' }).GroupSID |
       Should -Be 'S-1-5-21-100-200-300-513'
     ($memberships | Where-Object { $_.Member -eq 'PC001$' -and $_.MembershipType -eq 'primary_group' }).GroupSID |
       Should -Be 'S-1-5-21-100-200-300-515'
+    ($memberships | Where-Object { $_.Member -eq 'PC002$' -and $_.MembershipType -eq 'primary_group' }).GroupSID |
+      Should -Be 'S-1-5-21-100-200-300-515'
+    Get-Content (Join-Path $expanded 'manifest.yaml') -Raw | Should -Match 'computers: 2'
     Get-Content (Join-Path $expanded 'manifest.yaml') -Raw | Should -Match 'completeness: full'
   }
 }

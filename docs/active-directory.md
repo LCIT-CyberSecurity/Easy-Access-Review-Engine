@@ -12,20 +12,40 @@ Optional domain controller targeting:
 .\export-active-directory.ps1 -ProviderName corp-ad -Output corp-ad-export.zip -Server dc01.corp.local
 ```
 
+The exporter is a remote acquisition layer. It queries AD through the standard Windows
+ActiveDirectory module, writes the existing ZIP/CSV export format, and the normal offline importer
+then runs the regular normalization, DB, snapshot, Golden and campaign pipeline. There is no second
+remote business pipeline.
+
+Flow:
+
+```text
+remote Active Directory -> collector script -> existing AD ZIP/CSV format -> existing importer and offline pipeline
+```
+
 The exporter is designed for Windows PowerShell 5.1 and the ActiveDirectory module available on
 recent Windows Server releases. It does not require PowerShell 7.
 
-## Fail-closed collection
+## Completeness and Fail Closed
 
-Membership collection errors are not hidden. The default behavior is fail closed:
+A ZIP is `completeness: full` only when every supported collection step completes without diagnostic
+errors. The collector marks the export `unknown` when group membership collection fails, computer
+enumeration fails, or the configured operation timeout is exceeded. The script exits non-zero unless
+`-AllowPartial` is explicitly used.
 
-- `Get-ADGroupMember` uses terminating errors for each group collection attempt;
-- a collection error is written to `collection-errors.csv`;
-- `manifest.yaml` is never written as `completeness: full` when collection errors exist;
-- the script exits non-zero unless `-AllowPartial` is explicitly used.
+The `-OperationTimeoutSeconds` option defaults to 300 seconds and acts as a simple global guard
+between AD operations. It prevents a partial or interrupted collection from being represented as a
+full authoritative export.
 
-With `-AllowPartial`, the ZIP is diagnostic and marked `completeness: unknown`. Such imports must not
-produce false `missing` findings.
+## Security of Remote AD Access
+
+The script does not implement a custom transport. It relies on the Windows ActiveDirectory module and
+its normal domain controller connection handling. Avoid passing credentials on the command line. Run
+under an account/session configured for secure AD authentication, and target a trusted domain
+controller with `-Server` when operationally required.
+
+Collection diagnostics include object type, object identifier, SID, operation and safe error text.
+They do not include environment dumps or credentials.
 
 ## ZIP content
 
@@ -45,19 +65,24 @@ V1 ZIPs without the optional files remain importable.
 
 ## Supported observations
 
-- Users from `Get-ADUser` with SID as native identity, ObjectGUID in metadata, `PrimaryGroupID`,
-  `LockedOut`, `ServicePrincipalName`, expiration and creation timestamps.
-- Groups from `Get-ADGroup` with `GroupScope` and `GroupCategory` preserved in metadata.
+- Users from `Get-ADUser -Filter *` with SID as native identity, ObjectGUID in metadata,
+  `PrimaryGroupID`, `LockedOut`, `ServicePrincipalName`, expiration and creation timestamps.
+- Groups from `Get-ADGroup -Filter *` with `GroupScope` and `GroupCategory` preserved in metadata.
 - Direct group memberships from `Get-ADGroupMember`; recursive expansion is intentionally not used.
-- gMSA/MSA from `Get-ADServiceAccount`, classified as `technical_account`.
-- Computer principals observed as group members, collected with `Get-ADComputer` and classified as
-  `technical_account`.
-- Primary group memberships represented with `MembershipType=primary_group`.
+- gMSA/MSA from `Get-ADServiceAccount -Filter *`, classified as `technical_account`.
+- Computer principals from exhaustive `Get-ADComputer -Filter *`, not only computers referenced by
+  group memberships.
+- Primary group memberships represented with `MembershipType=primary_group` for users, computers and
+  managed service accounts when the primary group SID resolves to a collected group.
 - Foreign Security Principals preserved by `MemberSID` even when unresolved.
 - Cross-domain memberships resolved by `native_id`/SID when the referenced provider identity is
-  already known.
+  already known or imported later.
 - Built-in accounts detected from SID/RID, not localized names.
-- Optional deterministic classification rules for classic user-based service/shared accounts.
+- Optional deterministic classification rules for classic service/shared user accounts.
+
+If a membership references a `GroupSID` absent from the collected groups, the importer keeps an
+explicit diagnostic in import scope and downgrades effective completeness to `unknown`; it does not
+silently publish a full authoritative import.
 
 ## Not claimed
 

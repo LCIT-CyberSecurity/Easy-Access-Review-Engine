@@ -127,12 +127,22 @@ def import_ad_zip(
 
     accesses: list[Access] = []
     assignments: list[AccessAssignment] = []
+    unresolved_group_memberships: list[dict[str, str]] = []
     seen_accesses: set[str] = set()
     seen_assignments: set[tuple[str, str, str, str, str]] = set()
     for row in memberships:
         group_id = row.get("GroupSID") or row.get("Group")
         group = group_by_sid.get(group_id) or group_by_name.get(row.get("Group", ""))
         if group is None:
+            unresolved_group_memberships.append(
+                {
+                    "group_sid": row.get("GroupSID") or "",
+                    "group": row.get("Group") or "",
+                    "member_sid": row.get("MemberSID") or "",
+                    "member": row.get("Member") or "",
+                    "membership_type": row.get("MembershipType") or "direct",
+                }
+            )
             continue
         access_name = f"{group.identifier}:member"
         if access_name not in seen_accesses:
@@ -166,7 +176,7 @@ def import_ad_zip(
         )
 
     _validate_collection_error_count(manifest, len(collection_errors))
-    completeness = _effective_completeness(manifest, collection_errors)
+    completeness = _effective_completeness(manifest, collection_errors, unresolved_group_memberships)
     checksum = stable_checksum(
         {
             "manifest": manifest,
@@ -189,6 +199,9 @@ def import_ad_zip(
     batch.scope["completeness"] = completeness
     if collection_errors:
         batch.scope["collection_errors"] = len(collection_errors)
+    if unresolved_group_memberships:
+        batch.scope["unresolved_group_memberships"] = unresolved_group_memberships
+        batch.scope["unresolved_group_memberships_count"] = len(unresolved_group_memberships)
     from access_review_engine.domain import now_utc
 
     batch.completed_at = now_utc()
@@ -228,12 +241,18 @@ def _validate_manifest(manifest: dict[str, object]) -> None:
             raise ValueError("manifest.yaml scope.completeness has unsupported completeness")
 
 
-def _effective_completeness(manifest: dict[str, object], collection_errors: list[dict[str, str]]) -> str:
+def _effective_completeness(
+    manifest: dict[str, object],
+    collection_errors: list[dict[str, str]],
+    unresolved_group_memberships: list[dict[str, str]] | None = None,
+) -> str:
     values = [str(manifest.get("completeness") or Completeness.UNKNOWN)]
     scope = manifest.get("scope")
     if isinstance(scope, dict) and scope.get("completeness") is not None:
         values.append(str(scope["completeness"]))
     if collection_errors:
+        values.append(str(Completeness.UNKNOWN))
+    if unresolved_group_memberships:
         values.append(str(Completeness.UNKNOWN))
     precedence = {str(Completeness.UNKNOWN): 0, str(Completeness.SCOPED): 1, str(Completeness.FULL): 2}
     return min(values, key=lambda value: precedence.get(value, 0))

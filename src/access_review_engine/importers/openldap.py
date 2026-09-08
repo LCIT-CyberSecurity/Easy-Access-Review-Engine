@@ -195,11 +195,18 @@ def _import_openldap_entries(
             )
         )
         for attr in ("member", "uniquemember"):
-            for member_dn in group.get(attr, []):
+            for member_value in group.get(attr, []):
+                member_dn, optional_uid = (
+                    _unique_member_dn_and_uid(member_value)
+                    if attr == "uniquemember"
+                    else (member_value, None)
+                )
                 identity = identity_by_dn.get(_canonical_dn(member_dn))
                 identity_provider = identity.provider if identity else ""
                 identity_identifier = identity.identifier if identity else member_dn
-                raw = {attr: member_dn, "member_dn": member_dn}
+                raw = {attr: member_value, "member_dn": member_dn}
+                if optional_uid:
+                    raw["unique_member_uid"] = optional_uid
                 if identity is None:
                     raw["unresolved"] = True
                     unresolved_total += 1
@@ -525,6 +532,13 @@ def _canonical_dn(value: str) -> str:
             rdns.append(f"{attr.strip().lower()}={normalized_value}")
         canonical_parts.append("+".join(sorted(rdns)))
     return ",".join(canonical_parts)
+
+
+def _unique_member_dn_and_uid(value: str) -> tuple[str, str | None]:
+    dn, uid = _split_unescaped_once(value, "#")
+    if not uid:
+        return value, None
+    return dn, uid
 
 
 def _split_unescaped(value: str, separator: str) -> list[str]:

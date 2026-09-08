@@ -238,6 +238,54 @@ memberUid: alice
     finally:
         repo.close()
 
+def test_openldap_unique_member_with_optional_uid_resolves_by_dn(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        ldif = """
+dn: uid=alice,ou=People,dc=example,dc=com
+objectClass: inetOrgPerson
+entryUUID: uuid-u1
+uid: alice
+cn: Alice
+
+dn: cn=unique-admins,ou=Groups,dc=example,dc=com
+objectClass: groupOfUniqueNames
+entryUUID: uuid-g1
+cn: unique-admins
+uniqueMember: uid=alice,ou=People,dc=example,dc=com#'0101'B
+""".strip()
+        snapshot = import_file_to_repository(repo, _openldap_zip(tmp_path, ldif))
+        assignment = repo.list_payloads_by_provider("access_assignments", "openldap-prod")[0]
+        assert snapshot.comparison_states[0]["identity_identifier"] == "entry:uuid-u1"
+        assert assignment["origin"]["raw"]["member_dn"] == "uid=alice,ou=People,dc=example,dc=com"
+        assert assignment["origin"]["raw"]["unique_member_uid"] == "'0101'B"
+        assert Finding.UNKNOWN_IDENTITY not in snapshot.comparison_states[0]["findings"]
+    finally:
+        repo.close()
+
+
+def test_openldap_unique_member_escaped_hash_stays_in_dn(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        ldif = r"""
+dn: cn=hash\#user,ou=People,dc=example,dc=com
+objectClass: inetOrgPerson
+entryUUID: uuid-u1
+uid: hashuser
+cn: hash#user
+
+dn: cn=unique-admins,ou=Groups,dc=example,dc=com
+objectClass: groupOfUniqueNames
+entryUUID: uuid-g1
+cn: unique-admins
+uniqueMember: cn=hash\#user,ou=People,dc=example,dc=com
+""".strip()
+        snapshot = import_file_to_repository(repo, _openldap_zip(tmp_path, ldif))
+        assert snapshot.comparison_states[0]["identity_identifier"] == "entry:uuid-u1"
+        assert Finding.UNKNOWN_IDENTITY not in snapshot.comparison_states[0]["findings"]
+    finally:
+        repo.close()
+
 
 def test_raw_ldif_is_unknown_and_does_not_replace_authoritative_state(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "review.db")
@@ -815,12 +863,19 @@ def test_openldap_exporter_command_modes_and_manifest(tmp_path: Path) -> None:
     assert "jpegPhoto" not in args
     assert "-D" not in args
 
-    env = env | {"BIND_DN": "cn=admin,dc=example,dc=com", "LDAP_URI": "ldaps://ldap.example.test", "ALLOW_ANONYMOUS": "0"}
+    env = env | {
+        "BIND_DN": "cn=admin,dc=example,dc=com",
+        "LDAP_URI": "ldaps://ldap.example.test",
+        "ALLOW_ANONYMOUS": "0",
+        "LDAP_PASSWORD": "fake-secret",
+    }
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "ldaps.zip")], cwd=Path.cwd(), env=env, check=True)
     args = log.read_text(encoding="utf-8")
     assert "-x" in args
     assert "-D" in args
+    assert "-y" in args
     assert "cn=admin,dc=example,dc=com" in args
+    assert "fake-secret" not in args
 
     env = env | {"LDAP_URI": "ldap://ldap.example.test", "START_TLS": "1"}
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "starttls.zip")], cwd=Path.cwd(), env=env, check=True)
@@ -854,6 +909,131 @@ def test_openldap_exporter_fails_closed_and_partial_zip_has_unknown_manifest(tmp
     assert "collection_errors: 1" in manifest
     assert "Size limit exceeded" in errors
     assert "userPassword" not in manifest
+
+
+def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_path: Path) -> None:
+    sentinel = "EARE_TEST_SECRET_DO_NOT_LEAK_93481"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "ldapsearch"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'dn: uid=alice,ou=People,dc=example,dc=com\n'\n"
+        "printf 'objectClass: inetOrgPerson\nentryUUID: uuid-u1\nuid: alice\ncn: Alice\n'\n"
+        "printf 'description: EARE_TEST_SECRET_DO_NOT_LEAK_93481\n'\n"
+        "echo 'bind failed: EARE_TEST_SECRET_DO_NOT_LEAK_93481' >&2\n"
+        "exit 49\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "LDAP_URI=ldaps://ldap.example.test\n"
+        "BASE_DN=dc=example,dc=com\n"
+        "BIND_DN=cn=admin,dc=example,dc=com\n"
+        f"LDAP_PASSWORD={sentinel}\n"
+        "ALLOW_PARTIAL=1\n",
+        encoding="utf-8",
+    )
+    archive = tmp_path / "redacted.zip"
+    result = subprocess.run(
+        ["bash", "exporters/openldap/export-openldap.sh", str(archive)],
+        cwd=Path.cwd(),
+        env=os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}", "ENV_FILE": str(env_file)},
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert sentinel not in result.stdout
+    assert sentinel not in result.stderr
+    with ZipFile(archive) as zf:
+        for name in zf.namelist():
+            assert sentinel not in zf.read(name).decode("utf-8")
+
+    repo = Repository(tmp_path / "review.db")
+    try:
+        snapshot = import_file_to_repository(repo, archive)
+        assert sentinel not in str(snapshot)
+        assert sentinel.encode() not in (tmp_path / "review.db").read_bytes()
+    finally:
+        repo.close()
+
+
+def test_openldap_exporter_paged_search_keeps_all_entries_once(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "ldapsearch"
+    users = "".join(
+        f"printf 'dn: uid=user{i},ou=People,dc=example,dc=com\nobjectClass: inetOrgPerson\nentryUUID: uuid-u{i}\nuid: user{i}\ncn: User {i}\n\n'\n"
+        for i in range(5)
+    )
+    fake.write_text("#!/usr/bin/env bash\n" + users, encoding="utf-8")
+    fake.chmod(0o755)
+    archive = tmp_path / "paged.zip"
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "BASE_DN": "dc=example,dc=com",
+        "ALLOW_ANONYMOUS": "1",
+        "PAGE_SIZE": "2",
+    }
+    subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(archive)], cwd=Path.cwd(), env=env, check=True)
+    imported = import_file_to_repository(Repository(tmp_path / "review.db"), archive)
+    native_ids = sorted(
+        identity.native_id
+        for identity in imported.identities
+        if identity.metadata.get("entry_uuid", "").startswith("uuid-u")
+    )
+    assert native_ids == [f"uuid-u{i}" for i in range(5)]
+
+
+def test_openldap_exporter_timeout_partial_zip_is_unknown(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "ldapsearch"
+    fake.write_text("#!/usr/bin/env bash\nsleep 2\n", encoding="utf-8")
+    fake.chmod(0o755)
+    archive = tmp_path / "timeout.zip"
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "BASE_DN": "dc=example,dc=com",
+        "ALLOW_ANONYMOUS": "1",
+        "ALLOW_PARTIAL": "1",
+        "COMMAND_TIMEOUT_SECONDS": "1",
+    }
+    subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(archive)], cwd=Path.cwd(), env=env, check=True)
+    with ZipFile(archive) as zf:
+        manifest = zf.read("manifest.yaml").decode("utf-8")
+    assert "ldapsearch_exit_code: 124" in manifest
+    assert "completeness: unknown" in manifest
+
+
+def test_openldap_exporter_rejects_authenticated_cleartext_and_missing_password(tmp_path: Path) -> None:
+    env = os.environ | {
+        "BASE_DN": "dc=example,dc=com",
+        "BIND_DN": "cn=admin,dc=example,dc=com",
+        "LDAP_URI": "ldap://ldap.example.test",
+    }
+    cleartext = subprocess.run(
+        ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "clear.zip")],
+        cwd=Path.cwd(),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert cleartext.returncode == 2
+    assert "requires ldaps:// or START_TLS=1" in cleartext.stderr
+
+    missing_password = subprocess.run(
+        ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "missing-password.zip")],
+        cwd=Path.cwd(),
+        env=env | {"LDAP_URI": "ldaps://ldap.example.test"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert missing_password.returncode == 2
+    assert "requires LDAP_PASSWORD or LDAP_PASSWORD_FILE" in missing_password.stderr
 
 
 def _ids_by_native(repo: Repository, table: str) -> dict[str, str]:

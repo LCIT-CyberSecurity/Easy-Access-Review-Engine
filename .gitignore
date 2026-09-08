@@ -1,0 +1,15 @@
+# Local Python/runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Local secrets and generated data
+.env
+*.db
+*.sqlite
+*.sqlite3
+*.zip
+reports/

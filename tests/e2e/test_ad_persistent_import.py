@@ -80,6 +80,86 @@ def test_unknown_collection_preserves_authoritative_assignments_and_snapshot_is_
     finally:
         repo.close()
 
+def test_ad_full_import_with_missing_group_sid_is_downgraded_to_unknown(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        full = import_file_to_repository(
+            repo,
+            _ad_zip(
+                tmp_path,
+                "corp-ad",
+                [("user", _sid(1101))],
+                [("GG", _sid(2101))],
+                [("GG", _sid(2101), "user", _sid(1101), "user")],
+            ),
+        )
+        golden = create_golden_version(
+            create_golden_source("baseline"),
+            [GoldenSourceAssignment(*assignment.comparison_key()) for assignment in full.access_assignments],
+            "test",
+        )
+        snapshot = import_file_to_repository(
+            repo,
+            _ad_zip(
+                tmp_path,
+                "corp-ad",
+                [("user", _sid(1101))],
+                [],
+                [("MissingGroup", _sid(2999), "user", _sid(1101), "user")],
+                suffix="-missing-group",
+            ),
+            golden_version=golden,
+        )
+        imported = [
+            row
+            for row in repo.list_payloads("imports")
+            if row["scope"].get("unresolved_group_memberships_count") == 1
+        ][0]
+        assert imported["completeness"] == "unknown"
+        assert imported["scope"]["unresolved_group_memberships_count"] == 1
+        assert "missing" not in {row["classification"] for row in snapshot.comparison_states}
+        assert Finding.COLLECTION_INCOMPLETE in {
+            finding for row in snapshot.comparison_states for finding in row["findings"]
+        }
+    finally:
+        repo.close()
+
+
+def test_ad_full_computer_still_present_without_group_is_not_deleted(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        import_file_to_repository(
+            repo,
+            _ad_zip(
+                tmp_path,
+                "corp-ad",
+                [],
+                [("GG_SERVERS", _sid(2201))],
+                [("GG_SERVERS", _sid(2201), "PC01$", _sid(4101), "computer")],
+                computers=[("PC01$", _sid(4101), "515")],
+                suffix="-with-group",
+            ),
+        )
+        import_file_to_repository(
+            repo,
+            _ad_zip(
+                tmp_path,
+                "corp-ad",
+                [],
+                [("Domain Computers", _sid(515))],
+                [("Domain Computers", _sid(515), "PC01$", _sid(4101), "computer", "primary_group")],
+                computers=[("PC01$", _sid(4101), "515")],
+                suffix="-still-present",
+            ),
+        )
+        computer = _by_native(repo, "identities", _sid(4101))
+        assignments = repo.list_payloads_by_provider("access_assignments", "corp-ad")
+        assert computer["status"] == IdentityStatus.ACTIVE
+        assert assignments[0]["origin"]["raw"]["membership_type"] == "primary_group"
+        assert assignments[0]["identity_identifier"] == "PC01$"
+    finally:
+        repo.close()
+
 
 def test_full_zero_assignment_import_replaces_only_that_provider(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "review.db")
@@ -526,6 +606,10 @@ def test_ad_enabled_absent_with_access_is_unknown_without_false_findings(tmp_pat
     finally:
         repo.close()
 
+def _by_native(repo: Repository, table: str, native_id: str) -> dict[str, object]:
+    return [row for row in repo.list_payloads(table) if row.get("native_id") == native_id][0]
+
+
 def _ids_by_native(repo: Repository, table: str) -> dict[str, str]:
     return {row["native_id"]: row["id"] for row in repo.list_payloads(table) if row.get("native_id")}
 
@@ -570,10 +654,11 @@ def _ad_zip(
     provider: str,
     users: list[tuple[str, str]],
     groups: list[str | tuple[str, str]],
-    memberships: list[tuple[str, str, str, str, str]],
+    memberships: list[tuple[str, str, str, str, str] | tuple[str, str, str, str, str, str]],
     completeness: str = "full",
     suffix: str = "",
     scope: str = "",
+    computers: list[tuple[str, str, str]] | None = None,
 ) -> Path:
     archive = tmp_path / f"{provider}{suffix}.zip"
     with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
@@ -595,9 +680,30 @@ def _ad_zip(
             }
             for index, group in enumerate(groups)
         ]))
-        zf.writestr("memberships.csv", _csv(["Group", "GroupSID", "Member", "MemberSID", "MemberType", "MemberDN", "MembershipType"], [
-            {"Group": group, "GroupSID": group_sid, "Member": member, "MemberSID": member_sid, "MemberType": member_type, "MemberDN": f"CN={member}", "MembershipType": "direct"}
-            for group, group_sid, member, member_sid, member_type in memberships
+        membership_rows = []
+        for membership in memberships:
+            group, group_sid, member, member_sid, member_type, *rest = membership
+            membership_rows.append({
+                "Group": group,
+                "GroupSID": group_sid,
+                "Member": member,
+                "MemberSID": member_sid,
+                "MemberType": member_type,
+                "MemberDN": f"CN={member}",
+                "MembershipType": rest[0] if rest else "direct",
+            })
+        zf.writestr("memberships.csv", _csv(["Group", "GroupSID", "Member", "MemberSID", "MemberType", "MemberDN", "MembershipType"], membership_rows))
+        zf.writestr("computers.csv", _csv(["SamAccountName", "Name", "Enabled", "SID", "DistinguishedName", "DNSHostName", "PrimaryGroupID"], [
+            {
+                "SamAccountName": name,
+                "Name": name.rstrip("$"),
+                "Enabled": "True",
+                "SID": sid,
+                "DistinguishedName": f"CN={name.rstrip('$')},DC=example,DC=test",
+                "DNSHostName": f"{name.rstrip('$').lower()}.example.test",
+                "PrimaryGroupID": primary_group_id,
+            }
+            for name, sid, primary_group_id in (computers or [])
         ]))
         zf.writestr("collection-errors.csv", "ObjectType,ObjectIdentifier,ObjectSID,Operation,ErrorCode,ErrorMessage\n")
     return archive
