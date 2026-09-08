@@ -47,13 +47,15 @@ function ConvertTo-AdCsvMultiValue {
 
 function New-CollectionError {
   param($ObjectType, $ObjectIdentifier, $ObjectSID, $Operation, $ErrorRecord)
+  $message = if ($ErrorRecord.Exception) { $ErrorRecord.Exception.Message } else { [string]$ErrorRecord }
+  $code = if ($ErrorRecord.FullyQualifiedErrorId) { $ErrorRecord.FullyQualifiedErrorId } else { $ErrorRecord.GetType().FullName }
   [PSCustomObject]@{
     ObjectType = $ObjectType
     ObjectIdentifier = $ObjectIdentifier
     ObjectSID = $ObjectSID
     Operation = $Operation
-    ErrorCode = $ErrorRecord.FullyQualifiedErrorId
-    ErrorMessage = $ErrorRecord.Exception.Message
+    ErrorCode = $code
+    ErrorMessage = $message
   }
 }
 
@@ -105,12 +107,55 @@ function Add-ServerArg {
   return $params
 }
 
-function Assert-CollectionWithinTimeout {
-  param($Stopwatch, [int]$OperationTimeoutSeconds, [string]$Operation)
-  if ($OperationTimeoutSeconds -le 0) { return }
-  if ($Stopwatch.Elapsed.TotalSeconds -gt $OperationTimeoutSeconds) {
-    throw "Active Directory collection timeout after $OperationTimeoutSeconds second(s) during $Operation"
+function Invoke-AdOperationWithTimeout {
+  param(
+    [Parameter(Mandatory=$true)][string]$Operation,
+    [Parameter(Mandatory=$true)][scriptblock]$ScriptBlock,
+    [object[]]$ArgumentList = @(),
+    [int]$OperationTimeoutSeconds = 300,
+    [switch]$ImportActiveDirectoryModule
+  )
+
+  if ($OperationTimeoutSeconds -le 0) {
+    return & $ScriptBlock @ArgumentList
   }
+
+  $powerShell = [PowerShell]::Create()
+  $null = $powerShell.AddScript({
+    param($InnerScriptBlock, $InnerArgumentList, $ShouldImportActiveDirectoryModule)
+    if ($ShouldImportActiveDirectoryModule) {
+      Import-Module ActiveDirectory -ErrorAction Stop
+    }
+    & $InnerScriptBlock @InnerArgumentList
+  }).AddArgument($ScriptBlock).AddArgument($ArgumentList).AddArgument([bool]$ImportActiveDirectoryModule)
+  $handle = $powerShell.BeginInvoke()
+  try {
+    if (-not $handle.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds($OperationTimeoutSeconds))) {
+      $powerShell.Stop()
+      throw [System.TimeoutException]::new("Active Directory operation '$Operation' exceeded timeout of $OperationTimeoutSeconds second(s)")
+    }
+    $result = $powerShell.EndInvoke($handle)
+    if ($powerShell.Streams.Error.Count -gt 0) {
+      throw $powerShell.Streams.Error[0]
+    }
+    return $result
+  }
+  finally {
+    if ($handle.AsyncWaitHandle) {
+      $handle.AsyncWaitHandle.Close()
+    }
+    $powerShell.Dispose()
+  }
+}
+
+function Invoke-AdCollectorOperation {
+  param(
+    [Parameter(Mandatory=$true)][string]$Operation,
+    [Parameter(Mandatory=$true)][scriptblock]$ScriptBlock,
+    [object[]]$ArgumentList = @(),
+    [int]$OperationTimeoutSeconds = 300
+  )
+  Invoke-AdOperationWithTimeout -Operation $Operation -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList -OperationTimeoutSeconds $OperationTimeoutSeconds -ImportActiveDirectoryModule
 }
 
 function Invoke-ActiveDirectoryExport {
@@ -124,18 +169,35 @@ function Invoke-ActiveDirectoryExport {
 
   $tmp = New-Item -ItemType Directory -Path ([System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString()))
 $errors = @()
-$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 try {
   Import-Module ActiveDirectory -ErrorAction Stop
   $serverArg = Add-ServerArg
-  Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation 'Get-ADDomain'
-  $domain = Get-ADDomain @serverArg
-  $domainName = $domain.DNSRoot
-  $domainSid = $domain.DomainSID.Value
+  $domainName = ''
+  $domainSid = ''
+  try {
+    $domain = Invoke-AdCollectorOperation -Operation 'Get-ADDomain' -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
+      param($ServerArg)
+      Get-ADDomain @ServerArg
+    } -ArgumentList @($serverArg)
+    $domainName = $domain.DNSRoot
+    $domainSid = $domain.DomainSID.Value
+  }
+  catch {
+    $errors += New-CollectionError -ObjectType 'domain' -ObjectIdentifier '*' -ObjectSID $null -Operation 'Get-ADDomain' -ErrorRecord $_
+  }
 
-  Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation 'Get-ADUser'
   $userProps = @('DisplayName','Mail','Enabled','SID','DistinguishedName','LastLogonDate','PasswordLastSet','AccountExpirationDate','WhenCreated','Description','UserPrincipalName','PrimaryGroupID','LockedOut','ServicePrincipalName','ObjectGUID')
-  $users = Get-ADUser -Filter * -Properties $userProps @serverArg
+  try {
+    $users = Invoke-AdCollectorOperation -Operation 'Get-ADUser' -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
+      param($OperationArgs)
+      $serverArg = $OperationArgs.ServerArg
+      Get-ADUser -Filter * -Properties $OperationArgs.Properties @serverArg
+    } -ArgumentList @(@{ Properties = $userProps; ServerArg = $serverArg })
+  }
+  catch {
+    $users = @()
+    $errors += New-CollectionError -ObjectType 'user' -ObjectIdentifier '*' -ObjectSID $null -Operation 'Get-ADUser -Filter *' -ErrorRecord $_
+  }
   $users | Select-Object SamAccountName,UserPrincipalName,DisplayName,Mail,Enabled,SID,DistinguishedName,Description,PrimaryGroupID,LockedOut,ObjectGUID,
     @{Name='LastLogonDate';Expression={ ConvertTo-InvariantAdDate $_.LastLogonDate }},
     @{Name='PasswordLastSet';Expression={ ConvertTo-InvariantAdDate $_.PasswordLastSet }},
@@ -144,15 +206,33 @@ try {
     @{Name='ServicePrincipalName';Expression={ ConvertTo-AdCsvMultiValue $_.ServicePrincipalName }} |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/users.csv"
 
-  Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation 'Get-ADGroup'
   $groupProps = @('SamAccountName','Name','SID','DistinguishedName','Description','GroupScope','GroupCategory')
-  $groups = Get-ADGroup -Filter * -Properties $groupProps @serverArg
+  try {
+    $groups = Invoke-AdCollectorOperation -Operation 'Get-ADGroup' -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
+      param($OperationArgs)
+      $serverArg = $OperationArgs.ServerArg
+      Get-ADGroup -Filter * -Properties $OperationArgs.Properties @serverArg
+    } -ArgumentList @(@{ Properties = $groupProps; ServerArg = $serverArg })
+  }
+  catch {
+    $groups = @()
+    $errors += New-CollectionError -ObjectType 'group' -ObjectIdentifier '*' -ObjectSID $null -Operation 'Get-ADGroup -Filter *' -ErrorRecord $_
+  }
   $groups | Select-Object SamAccountName,Name,SID,DistinguishedName,Description,GroupScope,GroupCategory |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/groups.csv"
 
-  Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation 'Get-ADServiceAccount'
   $svcProps = @('SamAccountName','SID','DistinguishedName','Enabled','Description','ServicePrincipalName','ObjectClass','ObjectGUID','Name','DisplayName','PrimaryGroupID')
-  $serviceAccounts = Get-ADServiceAccount -Filter * -Properties $svcProps @serverArg
+  try {
+    $serviceAccounts = Invoke-AdCollectorOperation -Operation 'Get-ADServiceAccount' -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
+      param($OperationArgs)
+      $serverArg = $OperationArgs.ServerArg
+      Get-ADServiceAccount -Filter * -Properties $OperationArgs.Properties @serverArg
+    } -ArgumentList @(@{ Properties = $svcProps; ServerArg = $serverArg })
+  }
+  catch {
+    $serviceAccounts = @()
+    $errors += New-CollectionError -ObjectType 'service_account' -ObjectIdentifier '*' -ObjectSID $null -Operation 'Get-ADServiceAccount -Filter *' -ErrorRecord $_
+  }
   $serviceAccounts | Select-Object SamAccountName,Name,DisplayName,SID,DistinguishedName,Enabled,Description,ObjectClass,ObjectGUID,PrimaryGroupID,
     @{Name='ServicePrincipalName';Expression={ ConvertTo-AdCsvMultiValue $_.ServicePrincipalName }} |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/service_accounts.csv"
@@ -160,8 +240,10 @@ try {
   $memberships = @()
   foreach ($group in $groups) {
     try {
-      Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation "Get-ADGroupMember $($group.SamAccountName)"
-      $members = Get-ADGroupMember -Identity $group -ErrorAction Stop @serverArg
+      $members = Invoke-AdCollectorOperation -Operation "Get-ADGroupMember $($group.SamAccountName)" -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
+        param($Identity, $ServerArg)
+        Get-ADGroupMember -Identity $Identity -ErrorAction Stop @ServerArg
+      } -ArgumentList @($group, $serverArg)
       foreach ($member in $members) {
         $memberSid = if ($member.SID) { $member.SID.Value } else { $null }
         $memberships += [PSCustomObject]@{
@@ -187,8 +269,10 @@ try {
   }
 
   try {
-    Assert-CollectionWithinTimeout -Stopwatch $stopwatch -OperationTimeoutSeconds $OperationTimeoutSeconds -Operation 'Get-ADComputer'
-    $computers = Get-ADComputer -Filter * -Properties SamAccountName,SID,DistinguishedName,Enabled,DNSHostName,Description,ObjectGUID,PrimaryGroupID @serverArg
+    $computers = Invoke-AdCollectorOperation -Operation 'Get-ADComputer' -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
+      param($ServerArg)
+      Get-ADComputer -Filter * -Properties SamAccountName,SID,DistinguishedName,Enabled,DNSHostName,Description,ObjectGUID,PrimaryGroupID @ServerArg
+    } -ArgumentList @($serverArg)
   }
   catch {
     $computers = @()

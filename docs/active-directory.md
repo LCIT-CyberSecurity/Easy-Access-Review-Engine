@@ -33,15 +33,18 @@ errors. The collector marks the export `unknown` when group membership collectio
 enumeration fails, or the configured operation timeout is exceeded. The script exits non-zero unless
 `-AllowPartial` is explicitly used.
 
-The `-OperationTimeoutSeconds` option defaults to 300 seconds and acts as a simple global guard
-between AD operations. It prevents a partial or interrupted collection from being represented as a
-full authoritative export.
+The `-OperationTimeoutSeconds` option defaults to 300 seconds. Each remote AD cmdlet call is run
+through a controlled PowerShell runspace and is stopped if that single operation exceeds the timeout.
+A timed-out operation is recorded as a collection diagnostic, downgrades the export to `unknown`, and
+can never produce a `full` authoritative export.
 
 ## Security of Remote AD Access
 
-The script does not implement a custom transport. It relies on the Windows ActiveDirectory module and
-its normal domain controller connection handling. Avoid passing credentials on the command line. Run
-under an account/session configured for secure AD authentication, and target a trusted domain
+The script does not implement a custom transport or store Active Directory passwords. This is
+intentional for the MVP: AD collection uses the current Windows identity/session and the standard
+ActiveDirectory module authentication mechanisms, including Kerberos/Windows authentication according
+to the environment. There is deliberately no `AD_PASSWORD` in `.env`; `.env` is only used for
+OpenLDAP secrets. Avoid passing credentials on the command line, and target a trusted domain
 controller with `-Server` when operationally required.
 
 Collection diagnostics include object type, object identifier, SID, operation and safe error text.

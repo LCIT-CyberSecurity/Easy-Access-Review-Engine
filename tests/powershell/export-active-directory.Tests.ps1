@@ -158,7 +158,7 @@ Describe 'Active Directory exporter' -Tag 'unit' {
   It 'fails closed when group member collection fails without AllowPartial' {
     Mock Get-ADGroupMember { throw 'membership failed' }
     $out = Join-Path $TestDrive 'ad.zip'
-    { Invoke-ActiveDirectoryExport -ProviderName 'corp-ad' -Output $out } |
+    { Invoke-ActiveDirectoryExport -ProviderName 'corp-ad' -Output $out -OperationTimeoutSeconds 0 } |
       Should -Throw '*collection failed*'
   }
 
@@ -167,7 +167,7 @@ Describe 'Active Directory exporter' -Tag 'unit' {
     $out = Join-Path $TestDrive 'partial.zip'
     $expanded = Join-Path $TestDrive 'partial'
 
-    Invoke-ActiveDirectoryExport -ProviderName 'corp-ad' -Output $out -AllowPartial
+    Invoke-ActiveDirectoryExport -ProviderName 'corp-ad' -Output $out -AllowPartial -OperationTimeoutSeconds 0
     Expand-Archive -Path $out -DestinationPath $expanded
 
     Get-Content (Join-Path $expanded 'manifest.yaml') -Raw | Should -Match 'completeness: unknown'
@@ -175,11 +175,58 @@ Describe 'Active Directory exporter' -Tag 'unit' {
     Import-Csv (Join-Path $expanded 'collection-errors.csv') | Should -HaveCount 4
   }
 
+
+
+  It 'interrupts an AD operation that exceeds the configured timeout' {
+    $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
+    {
+      Invoke-AdOperationWithTimeout -Operation 'Get-ADUser' -OperationTimeoutSeconds 1 -ScriptBlock {
+        Start-Sleep -Seconds 10
+        'completed'
+      }
+    } | Should -Throw '*exceeded timeout*'
+    $elapsed.Stop()
+    $elapsed.Elapsed.TotalSeconds | Should -BeLessThan 5
+  }
+
+  It 'allows an AD operation that completes before the configured timeout' {
+    $result = Invoke-AdOperationWithTimeout -Operation 'Get-ADUser' -OperationTimeoutSeconds 2 -ScriptBlock {
+      Start-Sleep -Milliseconds 200
+      'completed'
+    }
+    $result | Should -Be 'completed'
+  }
+
+  It 'marks the export unknown and writes safe diagnostics when an AD operation times out' {
+    Mock Invoke-AdCollectorOperation {
+      param($Operation, $ScriptBlock, $ArgumentList, $OperationTimeoutSeconds)
+      if ($Operation -eq 'Get-ADUser') {
+        throw [System.TimeoutException]::new("Active Directory operation 'Get-ADUser' exceeded timeout of 1 second(s)")
+      }
+      & $ScriptBlock @ArgumentList
+    }
+    $out = Join-Path $TestDrive 'timeout-partial.zip'
+    $expanded = Join-Path $TestDrive 'timeout-partial'
+
+    Invoke-ActiveDirectoryExport -ProviderName 'corp-ad' -Output $out -AllowPartial -OperationTimeoutSeconds 1
+    Expand-Archive -Path $out -DestinationPath $expanded
+
+    $manifest = Get-Content (Join-Path $expanded 'manifest.yaml') -Raw
+    $errors = Import-Csv (Join-Path $expanded 'collection-errors.csv')
+    $rawErrors = Get-Content (Join-Path $expanded 'collection-errors.csv') -Raw
+
+    $manifest | Should -Match 'completeness: unknown'
+    $errors | Where-Object { $_.Operation -eq 'Get-ADUser -Filter *' } | Should -HaveCount 1
+    $rawErrors | Should -Match 'exceeded timeout'
+    $rawErrors | Should -Not -Match 'password|secret|credential|token'
+  }
+
+
   It 'exports gMSA, all computers, dates, FSP SID and primary group memberships through the real exporter' {
     $out = Join-Path $TestDrive 'full.zip'
     $expanded = Join-Path $TestDrive 'full'
 
-    Invoke-ActiveDirectoryExport -ProviderName 'corp-ad' -Output $out -AllowPartial
+    Invoke-ActiveDirectoryExport -ProviderName 'corp-ad' -Output $out -AllowPartial -OperationTimeoutSeconds 0
     Expand-Archive -Path $out -DestinationPath $expanded
 
     $users = Import-Csv (Join-Path $expanded 'users.csv')

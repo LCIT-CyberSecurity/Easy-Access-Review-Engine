@@ -882,6 +882,82 @@ def test_openldap_exporter_command_modes_and_manifest(tmp_path: Path) -> None:
     assert "-ZZ" in log.read_text(encoding="utf-8")
 
 
+
+def test_openldap_exporter_sets_strict_tls_verification_for_ldaps_and_starttls(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    log = tmp_path / "tls.log"
+    fake = fake_bin / "ldapsearch"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'REQCERT=%s\nREQSAN=%s\nCACERT=%s\nARGS=%s\n' \"$LDAPTLS_REQCERT\" \"$LDAPTLS_REQSAN\" \"${LDAPTLS_CACERT:-}\" \"$*\" > \"$LDAP_TLS_LOG\"\n"
+        "printf 'dn: uid=alice,dc=example,dc=com\nobjectClass: inetOrgPerson\nentryUUID: uuid-u1\nuid: alice\ncn: Alice\n'\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    base_env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "LDAP_TLS_LOG": str(log),
+        "BASE_DN": "dc=example,dc=com",
+        "BIND_DN": "cn=admin,dc=example,dc=com",
+        "LDAP_PASSWORD": "fake-secret",
+        "ALLOW_ANONYMOUS": "0",
+        "LDAP_CA_CERT": str(tmp_path / "ca.pem"),
+    }
+
+    subprocess.run(
+        ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "ldaps.zip")],
+        cwd=Path.cwd(),
+        env=base_env | {"LDAP_URI": "ldaps://ldap.example.test"},
+        check=True,
+    )
+    ldaps_log = log.read_text(encoding="utf-8")
+    assert "REQCERT=demand" in ldaps_log
+    assert "REQSAN=demand" in ldaps_log
+    assert f"CACERT={tmp_path / 'ca.pem'}" in ldaps_log
+    assert "-ZZ" not in ldaps_log
+
+    subprocess.run(
+        ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "starttls.zip")],
+        cwd=Path.cwd(),
+        env=base_env | {"LDAP_URI": "ldap://ldap.example.test", "START_TLS": "1"},
+        check=True,
+    )
+    starttls_log = log.read_text(encoding="utf-8")
+    assert "REQCERT=demand" in starttls_log
+    assert "REQSAN=demand" in starttls_log
+    assert "-ZZ" in starttls_log
+
+
+def test_openldap_exporter_tls_failures_are_unknown(tmp_path: Path) -> None:
+    cases = [
+        ("TLS: peer cert untrusted", "peer cert untrusted"),
+        ("TLS: CA certificate mismatch", "CA certificate mismatch"),
+        ("TLS: hostname does not match CN", "hostname does not match"),
+    ]
+    for index, (stderr, expected) in enumerate(cases):
+        fake_bin = tmp_path / f"bin-{index}"
+        fake_bin.mkdir()
+        fake = fake_bin / "ldapsearch"
+        fake.write_text(f"#!/usr/bin/env bash\necho '{stderr}' >&2\nexit 91\n", encoding="utf-8")
+        fake.chmod(0o755)
+        archive = tmp_path / f"tls-failure-{index}.zip"
+        env = os.environ | {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "BASE_DN": "dc=example,dc=com",
+            "BIND_DN": "cn=admin,dc=example,dc=com",
+            "LDAP_URI": "ldaps://ldap.example.test",
+            "LDAP_PASSWORD": "fake-secret",
+            "ALLOW_PARTIAL": "1",
+        }
+        subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(archive)], cwd=Path.cwd(), env=env, check=True)
+        with ZipFile(archive) as zf:
+            manifest = zf.read("manifest.yaml").decode("utf-8")
+            errors = zf.read("collection-errors.csv").decode("utf-8")
+        assert "completeness: unknown" in manifest
+        assert "collection_errors: 1" in manifest
+        assert expected in errors
+
 def test_openldap_exporter_fails_closed_and_partial_zip_has_unknown_manifest(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -912,7 +988,7 @@ def test_openldap_exporter_fails_closed_and_partial_zip_has_unknown_manifest(tmp
 
 
 def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_path: Path) -> None:
-    sentinel = "EARE_TEST_SECRET_DO_NOT_LEAK_93481"
+    sentinel = "EaRE*Test?[Secret]$ 93481\\ ' \""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake = fake_bin / "ldapsearch"
@@ -920,8 +996,8 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
         "#!/usr/bin/env bash\n"
         "printf 'dn: uid=alice,ou=People,dc=example,dc=com\n'\n"
         "printf 'objectClass: inetOrgPerson\nentryUUID: uuid-u1\nuid: alice\ncn: Alice\n'\n"
-        "printf 'description: EARE_TEST_SECRET_DO_NOT_LEAK_93481\n'\n"
-        "echo 'bind failed: EARE_TEST_SECRET_DO_NOT_LEAK_93481' >&2\n"
+        "printf 'description: safe diagnostic fixture\n'\n"
+        "printf 'bind failed: %s\n' \"$LDAP_EXPECTED_SECRET\" >&2\n"
         "exit 49\n",
         encoding="utf-8",
     )
@@ -931,7 +1007,6 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
         "LDAP_URI=ldaps://ldap.example.test\n"
         "BASE_DN=dc=example,dc=com\n"
         "BIND_DN=cn=admin,dc=example,dc=com\n"
-        f"LDAP_PASSWORD={sentinel}\n"
         "ALLOW_PARTIAL=1\n",
         encoding="utf-8",
     )
@@ -939,7 +1014,12 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
     result = subprocess.run(
         ["bash", "exporters/openldap/export-openldap.sh", str(archive)],
         cwd=Path.cwd(),
-        env=os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}", "ENV_FILE": str(env_file)},
+        env=os.environ | {
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "ENV_FILE": str(env_file),
+            "LDAP_PASSWORD": sentinel,
+            "LDAP_EXPECTED_SECRET": sentinel,
+        },
         check=True,
         capture_output=True,
         text=True,
@@ -947,7 +1027,11 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
     assert sentinel not in result.stdout
     assert sentinel not in result.stderr
     with ZipFile(archive) as zf:
-        for name in zf.namelist():
+        names = zf.namelist()
+        assert "manifest.yaml" in names
+        assert "directory.ldif" in names
+        assert zf.read("directory.ldif").decode("utf-8").endswith("description: safe diagnostic fixture\n")
+        for name in names:
             assert sentinel not in zf.read(name).decode("utf-8")
 
     repo = Repository(tmp_path / "review.db")
@@ -958,33 +1042,113 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
     finally:
         repo.close()
 
+def test_openldap_exporter_rejects_secret_in_authoritative_payload_without_redacting_ldif(tmp_path: Path) -> None:
+    sentinel = "EaRE*Test?[Secret]$ 93481\\ ' \""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "ldapsearch"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'dn: uid=alice,ou=People,dc=example,dc=com\\n'\n"
+        "printf 'objectClass: inetOrgPerson\\nentryUUID: uuid-u1\\nuid: alice\\ncn: Alice\\n'\n"
+        "printf 'description: %s\\n' \"$LDAP_EXPECTED_SECRET\"\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    archive = tmp_path / "rejected.zip"
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "BASE_DN": "dc=example,dc=com",
+        "BIND_DN": "cn=admin,dc=example,dc=com",
+        "LDAP_URI": "ldaps://ldap.example.test",
+        "LDAP_PASSWORD": sentinel,
+        "LDAP_EXPECTED_SECRET": sentinel,
+        "ALLOW_PARTIAL": "1",
+    }
+    result = subprocess.run(
+        ["bash", "exporters/openldap/export-openldap.sh", str(archive)],
+        cwd=Path.cwd(),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert not archive.exists()
+    assert sentinel not in result.stdout
+    assert sentinel not in result.stderr
+    assert "authoritative LDAP payload" in result.stderr
+
 
 def test_openldap_exporter_paged_search_keeps_all_entries_once(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake = fake_bin / "ldapsearch"
+    page_log = tmp_path / "pages.log"
     users = "".join(
         f"printf 'dn: uid=user{i},ou=People,dc=example,dc=com\nobjectClass: inetOrgPerson\nentryUUID: uuid-u{i}\nuid: user{i}\ncn: User {i}\n\n'\n"
-        for i in range(5)
+        for i in range(7)
     )
-    fake.write_text("#!/usr/bin/env bash\n" + users, encoding="utf-8")
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'page 1\npage 2\npage 3\nend\n' > \"$LDAP_PAGE_LOG\"\n"
+        + users,
+        encoding="utf-8",
+    )
     fake.chmod(0o755)
     archive = tmp_path / "paged.zip"
     env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "LDAP_PAGE_LOG": str(page_log),
         "BASE_DN": "dc=example,dc=com",
         "ALLOW_ANONYMOUS": "1",
-        "PAGE_SIZE": "2",
+        "PAGE_SIZE": "3",
     }
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(archive)], cwd=Path.cwd(), env=env, check=True)
-    imported = import_file_to_repository(Repository(tmp_path / "review.db"), archive)
-    native_ids = sorted(
-        identity.native_id
-        for identity in imported.identities
-        if identity.metadata.get("entry_uuid", "").startswith("uuid-u")
-    )
-    assert native_ids == [f"uuid-u{i}" for i in range(5)]
+    repo = Repository(tmp_path / "review.db")
+    try:
+        imported = import_file_to_repository(repo, archive)
+        native_ids = sorted(
+            identity.native_id
+            for identity in imported.identities
+            if identity.metadata.get("entry_uuid", "").startswith("uuid-u")
+        )
+        assert page_log.read_text(encoding="utf-8").splitlines() == ["page 1", "page 2", "page 3", "end"]
+        assert native_ids == [f"uuid-u{i}" for i in range(7)]
+        assert len(native_ids) == len(set(native_ids)) == 7
+        assert repo.list_payloads("imports")[0]["completeness"] == "full"
+    finally:
+        repo.close()
 
+
+def test_openldap_exporter_failed_page_is_unknown_and_not_full(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake = fake_bin / "ldapsearch"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'dn: uid=user0,ou=People,dc=example,dc=com\nobjectClass: inetOrgPerson\nentryUUID: uuid-u0\nuid: user0\ncn: User 0\n\n'\n"
+        "printf 'dn: uid=user1,ou=People,dc=example,dc=com\nobjectClass: inetOrgPerson\nentryUUID: uuid-u1\nuid: user1\ncn: User 1\n\n'\n"
+        "echo 'paged results request failed on page 2' >&2\n"
+        "exit 80\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    archive = tmp_path / "paged-fail.zip"
+    env = os.environ | {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "BASE_DN": "dc=example,dc=com",
+        "ALLOW_ANONYMOUS": "1",
+        "ALLOW_PARTIAL": "1",
+        "PAGE_SIZE": "1",
+    }
+    subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(archive)], cwd=Path.cwd(), env=env, check=True)
+    with ZipFile(archive) as zf:
+        manifest = zf.read("manifest.yaml").decode("utf-8")
+        errors = zf.read("collection-errors.csv").decode("utf-8")
+    assert "completeness: unknown" in manifest
+    assert "collection_errors: 1" in manifest
+    assert "paged results request failed" in errors
 
 def test_openldap_exporter_timeout_partial_zip_is_unknown(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"

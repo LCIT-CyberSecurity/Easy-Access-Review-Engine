@@ -50,18 +50,40 @@ cleanup() {
 }
 trap cleanup EXIT
 
-redact_text() {
+redact_literal() {
   local text="$1"
+  local secret="$2"
+  local result=""
+  if [[ -z "$secret" ]]; then
+    printf '%s' "$text"
+    return
+  fi
+  while [[ "$text" == *"$secret"* ]]; do
+    result+="${text%%"$secret"*}[REDACTED]"
+    text="${text#*"$secret"}"
+  done
+  printf '%s%s' "$result" "$text"
+}
+
+configured_secrets() {
   if [[ -n "$LDAP_PASSWORD" ]]; then
-    text="${text//${LDAP_PASSWORD}/[REDACTED]}"
+    printf '%s\n' "$LDAP_PASSWORD"
   fi
   if [[ -n "$LDAP_PASSWORD_FILE" && -r "$LDAP_PASSWORD_FILE" ]]; then
     local file_secret
     file_secret="$(tr -d $'\r\n' < "$LDAP_PASSWORD_FILE")"
     if [[ -n "$file_secret" ]]; then
-      text="${text//${file_secret}/[REDACTED]}"
+      printf '%s\n' "$file_secret"
     fi
   fi
+}
+
+redact_text() {
+  local text="$1"
+  local secret
+  while IFS= read -r secret; do
+    text="$(redact_literal "$text" "$secret")"
+  done < <(configured_secrets)
   printf '%s' "$text"
 }
 
@@ -73,6 +95,17 @@ redact_file() {
   local content
   content="$(cat "$file")"
   redact_text "$content" > "$file"
+}
+
+payload_contains_configured_secret() {
+  local file="$1"
+  local secret
+  while IFS= read -r secret; do
+    if grep -Fq -- "$secret" "$file"; then
+      return 0
+    fi
+  done < <(configured_secrets)
+  return 1
 }
 
 if [[ "$LDAP_URI" == ldaps://* && "$START_TLS" == "1" ]]; then
@@ -91,6 +124,8 @@ if [[ -n "$BIND_DN" && -z "$LDAP_PASSWORD" && -z "$LDAP_PASSWORD_FILE" ]]; then
   echo "Authenticated OpenLDAP export requires LDAP_PASSWORD or LDAP_PASSWORD_FILE" >&2
   exit 2
 fi
+export LDAPTLS_REQCERT="demand"
+export LDAPTLS_REQSAN="demand"
 if [[ -n "$LDAP_CA_CERT" ]]; then
   export LDAPTLS_CACERT="$LDAP_CA_CERT"
 fi
@@ -124,15 +159,19 @@ set +e
 ldap_rc=$?
 set -e
 
-redact_file "$tmp/directory.ldif"
 redact_file "$tmp/ldapsearch.stderr"
+
+secret_in_payload=0
+if payload_contains_configured_secret "$tmp/directory.ldif"; then
+  secret_in_payload=1
+fi
 
 limited=0
 if grep -Eiq 'size limit|sizelimit|time limit|timelimit|administrative limit|truncated' "$tmp/ldapsearch.stderr"; then
   limited=1
 fi
 collection_errors=0
-if [[ "$ldap_rc" -ne 0 || "$limited" -ne 0 ]]; then
+if [[ "$ldap_rc" -ne 0 || "$limited" -ne 0 || "$secret_in_payload" -ne 0 ]]; then
   collection_errors=1
 fi
 completeness="full"
@@ -151,6 +190,7 @@ search_scope: $SEARCH_SCOPE
 filter: $LDAP_FILTER
 ldapsearch_exit_code: $ldap_rc
 limited: $limited
+secret_in_authoritative_payload: $secret_in_payload
 connection_timeout_seconds: $CONNECTION_TIMEOUT_SECONDS
 search_timeout_seconds: $SEARCH_TIMEOUT_SECONDS
 command_timeout_seconds: $COMMAND_TIMEOUT_SECONDS
@@ -171,10 +211,18 @@ if [[ "$collection_errors" -ne 0 ]]; then
     msg="$(tr '
 ' ' ' < "$tmp/ldapsearch.stderr")"
     msg="$(redact_text "$msg")"
+    if [[ "$secret_in_payload" -ne 0 ]]; then
+      msg="${msg:+$msg }configured connection secret appeared in authoritative LDAP payload; export rejected without redacting collected data"
+    fi
     echo "directory,$BASE_DN,,ldapsearch,$ldap_rc,${msg//,/;}"
   } > "$tmp/collection-errors.csv"
 else
   echo 'ObjectType,ObjectIdentifier,ObjectSID,Operation,ErrorCode,ErrorMessage' > "$tmp/collection-errors.csv"
+fi
+
+if [[ "$secret_in_payload" -ne 0 ]]; then
+  echo "OpenLDAP collection rejected: configured connection secret appeared in authoritative LDAP payload. No export ZIP was written." >&2
+  exit 1
 fi
 
 if [[ "$collection_errors" -ne 0 && "$ALLOW_PARTIAL" != "1" ]]; then
