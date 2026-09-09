@@ -61,6 +61,62 @@ def test_unicode_and_csv_quoting_are_preserved(tmp_path: Path) -> None:
     assert identity.metadata["distinguished_name"] == "CN=Dupont\\, Jérôme,OU=Users,DC=corp,DC=local"
 
 
+
+def test_realistic_ad_locked_expired_smsa_and_csv_special_characters(tmp_path: Path) -> None:
+    archive = tmp_path / "realistic-ad.zip"
+    with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "manifest.yaml",
+            "schema_version: 1\nsource_type: active_directory\nprovider: corp-ad\ncompleteness: full\nstatistics:\n  collection_errors: 0\n",
+        )
+        zf.writestr(
+            "users.csv",
+            'SamAccountName,UserPrincipalName,DisplayName,Mail,Enabled,SID,DistinguishedName,Description,PrimaryGroupID,LockedOut,ObjectGUID,AccountExpirationDate\n'
+            'locked.user,locked@example.test,"Locked, User",locked@example.test,true,S-1-5-21-1-2-3-1101,"CN=Locked User,OU=Users,DC=corp,DC=example,DC=test",locked account,513,true,11111111-1111-1111-1111-111111111111,\n'
+            'expired.user,expired@example.test,Expired User,expired@example.test,true,S-1-5-21-1-2-3-1102,"CN=Expired User,OU=Users,DC=corp,DC=example,DC=test",expired account,513,false,22222222-2222-2222-2222-222222222222,2000-01-01T00:00:00Z\n'
+            'doe.john,john@example.test,"Doe, John",john@example.test,true,S-1-5-21-1-2-3-1103,"CN=Doe\\, John,OU=People,DC=corp,DC=example,DC=test","apostrophe '' comma, quote "" accent François 非ラテン",513,false,33333333-3333-3333-3333-333333333333,\n',
+        )
+        zf.writestr(
+            "service_accounts.csv",
+            'SamAccountName,Name,DisplayName,SID,DistinguishedName,Enabled,Description,ObjectClass,ObjectGUID,PrimaryGroupID,ServicePrincipalName\n'
+            'smsa_sql$,smsa_sql$,smsa_sql$,S-1-5-21-1-2-3-2101,"CN=smsa_sql,CN=Managed Service Accounts,DC=corp,DC=example,DC=test",true,"sMSA with $, comma, and François",msDS-ManagedServiceAccount,44444444-4444-4444-4444-444444444444,513,MSSQLSvc/sql.example.test\n',
+        )
+        zf.writestr(
+            "computers.csv",
+            'SamAccountName,Name,SID,DistinguishedName,Enabled,DNSHostName,Description,ObjectGUID,PrimaryGroupID\n'
+            'PC-SPECIAL$,PC-SPECIAL,S-1-5-21-1-2-3-3101,"CN=PC-SPECIAL,OU=Workstations,DC=corp,DC=example,DC=test",true,pc-special.example.test,"computer with $ and comma, ok",55555555-5555-5555-5555-555555555555,515\n',
+        )
+        zf.writestr(
+            "groups.csv",
+            'SamAccountName,Name,SID,DistinguishedName,Description,GroupScope,GroupCategory\n'
+            'Domain Users,Domain Users,S-1-5-21-1-2-3-513,"CN=Domain Users,CN=Users,DC=corp,DC=example,DC=test",primary users,Global,Security\n'
+            'Domain Computers,Domain Computers,S-1-5-21-1-2-3-515,"CN=Domain Computers,CN=Users,DC=corp,DC=example,DC=test",primary computers,Global,Security\n'
+            'GG_SPECIAL,"GG, Special",S-1-5-21-1-2-3-2201,"CN=GG_SPECIAL,OU=Groups,DC=corp,DC=example,DC=test","group with quote "" and accent François",Global,Security\n',
+        )
+        zf.writestr(
+            "memberships.csv",
+            'Group,GroupSID,Member,MemberSID,MemberType,MemberDN,MembershipType\n'
+            'GG_SPECIAL,S-1-5-21-1-2-3-2201,doe.john,S-1-5-21-1-2-3-1103,user,"CN=Doe\\, John,OU=People,DC=corp,DC=example,DC=test",direct\n'
+            'GG_SPECIAL,S-1-5-21-1-2-3-2201,smsa_sql$,S-1-5-21-1-2-3-2101,msDS-ManagedServiceAccount,"CN=smsa_sql,CN=Managed Service Accounts,DC=corp,DC=example,DC=test",direct\n'
+            'GG_SPECIAL,S-1-5-21-1-2-3-2201,PC-SPECIAL$,S-1-5-21-1-2-3-3101,computer,"CN=PC-SPECIAL,OU=Workstations,DC=corp,DC=example,DC=test",direct\n',
+        )
+        zf.writestr("collection-errors.csv", "ObjectType,ObjectIdentifier,ObjectSID,Operation,ErrorCode,ErrorMessage\n")
+
+    result = import_ad_zip(archive)
+    identities = {identity.identifier: identity for identity in result.identities}
+    assert identities["locked.user"].metadata["locked_out"] is True
+    assert identities["expired.user"].metadata["account_expired"] is True
+    assert identities["smsa_sql$"].type == IdentityType.TECHNICAL_ACCOUNT
+    assert identities["smsa_sql$"].metadata["managed_service_account_type"] == "msa"
+    assert identities["doe.john"].display_name == "Doe, John"
+    assert identities["doe.john"].metadata["distinguished_name"] == "CN=Doe\\, John,OU=People,DC=corp,DC=example,DC=test"
+    assert "François" in (identities["doe.john"].description or "")
+    assert identities["PC-SPECIAL$"].metadata["primary_group_id"] == "515"
+    assignments = {(item.access_name, item.identity_identifier) for item in result.assignments}
+    assert ("GG_SPECIAL:member", "doe.john") in assignments
+    assert ("GG_SPECIAL:member", "smsa_sql$") in assignments
+    assert ("GG_SPECIAL:member", "PC-SPECIAL$") in assignments
+
 def test_zip_validation_rejects_duplicates_and_allows_v1_without_optional_files(tmp_path: Path) -> None:
     archive = tmp_path / "duplicate.zip"
     with ZipFile(archive, "w", ZIP_DEFLATED) as zf:

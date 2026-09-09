@@ -416,6 +416,55 @@ def test_openldap_reduced_search_scope_and_filter_are_scoped(tmp_path: Path) -> 
         repo.close()
 
 
+
+def test_openldap_missing_entryuuid_uses_dn_fallback_and_move_creates_new_identity(tmp_path: Path) -> None:
+    repo = Repository(tmp_path / "review.db")
+    try:
+        first = import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                """dn: uid=legacy,ou=People,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: legacy
+cn: Legacy User
+
+
+dn: cn=legacy-access,ou=Groups,dc=example,dc=com
+objectClass: groupOfNames
+cn: legacy-access
+member: uid=legacy,ou=People,dc=example,dc=com""".strip(),
+                suffix="no-entryuuid-first",
+            ),
+        )
+        old_identity = [identity for identity in first.identities if identity.identifier == "legacy"][0]
+        second = import_file_to_repository(
+            repo,
+            _openldap_zip(
+                tmp_path,
+                """dn: uid=legacy,ou=Moved,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: legacy
+cn: Legacy User
+
+
+dn: cn=legacy-access,ou=Groups,dc=example,dc=com
+objectClass: groupOfNames
+cn: legacy-access
+member: uid=legacy,ou=Moved,dc=example,dc=com""".strip(),
+                suffix="no-entryuuid-moved",
+            ),
+        )
+        identity_rows = [row for row in repo.list_payloads("identities") if row["identifier"] == "legacy"]
+        active_identity = [row for row in identity_rows if row["status"] != "deleted"][0]
+        deleted_identity = [row for row in identity_rows if row["status"] == "deleted"][0]
+        assert old_identity.native_id == "uid=legacy,ou=people,dc=example,dc=com"
+        assert active_identity["native_id"] == "uid=legacy,ou=moved,dc=example,dc=com"
+        assert deleted_identity["native_id"] == "uid=legacy,ou=people,dc=example,dc=com"
+        assert active_identity["id"] != deleted_identity["id"]
+    finally:
+        repo.close()
+
 def test_openldap_memberuid_absent_and_ambiguous_stay_unresolved(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "review.db")
     try:

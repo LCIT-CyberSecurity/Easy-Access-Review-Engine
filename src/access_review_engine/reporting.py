@@ -63,7 +63,7 @@ def write_reports(
     with (path / "campaign-results.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]) if rows else ["campaign"])
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(_spreadsheet_safe_rows(rows))
     (path / "campaign-report.html").write_text(
         render_html_report(campaign, rows, golden_version), encoding="utf-8"
     )
@@ -220,3 +220,16 @@ def _owner_label(owner: object | None) -> str:
         return ""
     data = asdict(owner)  # type: ignore[arg-type]
     return f"{data['provider']}/{data['identity']}"
+
+
+def _spreadsheet_safe_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {key: _spreadsheet_safe(value) for key, value in row.items()}
+        for row in rows
+    ]
+
+
+def _spreadsheet_safe(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    return "'" + value if value.startswith(("=", "+", "-", "@")) else value

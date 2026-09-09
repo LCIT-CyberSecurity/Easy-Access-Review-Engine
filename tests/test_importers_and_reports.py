@@ -122,6 +122,48 @@ def test_html_report_contains_required_sections_and_filters(tmp_path: Path) -> N
     assert (out / "campaign-results.json").exists()
 
 
+
+def test_campaign_csv_report_neutralizes_spreadsheet_formulas(tmp_path: Path) -> None:
+    formula = '=HYPERLINK("https://example.invalid","x")'
+    campaign = Campaign("formula", "snapshot-1")
+    from access_review_engine.domain import ReviewItem
+
+    item = ReviewItem(
+        campaign_id="campaign-1",
+        identity_provider="corp-ad",
+        identity_identifier=formula,
+        identity_status="active",
+        access_provider="corp-ad",
+        access_name="+APP_ADMIN",
+        control_object={"type": "group", "identifier": "@group", "display_name": "@group"},
+        permission={"identifier": "member", "display_name": "Member"},
+        target=None,
+        description="-dangerous description",
+        origin=None,
+        expected=False,
+        observed=True,
+        classification="unexpected",
+        findings=[],
+        account_owner=None,
+        access_owner=None,
+        reviewer=None,
+    )
+    decision = create_decision(item, DecisionValue.REVOKE, "-remove", "reviewer")
+    out = tmp_path / "reports"
+    write_reports(out, campaign, [item], [decision])
+
+    with (out / "campaign-results.csv").open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    row = rows[0]
+    assert row["identity"] == "'" + formula
+    assert row["access"] == "'+APP_ADMIN"
+    assert row["control_object"] == "'@group"
+    assert row["description"] == "'-dangerous description"
+    assert row["comment"] == "'-remove"
+    json_report = (out / "campaign-results.json").read_text(encoding="utf-8")
+    assert "HYPERLINK" in json_report
+    assert "'=HYPERLINK" not in json_report
+
 def _ad_zip(tmp_path: Path) -> Path:
     archive = tmp_path / "corp-ad-export.zip"
     users = tmp_path / "users.csv"
