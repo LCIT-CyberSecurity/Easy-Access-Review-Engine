@@ -7,7 +7,13 @@ from access_review_engine.application import import_file_to_repository, load_cla
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif, import_openldap_zip
 from access_review_engine.reporting import write_reports
-from access_review_engine.storage import Repository
+from access_review_engine.services import calculate_effective_accesses
+from access_review_engine.storage import (
+    Repository,
+    hydrate_access,
+    hydrate_access_relation,
+    hydrate_assignment,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("findings-list")
     identities = sub.add_parser("identities-list")
     identities.add_argument("--provider")
+
+    effective = sub.add_parser("access-effective")
+    effective.add_argument("identity")
+    effective.add_argument("--provider")
 
     campaign_export = sub.add_parser("campaign-export")
     campaign_export.add_argument("output_dir")
@@ -60,6 +70,32 @@ def main(argv: list[str] | None = None) -> int:
             for row in repo.list_payloads("identities"):
                 if not args.provider or row["provider"] == args.provider:
                     print(f"{row['provider']}/{row['identifier']} {row['type']} {row['status']}")
+            return 0
+        if args.command == "access-effective":
+            assignments = [
+                hydrate_assignment(row) for row in repo.list_payloads("access_assignments")
+            ]
+            filtered_assignments = [
+                item
+                for item in assignments
+                if item.identity_identifier == args.identity
+                and (not args.provider or item.identity_provider == args.provider)
+            ]
+            evaluation = calculate_effective_accesses(
+                filtered_assignments,
+                [hydrate_access_relation(row) for row in repo.list_payloads("access_relations")],
+                [hydrate_access(row) for row in repo.list_payloads("accesses")],
+            )
+            for item in evaluation.effective_accesses:
+                kind = "direct" if item.direct else "derived"
+                print(
+                    f"{item.identity_provider}/{item.identity_identifier} "
+                    f"{kind} {item.access_provider}/{item.access_name}"
+                )
+                for path in item.paths:
+                    print("  via " + " -> ".join(ref.key() for ref in path.access_chain))
+            for diagnostic in evaluation.diagnostics:
+                print({"diagnostic": diagnostic})
             return 0
         if args.command == "campaign-export":
             campaigns = repo.list_payloads("campaigns")

@@ -9,6 +9,7 @@ from typing import Any
 from access_review_engine.domain import (
     Access,
     AccessAssignment,
+    AccessRelation,
     AuditEvent,
     Campaign,
     Decision,
@@ -31,6 +32,7 @@ TABLES = {
     "resources",
     "accesses",
     "access_assignments",
+    "access_relations",
     "imports",
     "golden_sources",
     "golden_source_versions",
@@ -84,6 +86,20 @@ class Repository:
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_access_ref ON accesses(provider, name)")
         cur.execute("CREATE INDEX IF NOT EXISTS ix_assignments_access ON access_assignments(provider, name)")
         cur.execute("CREATE INDEX IF NOT EXISTS ix_assignments_identity ON access_assignments(provider)")
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_access_relation_ref "
+            "ON access_relations(provider, name)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS ix_access_relations_parent "
+            "ON access_relations(provider, name)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS ix_access_relations_child "
+            "ON access_relations("
+            "json_extract(payload, '$.child_provider'), "
+            "json_extract(payload, '$.child_access_name'))"
+        )
         cur.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_golden_source_name ON golden_sources(name)"
         )
@@ -174,6 +190,26 @@ class Repository:
                     self._row(assignment, self._payload(assignment)),
                 )
 
+    def replace_access_relations(
+        self, relations: list[AccessRelation], providers: set[str] | None = None
+    ) -> None:
+        scoped_providers = providers or {relation.parent_provider for relation in relations}
+        if not scoped_providers:
+            return
+        seen: set[tuple[str, str, str, str, str, str]] = set()
+        with self.conn:
+            for provider in scoped_providers:
+                self.conn.execute("DELETE FROM access_relations WHERE provider = ?", (provider,))
+            for relation in relations:
+                if relation.key() in seen:
+                    continue
+                seen.add(relation.key())
+                self.conn.execute(
+                    "INSERT INTO access_relations (id, payload, created_at, provider, name, version) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    self._row(relation, self._payload(relation)),
+                )
+
     def _payload(self, obj: Any) -> str:
         if isinstance(obj, dict):
             data = obj
@@ -195,6 +231,9 @@ class Repository:
             name = obj.golden_source_id
         if isinstance(obj, AccessAssignment):
             name = obj.access_name
+        if isinstance(obj, AccessRelation):
+            provider = obj.parent_provider
+            name = ":".join(obj.key())
         return (
             data["id"],
             payload,
@@ -237,6 +276,12 @@ def hydrate_assignment(data: dict[str, Any]) -> AccessAssignment:
     return AccessAssignment(**(data | {"origin": Origin(**data["origin"])}))
 
 
+def hydrate_access_relation(data: dict[str, Any]) -> AccessRelation:
+    from access_review_engine.domain import Origin
+
+    return AccessRelation(**(data | {"origin": Origin(**data["origin"])}))
+
+
 def hydrate_snapshot(data: dict[str, Any]) -> Snapshot:
     return Snapshot(
         providers=[hydrate_provider(item) for item in data["providers"]],
@@ -245,6 +290,9 @@ def hydrate_snapshot(data: dict[str, Any]) -> Snapshot:
         accesses=[hydrate_access(item) for item in data["accesses"]],
         access_assignments=[hydrate_assignment(item) for item in data["access_assignments"]],
         source_import_ids=data["source_import_ids"],
+        access_relations=[
+            hydrate_access_relation(item) for item in data.get("access_relations", [])
+        ],
         comparison_states=data.get("comparison_states", []),
         id=data["id"],
         created_at=data["created_at"],

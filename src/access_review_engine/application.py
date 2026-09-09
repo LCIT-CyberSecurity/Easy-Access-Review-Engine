@@ -10,6 +10,7 @@ from zipfile import BadZipFile, ZipFile
 from access_review_engine.domain import (
     Access,
     AccessAssignment,
+    AccessRelation,
     Completeness,
     GoldenSourceVersion,
     Identity,
@@ -27,6 +28,7 @@ from access_review_engine.services import create_snapshot, reconcile_identities
 from access_review_engine.storage import (
     Repository,
     hydrate_access,
+    hydrate_access_relation,
     hydrate_assignment,
     hydrate_identity,
     hydrate_provider,
@@ -105,6 +107,13 @@ def persist_import_result(
     for access in accesses:
         repo.upsert("accesses", access)
 
+    access_relations = _reconcile_access_relations(
+        _load_access_relations(repo, result.provider.name),
+        result.access_relations,
+    )
+    if result.access_relations:
+        repo.replace_access_relations(access_relations, providers={result.provider.name})
+
     snapshot_assignments = list(result.assignments)
     if authoritative:
         assignments = _reconcile_assignments(
@@ -128,6 +137,7 @@ def persist_import_result(
         [result.batch.id],
         golden_version,
         result.batch.scope,
+        _load_access_relations(repo),
     )
     repo.insert_append_only("snapshots", snapshot)
     return snapshot
@@ -257,6 +267,15 @@ def _load_assignments(repo: Repository, provider: str | None = None) -> list[Acc
     return [hydrate_assignment(row) for row in rows]
 
 
+def _load_access_relations(repo: Repository, provider: str | None = None) -> list[AccessRelation]:
+    rows = (
+        repo.list_payloads_by_provider("access_relations", provider)
+        if provider
+        else repo.list_payloads("access_relations")
+    )
+    return [hydrate_access_relation(row) for row in rows]
+
+
 def _dedupe_identities(identities: Iterable[Identity]) -> list[Identity]:
     by_key: dict[tuple[str, str], Identity] = {}
     by_native: dict[tuple[str, str], Identity] = {}
@@ -294,6 +313,22 @@ def _reconcile_accesses(existing: Iterable[Access], imported: Iterable[Access]) 
         if key not in seen:
             reconciled.append(access)
             seen.add(key)
+    return reconciled
+
+
+def _reconcile_access_relations(
+    existing: Iterable[AccessRelation], imported: Iterable[AccessRelation]
+) -> list[AccessRelation]:
+    existing_by_key = {relation.key(): relation for relation in existing}
+    reconciled: list[AccessRelation] = []
+    seen: set[tuple[str, str, str, str, str, str]] = set()
+    for relation in imported:
+        previous = existing_by_key.get(relation.key())
+        if previous is not None:
+            relation.id = previous.id
+        if relation.key() not in seen:
+            reconciled.append(relation)
+            seen.add(relation.key())
     return reconciled
 
 

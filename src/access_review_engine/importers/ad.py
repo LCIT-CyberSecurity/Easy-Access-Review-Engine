@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from io import TextIOWrapper
 from pathlib import Path
@@ -10,6 +10,7 @@ from zipfile import BadZipFile, ZipFile
 from access_review_engine.domain import (
     Access,
     AccessAssignment,
+    AccessRelation,
     AssignmentType,
     Completeness,
     ControlObject,
@@ -57,6 +58,7 @@ class ImportResult:
     identities: list[Identity]
     accesses: list[Access]
     assignments: list[AccessAssignment]
+    access_relations: list[AccessRelation] = field(default_factory=list)
 
 
 def import_ad_zip(

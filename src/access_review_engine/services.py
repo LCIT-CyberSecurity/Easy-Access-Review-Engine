@@ -7,6 +7,9 @@ from typing import Iterable
 from access_review_engine.domain import (
     Access,
     AccessAssignment,
+    AccessPath,
+    AccessRelation,
+    AccessRelationType,
     AuditEvent,
     Campaign,
     CampaignStatus,
@@ -14,6 +17,8 @@ from access_review_engine.domain import (
     Completeness,
     Decision,
     DecisionValue,
+    EffectiveAccess,
+    EffectiveAccessEvaluation,
     Finding,
     GoldenSource,
     GoldenSourceAssignment,
@@ -21,6 +26,8 @@ from access_review_engine.domain import (
     Identity,
     IdentityStatus,
     IdentityType,
+    JsonDict,
+    ObjectRef,
     OwnerRef,
     RemediationAction,
     RemediationActionType,
@@ -36,6 +43,203 @@ def identity_key(identity: Identity) -> tuple[str, str]:
 
 def access_key(access: Access) -> tuple[str, str]:
     return (access.provider, access.name)
+
+
+def relation_key(relation: AccessRelation) -> tuple[str, str, str, str, str, str]:
+    return relation.key()
+
+
+def calculate_effective_accesses(
+    assignments: Iterable[AccessAssignment],
+    relations: Iterable[AccessRelation] = (),
+    accesses: Iterable[Access] | None = None,
+    max_paths_per_access: int = 100,
+) -> EffectiveAccessEvaluation:
+    """Resolve direct and derived accesses from AccessAssignment plus AccessRelation grants.
+
+    Only direct observations remain AccessAssignment objects. Derived accesses are calculated from
+    the relation graph and keep every provenance path that reaches the same effective access.
+    Cycles are reported and traversal of that cyclic path stops.
+    """
+    if max_paths_per_access < 1:
+        raise ValueError("max_paths_per_access must be at least 1")
+    access_keys = {access_key(access) for access in accesses} if accesses is not None else None
+    diagnostics: list[JsonDict] = []
+    adjacency: dict[tuple[str, str], list[AccessRelation]] = {}
+    seen_relations: set[tuple[str, str, str, str, str, str]] = set()
+
+    for relation in sorted(relations, key=lambda item: item.key()):
+        if relation.relation_type != AccessRelationType.GRANTS:
+            diagnostics.append(_relation_diagnostic("unsupported_relation_type", relation))
+            continue
+        if relation.key() in seen_relations:
+            continue
+        seen_relations.add(relation.key())
+        missing: list[str] = []
+        if access_keys is not None and relation.parent_key() not in access_keys:
+            missing.append("parent_access")
+        if access_keys is not None and relation.child_key() not in access_keys:
+            missing.append("child_access")
+        if missing:
+            diagnostic = _relation_diagnostic("unresolved_access_relation", relation)
+            diagnostic["missing"] = missing
+            diagnostics.append(diagnostic)
+            continue
+        adjacency.setdefault(relation.parent_key(), []).append(relation)
+
+    results: dict[tuple[str, str, str, str], EffectiveAccess] = {}
+    for assignment in sorted(
+        assignments,
+        key=lambda item: (
+            item.identity_provider,
+            item.identity_identifier,
+            item.provider,
+            item.access_name,
+            item.origin_fingerprint,
+            item.id,
+        ),
+    ):
+        root_key = (assignment.provider, assignment.access_name)
+        if access_keys is not None and root_key not in access_keys:
+            diagnostics.append(
+                {
+                    "type": "unresolved_direct_assignment",
+                    "assignment_id": assignment.id,
+                    "access_provider": assignment.provider,
+                    "access_name": assignment.access_name,
+                    "identity_provider": assignment.identity_provider,
+                    "identity_identifier": assignment.identity_identifier,
+                }
+            )
+            continue
+        root_ref = ObjectRef(*root_key)
+        root_path = AccessPath(
+            identity_provider=assignment.identity_provider,
+            identity_identifier=assignment.identity_identifier,
+            access_chain=(root_ref,),
+            assignment_id=assignment.id,
+        )
+        _add_effective_access(results, assignment, root_key, True, root_path)
+
+        stack: list[tuple[tuple[str, str], tuple[ObjectRef, ...], tuple[str, ...]]] = [
+            (root_key, (root_ref,), ())
+        ]
+        while stack:
+            current_key, chain, relation_ids = stack.pop()
+            for relation in reversed(adjacency.get(current_key, [])):
+                child_key = relation.child_key()
+                child_ref = ObjectRef(*child_key)
+                if child_ref in chain:
+                    diagnostics.append(
+                        {
+                            "type": "cycle_detected",
+                            "relation_id": relation.id,
+                            "identity_provider": assignment.identity_provider,
+                            "identity_identifier": assignment.identity_identifier,
+                            "access_chain": [ref.key() for ref in (*chain, child_ref)],
+                        }
+                    )
+                    continue
+                child_chain = (*chain, child_ref)
+                child_relation_ids = (*relation_ids, relation.id)
+                result_key = (
+                    assignment.identity_provider,
+                    assignment.identity_identifier,
+                    child_key[0],
+                    child_key[1],
+                )
+                existing = results.get(result_key)
+                if existing is not None and len(existing.paths) >= max_paths_per_access:
+                    diagnostics.append(
+                        {
+                            "type": "path_limit_reached",
+                            "identity_provider": assignment.identity_provider,
+                            "identity_identifier": assignment.identity_identifier,
+                            "access_provider": child_key[0],
+                            "access_name": child_key[1],
+                            "max_paths_per_access": max_paths_per_access,
+                        }
+                    )
+                    continue
+                path = AccessPath(
+                    identity_provider=assignment.identity_provider,
+                    identity_identifier=assignment.identity_identifier,
+                    access_chain=child_chain,
+                    assignment_id=assignment.id,
+                    relation_ids=child_relation_ids,
+                )
+                _add_effective_access(results, assignment, child_key, False, path)
+                stack.append((child_key, child_chain, child_relation_ids))
+
+    return EffectiveAccessEvaluation(
+        effective_accesses=[results[key] for key in sorted(results)],
+        diagnostics=sorted(diagnostics, key=lambda item: str(item)),
+    )
+
+
+def effective_access_diff(
+    old: EffectiveAccessEvaluation, new: EffectiveAccessEvaluation
+) -> list[dict[str, str]]:
+    old_keys = {item.key(): item for item in old.effective_accesses}
+    new_keys = {item.key(): item for item in new.effective_accesses}
+    rows: list[dict[str, str]] = []
+    for key in sorted(old_keys.keys() | new_keys.keys()):
+        if key in old_keys and key in new_keys:
+            status = "unchanged"
+        elif key in old_keys:
+            status = "removed"
+        else:
+            status = "added"
+        rows.append(
+            {
+                "status": status,
+                "identity_provider": key[0],
+                "identity_identifier": key[1],
+                "access_provider": key[2],
+                "access_name": key[3],
+            }
+        )
+    return rows
+
+
+def _add_effective_access(
+    results: dict[tuple[str, str, str, str], EffectiveAccess],
+    assignment: AccessAssignment,
+    access_ref: tuple[str, str],
+    direct: bool,
+    path: AccessPath,
+) -> None:
+    key = (
+        assignment.identity_provider,
+        assignment.identity_identifier,
+        access_ref[0],
+        access_ref[1],
+    )
+    result = results.get(key)
+    if result is None:
+        result = EffectiveAccess(
+            identity_provider=assignment.identity_provider,
+            identity_identifier=assignment.identity_identifier,
+            access_provider=access_ref[0],
+            access_name=access_ref[1],
+            direct=direct,
+        )
+        results[key] = result
+    result.direct = result.direct or direct
+    if path not in result.paths:
+        result.paths.append(path)
+
+
+def _relation_diagnostic(kind: str, relation: AccessRelation) -> JsonDict:
+    return {
+        "type": kind,
+        "relation_id": relation.id,
+        "parent_provider": relation.parent_provider,
+        "parent_access_name": relation.parent_access_name,
+        "child_provider": relation.child_provider,
+        "child_access_name": relation.child_access_name,
+        "relation_type": relation.relation_type,
+    }
 
 
 def validate_owner(owner: OwnerRef | None, subject: Identity, identities: dict[tuple[str, str], Identity]) -> bool:
@@ -371,6 +575,7 @@ def create_snapshot(
     source_import_ids: list[str],
     golden_version: GoldenSourceVersion | None = None,
     import_scope: dict[str, object] | None = None,
+    access_relations: list[AccessRelation] | None = None,
 ) -> Snapshot:
     snapshot = Snapshot(
         providers=providers,  # type: ignore[arg-type]
@@ -379,6 +584,7 @@ def create_snapshot(
         accesses=accesses,
         access_assignments=assignments,
         source_import_ids=source_import_ids,
+        access_relations=list(access_relations or []),
     )
     snapshot.comparison_states = compare_snapshot(snapshot, golden_version, import_scope)
     return snapshot.finalize()

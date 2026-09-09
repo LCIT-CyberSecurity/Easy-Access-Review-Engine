@@ -41,6 +41,10 @@ class AssignmentType(StrEnum):
     UNKNOWN = "unknown"
 
 
+class AccessRelationType(StrEnum):
+    GRANTS = "grants"
+
+
 class ImportStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
@@ -255,6 +259,71 @@ class AccessAssignment:
 
 
 @dataclass
+class AccessRelation:
+    parent_provider: str
+    parent_access_name: str
+    child_provider: str
+    child_access_name: str
+    relation_type: str
+    origin: Origin
+    metadata: JsonDict = field(default_factory=dict)
+    id: str = field(default_factory=new_id)
+
+    @property
+    def origin_fingerprint(self) -> str:
+        return self.origin.fingerprint()
+
+    def key(self) -> tuple[str, str, str, str, str, str]:
+        return (
+            self.parent_provider,
+            self.parent_access_name,
+            self.child_provider,
+            self.child_access_name,
+            self.relation_type,
+            self.origin_fingerprint,
+        )
+
+    def parent_key(self) -> tuple[str, str]:
+        return (self.parent_provider, self.parent_access_name)
+
+    def child_key(self) -> tuple[str, str]:
+        return (self.child_provider, self.child_access_name)
+
+
+@dataclass(frozen=True)
+class AccessPath:
+    identity_provider: str
+    identity_identifier: str
+    access_chain: tuple[ObjectRef, ...]
+    assignment_id: str
+    relation_ids: tuple[str, ...] = ()
+
+
+@dataclass
+class EffectiveAccess:
+    identity_provider: str
+    identity_identifier: str
+    access_provider: str
+    access_name: str
+    direct: bool
+    paths: list[AccessPath] = field(default_factory=list)
+
+    def key(self) -> tuple[str, str, str, str]:
+        return (
+            self.identity_provider,
+            self.identity_identifier,
+            self.access_provider,
+            self.access_name,
+        )
+
+
+@dataclass
+class EffectiveAccessEvaluation:
+    effective_accesses: list[EffectiveAccess]
+    diagnostics: list[JsonDict] = field(default_factory=list)
+
+
+@dataclass
 class ImportBatch:
     provider: str
     source_type: str
@@ -336,6 +405,7 @@ class Snapshot:
     accesses: list[Access]
     access_assignments: list[AccessAssignment]
     source_import_ids: list[str]
+    access_relations: list[AccessRelation] = field(default_factory=list)
     comparison_states: list[JsonDict] = field(default_factory=list)
     id: str = field(default_factory=new_id)
     created_at: str = field(default_factory=now_utc)
