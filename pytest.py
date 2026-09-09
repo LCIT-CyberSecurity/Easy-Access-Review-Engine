@@ -8,6 +8,17 @@ from types import TracebackType
 from typing import Any
 
 
+sys.modules.setdefault("pytest", sys.modules[__name__])
+
+
+class SkipTest(Exception):
+    pass
+
+
+def skip(reason: str = "") -> None:
+    raise SkipTest(reason)
+
+
 class raises:
     def __init__(self, expected: type[BaseException]) -> None:
         self.expected = expected
@@ -33,6 +44,7 @@ def main() -> int:
     sys.path.insert(0, str(root / "src"))
     sys.path.insert(0, str(root / "tests"))
     failures = 0
+    skipped = 0
     tests = 0
     for path in sorted((root / "tests").rglob("test_*.py")):
         module = _load_module(path)
@@ -42,11 +54,15 @@ def main() -> int:
                 try:
                     _call(value)
                     print(f"PASS {path.name}::{name}")
+                except SkipTest as exc:
+                    skipped += 1
+                    reason = f": {exc}" if str(exc) else ""
+                    print(f"SKIP {path.name}::{name}{reason}")
                 except Exception:
                     failures += 1
                     print(f"FAIL {path.name}::{name}")
                     traceback.print_exc()
-    print(f"{tests - failures} passed, {failures} failed")
+    print(f"{tests - failures - skipped} passed, {failures} failed, {skipped} skipped")
     return 1 if failures else 0
 
 

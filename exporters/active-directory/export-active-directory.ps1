@@ -28,6 +28,14 @@ function Get-PrimaryGroupSid {
   return "$(Get-DomainSidFromSid -Sid $PrincipalSid)-$PrimaryGroupID"
 }
 
+function New-MembershipKey {
+  param(
+    [Parameter(Mandatory=$true)][string]$GroupSID,
+    [Parameter(Mandatory=$true)][string]$MemberSID
+  )
+  return "$GroupSID|$MemberSID"
+}
+
 
 function ConvertTo-InvariantAdDate {
   param($Value)
@@ -82,14 +90,14 @@ statistics:
 
 
 function Add-PrimaryGroupMembership {
-  param($Memberships, $Principal, $GroupsBySid)
-  if (-not $Principal.SID -or -not $Principal.PrimaryGroupID) { return $Memberships }
+  param($Memberships, $MembershipIndex, $Principal, $GroupsBySid)
+  if (-not $Principal.SID -or -not $Principal.PrimaryGroupID) { return }
   $primaryGroupSid = Get-PrimaryGroupSid -PrincipalSid $Principal.SID.Value -PrimaryGroupID ([string]$Principal.PrimaryGroupID)
-  if (-not $GroupsBySid.ContainsKey($primaryGroupSid)) { return $Memberships }
+  if (-not $GroupsBySid.ContainsKey($primaryGroupSid)) { return }
+  $key = New-MembershipKey -GroupSID $primaryGroupSid -MemberSID $Principal.SID.Value
+  if ($MembershipIndex.Contains($key)) { return }
   $group = $GroupsBySid[$primaryGroupSid]
-  $exists = $Memberships | Where-Object { $_.GroupSID -eq $primaryGroupSid -and $_.MemberSID -eq $Principal.SID.Value } | Select-Object -First 1
-  if ($exists) { return $Memberships }
-  $Memberships += [PSCustomObject]@{
+  $membership = [PSCustomObject]@{
     Group = $group.SamAccountName
     GroupSID = $group.SID.Value
     Member = $Principal.SamAccountName
@@ -98,7 +106,8 @@ function Add-PrimaryGroupMembership {
     MemberDN = $Principal.DistinguishedName
     MembershipType = 'primary_group'
   }
-  return $Memberships
+  $null = $Memberships.Add($membership)
+  $null = $MembershipIndex.Add($key)
 }
 
 function Add-ServerArg {
@@ -237,7 +246,8 @@ try {
     @{Name='ServicePrincipalName';Expression={ ConvertTo-AdCsvMultiValue $_.ServicePrincipalName }} |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/service_accounts.csv"
 
-  $memberships = @()
+  $memberships = [System.Collections.Generic.List[object]]::new()
+  $membershipIndex = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($group in $groups) {
     try {
       $members = Invoke-AdCollectorOperation -Operation "Get-ADGroupMember $($group.SamAccountName)" -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
@@ -246,7 +256,7 @@ try {
       } -ArgumentList @($group, $serverArg)
       foreach ($member in $members) {
         $memberSid = if ($member.SID) { $member.SID.Value } else { $null }
-        $memberships += [PSCustomObject]@{
+        $membership = [PSCustomObject]@{
           Group = $group.SamAccountName
           GroupSID = $group.SID.Value
           Member = $member.SamAccountName
@@ -254,6 +264,10 @@ try {
           MemberType = $member.objectClass
           MemberDN = $member.distinguishedName
           MembershipType = 'direct'
+        }
+        $null = $memberships.Add($membership)
+        if ($group.SID -and $group.SID.Value -and $memberSid) {
+          $null = $membershipIndex.Add((New-MembershipKey -GroupSID $group.SID.Value -MemberSID $memberSid))
         }
       }
     }
@@ -265,7 +279,7 @@ try {
   $groupsBySid = @{}
   foreach ($group in $groups) { $groupsBySid[$group.SID.Value] = $group }
   foreach ($principal in @($users) + @($serviceAccounts)) {
-    $memberships = Add-PrimaryGroupMembership -Memberships $memberships -Principal $principal -GroupsBySid $groupsBySid
+    Add-PrimaryGroupMembership -Memberships $memberships -MembershipIndex $membershipIndex -Principal $principal -GroupsBySid $groupsBySid
   }
 
   try {
@@ -279,7 +293,7 @@ try {
     $errors += New-CollectionError -ObjectType 'computer' -ObjectIdentifier '*' -ObjectSID $null -Operation 'Get-ADComputer -Filter *' -ErrorRecord $_
   }
   foreach ($principal in @($computers)) {
-    $memberships = Add-PrimaryGroupMembership -Memberships $memberships -Principal $principal -GroupsBySid $groupsBySid
+    Add-PrimaryGroupMembership -Memberships $memberships -MembershipIndex $membershipIndex -Principal $principal -GroupsBySid $groupsBySid
   }
   $computers | Select-Object SamAccountName,Name,SID,DistinguishedName,Enabled,DNSHostName,Description,ObjectGUID,PrimaryGroupID |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/computers.csv"

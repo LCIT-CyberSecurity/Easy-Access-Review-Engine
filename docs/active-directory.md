@@ -36,7 +36,8 @@ enumeration fails, or the configured operation timeout is exceeded. The script e
 The `-OperationTimeoutSeconds` option defaults to 300 seconds. Each remote AD cmdlet call is run
 through a controlled PowerShell runspace and is stopped if that single operation exceeds the timeout.
 A timed-out operation is recorded as a collection diagnostic, downgrades the export to `unknown`, and
-can never produce a `full` authoritative export.
+can never produce a `full` authoritative export. `-OperationTimeoutSeconds 0` disables this timeout
+for tests/debugging and is not recommended for production collection.
 
 ## Security of Remote AD Access
 

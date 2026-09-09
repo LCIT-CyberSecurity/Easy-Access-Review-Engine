@@ -8,6 +8,8 @@ from io import StringIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import pytest
+
 from access_review_engine.application import import_file_to_repository
 from access_review_engine.importers.openldap import DEFAULT_OPENLDAP_FILTER
 from access_review_engine.storage import Repository
@@ -15,7 +17,7 @@ from access_review_engine.storage import Repository
 
 def test_remote_offline_equivalence_active_directory(tmp_path: Path) -> None:
     if shutil.which("pwsh") is None:
-        return
+        pytest.skip("pwsh is required for AD remote/offline equivalence test")
 
     remote_zip = _ad_remote_zip(tmp_path)
     offline_zip = _ad_offline_zip(tmp_path, "offline-ad")

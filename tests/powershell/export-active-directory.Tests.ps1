@@ -222,6 +222,121 @@ Describe 'Active Directory exporter' -Tag 'unit' {
   }
 
 
+
+  It 'exports a large membership set without duplicate primary group memberships' {
+    $domainSid = 'S-1-5-21-100-200-300'
+    $userCount = 250
+    $computerCount = 50
+    $appGroupCount = 8
+
+    Mock Get-ADUser {
+      1..$userCount | ForEach-Object {
+        [PSCustomObject]@{
+          SamAccountName = "user$_"
+          UserPrincipalName = "user$_@corp.example.test"
+          DisplayName = "User $_"
+          Mail = "user$_@corp.example.test"
+          Enabled = $true
+          SID = [PSCustomObject]@{ Value = "$domainSid-$($_ + 1000)" }
+          DistinguishedName = "CN=User $_,DC=corp,DC=example,DC=test"
+          LastLogonDate = $null
+          PasswordLastSet = $null
+          AccountExpirationDate = $null
+          WhenCreated = $null
+          Description = ''
+          PrimaryGroupID = '513'
+          LockedOut = $false
+          ServicePrincipalName = @()
+          ObjectGUID = "00000000-0000-0000-0000-0000001$($_.ToString('000'))"
+          ObjectClass = 'user'
+        }
+      }
+    }
+    Mock Get-ADComputer {
+      1..$computerCount | ForEach-Object {
+        [PSCustomObject]@{
+          SamAccountName = "PC$($_.ToString('000'))$"
+          Name = "PC$($_.ToString('000'))"
+          SID = [PSCustomObject]@{ Value = "$domainSid-$($_ + 4000)" }
+          DistinguishedName = "CN=PC$($_.ToString('000')),DC=corp,DC=example,DC=test"
+          Enabled = $true
+          DNSHostName = "pc$($_.ToString('000')).corp.example.test"
+          Description = ''
+          ObjectGUID = "00000000-0000-0000-0000-0000004$($_.ToString('000'))"
+          PrimaryGroupID = '515'
+          ObjectClass = 'computer'
+        }
+      }
+    }
+    Mock Get-ADServiceAccount { @() }
+    Mock Get-ADGroup {
+      $groups = @(
+        [PSCustomObject]@{
+          SamAccountName = 'Domain Users'
+          Name = 'Domain Users'
+          SID = [PSCustomObject]@{ Value = "$domainSid-513" }
+          DistinguishedName = 'CN=Domain Users,CN=Users,DC=corp,DC=example,DC=test'
+          Description = 'Primary users'
+          GroupScope = 'Global'
+          GroupCategory = 'Security'
+        },
+        [PSCustomObject]@{
+          SamAccountName = 'Domain Computers'
+          Name = 'Domain Computers'
+          SID = [PSCustomObject]@{ Value = "$domainSid-515" }
+          DistinguishedName = 'CN=Domain Computers,CN=Users,DC=corp,DC=example,DC=test'
+          Description = 'Primary computers'
+          GroupScope = 'Global'
+          GroupCategory = 'Security'
+        }
+      )
+      foreach ($index in 1..$appGroupCount) {
+        $groups += [PSCustomObject]@{
+          SamAccountName = "APP_GROUP_$index"
+          Name = "APP_GROUP_$index"
+          SID = [PSCustomObject]@{ Value = "$domainSid-$($index + 2200)" }
+          DistinguishedName = "CN=APP_GROUP_$index,DC=corp,DC=example,DC=test"
+          Description = 'Application group'
+          GroupScope = 'Global'
+          GroupCategory = 'Security'
+        }
+      }
+      $groups
+    }
+    Mock Get-ADGroupMember {
+      param($Identity)
+      if ($Identity.SamAccountName -notlike 'APP_GROUP_*') { return @() }
+      1..$userCount | ForEach-Object {
+        [PSCustomObject]@{
+          SamAccountName = "user$_"
+          SID = [PSCustomObject]@{ Value = "$domainSid-$($_ + 1000)" }
+          objectClass = 'user'
+          distinguishedName = "CN=User $_,DC=corp,DC=example,DC=test"
+        }
+      }
+    }
+
+    $out = Join-Path $TestDrive 'large.zip'
+    $expanded = Join-Path $TestDrive 'large'
+    Invoke-ActiveDirectoryExport -ProviderName 'corp-ad' -Output $out -OperationTimeoutSeconds 0
+    Expand-Archive -Path $out -DestinationPath $expanded
+
+    $memberships = Import-Csv (Join-Path $expanded 'memberships.csv')
+    $expectedDirect = $userCount * $appGroupCount
+    $expectedPrimary = $userCount + $computerCount
+    $duplicateKeys = $memberships |
+      Group-Object -Property GroupSID,MemberSID,MembershipType |
+      Where-Object { $_.Count -gt 1 }
+
+    $memberships | Should -HaveCount ($expectedDirect + $expectedPrimary)
+    ($memberships | Where-Object { $_.MembershipType -eq 'direct' }) | Should -HaveCount $expectedDirect
+    ($memberships | Where-Object { $_.MembershipType -eq 'primary_group' }) | Should -HaveCount $expectedPrimary
+    ($memberships | Where-Object { $_.GroupSID -eq "$domainSid-513" -and $_.MembershipType -eq 'primary_group' }) | Should -HaveCount $userCount
+    ($memberships | Where-Object { $_.GroupSID -eq "$domainSid-515" -and $_.MembershipType -eq 'primary_group' }) | Should -HaveCount $computerCount
+    $duplicateKeys | Should -HaveCount 0
+    Get-Content (Join-Path $expanded 'manifest.yaml') -Raw | Should -Match "memberships: $($expectedDirect + $expectedPrimary)"
+  }
+
   It 'exports gMSA, all computers, dates, FSP SID and primary group memberships through the real exporter' {
     $out = Join-Path $TestDrive 'full.zip'
     $expanded = Join-Path $TestDrive 'full'
