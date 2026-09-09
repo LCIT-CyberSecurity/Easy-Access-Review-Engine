@@ -992,22 +992,37 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake = fake_bin / "ldapsearch"
+    args_log = tmp_path / "ldapsearch.args"
+    env_log = tmp_path / "ldapsearch.env"
+    secret_file = tmp_path / "expected-secret"
+    secret_file.write_text(sentinel, encoding="utf-8")
     fake.write_text(
         "#!/usr/bin/env bash\n"
+        "secret=$(cat \"$LDAP_EXPECTED_SECRET_FILE\")\n"
+        "printf '%s\n' \"$@\" > \"$LDAPSEARCH_ARGS_LOG\"\n"
+        "env > \"$LDAPSEARCH_ENV_LOG\"\n"
+        "if [[ \"${LDAP_PASSWORD+x}\" == x ]]; then echo 'LDAP_PASSWORD leaked to ldapsearch environment' >&2; exit 77; fi\n"
+        "if env | grep -Fq -- \"$secret\"; then echo 'secret leaked to ldapsearch environment' >&2; exit 77; fi\n"
+        "if printf '%s\n' \"$@\" | grep -Fq -- \"$secret\"; then echo 'secret leaked to ldapsearch argv' >&2; exit 77; fi\n"
+        "password_file=''\n"
+        "while [[ $# -gt 0 ]]; do if [[ \"$1\" == '-y' ]]; then shift; password_file=\"$1\"; fi; shift || true; done\n"
+        "if [[ -z \"$password_file\" || \"$(cat \"$password_file\")\" != \"$secret\" ]]; then echo 'password file was not passed correctly' >&2; exit 78; fi\n"
         "printf 'dn: uid=alice,ou=People,dc=example,dc=com\n'\n"
         "printf 'objectClass: inetOrgPerson\nentryUUID: uuid-u1\nuid: alice\ncn: Alice\n'\n"
         "printf 'description: safe diagnostic fixture\n'\n"
-        "printf 'bind failed: %s\n' \"$LDAP_EXPECTED_SECRET\" >&2\n"
+        "printf 'bind failed: %s\n' \"$secret\" >&2\n"
         "exit 49\n",
         encoding="utf-8",
     )
     fake.chmod(0o755)
+    env_secret = "'" + sentinel.replace("'", "'\\''") + "'"
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "LDAP_URI=ldaps://ldap.example.test\n"
-        "BASE_DN=dc=example,dc=com\n"
-        "BIND_DN=cn=admin,dc=example,dc=com\n"
-        "ALLOW_PARTIAL=1\n",
+        f"LDAP_URI=ldaps://ldap.example.test\n"
+        f"BASE_DN=dc=example,dc=com\n"
+        f"BIND_DN=cn=admin,dc=example,dc=com\n"
+        f"LDAP_PASSWORD={env_secret}\n"
+        f"ALLOW_PARTIAL=1\n",
         encoding="utf-8",
     )
     archive = tmp_path / "redacted.zip"
@@ -1017,8 +1032,9 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
         env=os.environ | {
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "ENV_FILE": str(env_file),
-            "LDAP_PASSWORD": sentinel,
-            "LDAP_EXPECTED_SECRET": sentinel,
+            "LDAPSEARCH_ARGS_LOG": str(args_log),
+            "LDAPSEARCH_ENV_LOG": str(env_log),
+            "LDAP_EXPECTED_SECRET_FILE": str(secret_file),
         },
         check=True,
         capture_output=True,
@@ -1026,6 +1042,10 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
     )
     assert sentinel not in result.stdout
     assert sentinel not in result.stderr
+    assert sentinel not in args_log.read_text(encoding="utf-8")
+    ldapsearch_env = env_log.read_text(encoding="utf-8")
+    assert sentinel not in ldapsearch_env
+    assert "LDAP_PASSWORD=" not in ldapsearch_env
     with ZipFile(archive) as zf:
         names = zf.namelist()
         assert "manifest.yaml" in names
@@ -1085,13 +1105,15 @@ def test_openldap_exporter_paged_search_keeps_all_entries_once(tmp_path: Path) -
     fake_bin.mkdir()
     fake = fake_bin / "ldapsearch"
     page_log = tmp_path / "pages.log"
+    args_log = tmp_path / "ldapsearch.args"
     users = "".join(
         f"printf 'dn: uid=user{i},ou=People,dc=example,dc=com\nobjectClass: inetOrgPerson\nentryUUID: uuid-u{i}\nuid: user{i}\ncn: User {i}\n\n'\n"
         for i in range(7)
     )
     fake.write_text(
         "#!/usr/bin/env bash\n"
-        "printf 'page 1\npage 2\npage 3\nend\n' > \"$LDAP_PAGE_LOG\"\n"
+        "printf '%s\n' \"$@\" > \"$LDAP_PAGE_ARGS_LOG\"\n"
+        "printf 'page 1\npage 2\npage 3\npage 4\nend\n' > \"$LDAP_PAGE_LOG\"\n"
         + users,
         encoding="utf-8",
     )
@@ -1100,9 +1122,10 @@ def test_openldap_exporter_paged_search_keeps_all_entries_once(tmp_path: Path) -
     env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "LDAP_PAGE_LOG": str(page_log),
+        "LDAP_PAGE_ARGS_LOG": str(args_log),
         "BASE_DN": "dc=example,dc=com",
         "ALLOW_ANONYMOUS": "1",
-        "PAGE_SIZE": "3",
+        "PAGE_SIZE": "2",
     }
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(archive)], cwd=Path.cwd(), env=env, check=True)
     repo = Repository(tmp_path / "review.db")
@@ -1113,13 +1136,13 @@ def test_openldap_exporter_paged_search_keeps_all_entries_once(tmp_path: Path) -
             for identity in imported.identities
             if identity.metadata.get("entry_uuid", "").startswith("uuid-u")
         )
-        assert page_log.read_text(encoding="utf-8").splitlines() == ["page 1", "page 2", "page 3", "end"]
+        assert "pr=2/noprompt" in args_log.read_text(encoding="utf-8")
+        assert page_log.read_text(encoding="utf-8").splitlines() == ["page 1", "page 2", "page 3", "page 4", "end"]
         assert native_ids == [f"uuid-u{i}" for i in range(7)]
         assert len(native_ids) == len(set(native_ids)) == 7
         assert repo.list_payloads("imports")[0]["completeness"] == "full"
     finally:
         repo.close()
-
 
 def test_openldap_exporter_failed_page_is_unknown_and_not_full(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"

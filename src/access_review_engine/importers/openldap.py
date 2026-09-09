@@ -390,24 +390,6 @@ def _manifest_scope(manifest: dict[str, object]) -> dict[str, object]:
     return scope
 
 
-def _is_provider_wide_scope(scope: dict[str, object]) -> bool:
-    base_dn = str(scope.get("base_dn") or "").strip().lower()
-    search_scope = str(scope.get("search_scope") or "sub").strip().lower()
-    ldap_filter = "".join(str(scope.get("filter") or "(objectClass=*)").split()).lower()
-    if search_scope != "sub":
-        return False
-    if ldap_filter not in {
-        "(objectclass=*)",
-        "objectclass=*",
-        "".join(DEFAULT_OPENLDAP_FILTER.split()).lower(),
-    }:
-        return False
-    if not base_dn:
-        return False
-    rdns = [part.strip() for part in _split_unescaped(base_dn, ",") if part.strip()]
-    return bool(rdns) and all(part.startswith(("dc=", "o=")) for part in rdns)
-
-
 def _member_dn_in_scope(member_dn: str, scope: dict[str, object]) -> bool:
     base_dn = str(scope.get("base_dn") or "").strip()
     if not base_dn:

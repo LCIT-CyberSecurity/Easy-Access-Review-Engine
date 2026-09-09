@@ -3,10 +3,8 @@ set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-.env}"
 if [[ -f "$ENV_FILE" ]]; then
-  set -a
   # shellcheck disable=SC1090
   . "$ENV_FILE"
-  set +a
 fi
 
 LDAP_URI="${LDAP_URI:-ldap://localhost}"
@@ -139,6 +137,7 @@ if [[ -n "$LDAP_PASSWORD" ]]; then
 elif [[ -n "$LDAP_PASSWORD_FILE" ]]; then
   password_file="$LDAP_PASSWORD_FILE"
 fi
+export -n LDAP_PASSWORD 2>/dev/null || true
 
 cmd=(ldapsearch -LLL -H "$LDAP_URI" -b "$BASE_DN" -s "$SEARCH_SCOPE" -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "$SEARCH_TIMEOUT_SECONDS" -E "pr=${PAGE_SIZE}/noprompt")
 if [[ "$START_TLS" == "1" ]]; then

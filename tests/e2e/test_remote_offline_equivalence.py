@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import os
+import shutil
 import subprocess
 from io import StringIO
 from pathlib import Path
@@ -13,8 +14,11 @@ from access_review_engine.storage import Repository
 
 
 def test_remote_offline_equivalence_active_directory(tmp_path: Path) -> None:
-    remote_zip = _ad_zip(tmp_path, "remote-ad")
-    offline_zip = _ad_zip(tmp_path, "offline-ad")
+    if shutil.which("pwsh") is None:
+        return
+
+    remote_zip = _ad_remote_zip(tmp_path)
+    offline_zip = _ad_offline_zip(tmp_path, "offline-ad")
 
     remote = _import_and_normalize(tmp_path / "remote.db", remote_zip)
     offline = _import_and_normalize(tmp_path / "offline.db", offline_zip)
@@ -121,7 +125,175 @@ def _stable_raw(raw: dict[str, object]) -> tuple[tuple[str, object], ...]:
     return tuple(sorted(raw.items()))
 
 
-def _ad_zip(tmp_path: Path, name: str) -> Path:
+def _ad_remote_zip(tmp_path: Path) -> Path:
+    archive = tmp_path / "remote-ad.zip"
+    runner = tmp_path / "run-ad-export.ps1"
+    runner.write_text(_ad_mock_runner(archive), encoding="utf-8")
+    subprocess.run(
+        ["pwsh", "-NoProfile", "-File", str(runner)],
+        cwd=Path.cwd(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return archive
+
+
+def _ad_mock_runner(output: Path) -> str:
+    exporter = (Path.cwd() / "exporters/active-directory/export-active-directory.ps1").as_posix()
+    output_path = output.as_posix()
+    return f'''
+. '{exporter}'
+
+class TestSid {{
+  [string]$Value
+  TestSid([string]$Value) {{ $this.Value = $Value }}
+  [string] ToString() {{ return $this.Value }}
+}}
+
+function New-TestSid([string]$Value) {{ [TestSid]::new($Value) }}
+function Import-Module {{ param([string]$Name) }}
+
+function Get-ADDomain {{
+  [PSCustomObject]@{{
+    DNSRoot = 'corp.example.test'
+    DomainSID = New-TestSid 'S-1-5-21-100-200-300'
+  }}
+}}
+
+function Get-ADUser {{
+  @(
+    [PSCustomObject]@{{
+      SamAccountName = 'alice'
+      UserPrincipalName = 'alice@corp.example.test'
+      DisplayName = 'Alice'
+      Mail = 'alice@corp.example.test'
+      Enabled = $true
+      SID = New-TestSid 'S-1-5-21-100-200-300-1101'
+      DistinguishedName = 'CN=Alice,DC=corp,DC=example,DC=test'
+      LastLogonDate = $null
+      PasswordLastSet = $null
+      AccountExpirationDate = $null
+      WhenCreated = $null
+      Description = 'Standard user'
+      PrimaryGroupID = '513'
+      LockedOut = $false
+      ServicePrincipalName = @()
+      ObjectGUID = '11111111-1111-1111-1111-111111111111'
+      ObjectClass = 'user'
+    }}
+  )
+}}
+
+function Get-ADGroup {{
+  @(
+    [PSCustomObject]@{{
+      SamAccountName = 'Domain Users'
+      Name = 'Domain Users'
+      SID = New-TestSid 'S-1-5-21-100-200-300-513'
+      DistinguishedName = 'CN=Domain Users,CN=Users,DC=corp,DC=example,DC=test'
+      Description = 'Primary users'
+      GroupScope = 'Global'
+      GroupCategory = 'Security'
+    }},
+    [PSCustomObject]@{{
+      SamAccountName = 'Domain Computers'
+      Name = 'Domain Computers'
+      SID = New-TestSid 'S-1-5-21-100-200-300-515'
+      DistinguishedName = 'CN=Domain Computers,CN=Users,DC=corp,DC=example,DC=test'
+      Description = 'Primary computers'
+      GroupScope = 'Global'
+      GroupCategory = 'Security'
+    }},
+    [PSCustomObject]@{{
+      SamAccountName = 'APP_REVIEWERS'
+      Name = 'APP_REVIEWERS'
+      SID = New-TestSid 'S-1-5-21-100-200-300-2200'
+      DistinguishedName = 'CN=APP_REVIEWERS,DC=corp,DC=example,DC=test'
+      Description = 'Application reviewers'
+      GroupScope = 'Global'
+      GroupCategory = 'Security'
+    }}
+  )
+}}
+
+function Get-ADServiceAccount {{
+  @(
+    [PSCustomObject]@{{
+      SamAccountName = 'gmsa_web$'
+      Name = 'gmsa_web$'
+      DisplayName = 'gmsa_web$'
+      SID = New-TestSid 'S-1-5-21-100-200-300-3101'
+      DistinguishedName = 'CN=gmsa_web,CN=Managed Service Accounts,DC=corp,DC=example,DC=test'
+      Enabled = $true
+      Description = 'Web gMSA'
+      ServicePrincipalName = @('HTTP/web.corp.example.test')
+      ObjectClass = 'msDS-GroupManagedServiceAccount'
+      ObjectGUID = '22222222-2222-2222-2222-222222222222'
+      PrimaryGroupID = '513'
+    }}
+  )
+}}
+
+function Get-ADComputer {{
+  @(
+    [PSCustomObject]@{{
+      SamAccountName = 'PC001$'
+      Name = 'PC001'
+      SID = New-TestSid 'S-1-5-21-100-200-300-4101'
+      DistinguishedName = 'CN=PC001,DC=corp,DC=example,DC=test'
+      Enabled = $true
+      DNSHostName = 'pc001.corp.example.test'
+      Description = 'Grouped workstation'
+      ObjectGUID = '33333333-3333-3333-3333-333333333333'
+      PrimaryGroupID = '515'
+      ObjectClass = 'computer'
+    }},
+    [PSCustomObject]@{{
+      SamAccountName = 'PC002$'
+      Name = 'PC002'
+      SID = New-TestSid 'S-1-5-21-100-200-300-4102'
+      DistinguishedName = 'CN=PC002,DC=corp,DC=example,DC=test'
+      Enabled = $true
+      DNSHostName = 'pc002.corp.example.test'
+      Description = 'Ungrouped workstation'
+      ObjectGUID = '44444444-4444-4444-4444-444444444444'
+      PrimaryGroupID = '515'
+      ObjectClass = 'computer'
+    }}
+  )
+}}
+
+function Get-ADGroupMember {{
+  param($Identity)
+  if ($Identity.SamAccountName -ne 'APP_REVIEWERS') {{ return @() }}
+  @(
+    [PSCustomObject]@{{
+      SamAccountName = 'alice'
+      SID = New-TestSid 'S-1-5-21-100-200-300-1101'
+      objectClass = 'user'
+      distinguishedName = 'CN=Alice,DC=corp,DC=example,DC=test'
+    }},
+    [PSCustomObject]@{{
+      SamAccountName = 'PC001$'
+      SID = New-TestSid 'S-1-5-21-100-200-300-4101'
+      objectClass = 'computer'
+      distinguishedName = 'CN=PC001,DC=corp,DC=example,DC=test'
+    }},
+    [PSCustomObject]@{{
+      SamAccountName = 'S-1-5-21-900-800-700-1501'
+      SID = New-TestSid 'S-1-5-21-900-800-700-1501'
+      objectClass = 'foreignSecurityPrincipal'
+      distinguishedName = 'CN=S-1-5-21-900-800-700-1501,CN=ForeignSecurityPrincipals,DC=corp,DC=example,DC=test'
+    }}
+  )
+}}
+
+Invoke-ActiveDirectoryExport -ProviderName 'corp-ad' -Output '{output_path}' -OperationTimeoutSeconds 0
+'''
+
+
+def _ad_offline_zip(tmp_path: Path, name: str) -> Path:
     archive = tmp_path / f"{name}.zip"
     with ZipFile(archive, "w", ZIP_DEFLATED) as zf:
         zf.writestr(
@@ -132,25 +304,66 @@ def _ad_zip(tmp_path: Path, name: str) -> Path:
             "domain: corp.example.test\n"
             "domain_sid: S-1-5-21-100-200-300\n"
             "completeness: full\n"
-            "scope:\n"
-            "  type: all\n"
-            "  completeness: full\n"
             "statistics:\n"
             "  users: 1\n"
-            "  groups: 2\n"
-            "  service_accounts: 0\n"
-            "  computers: 1\n"
-            "  memberships: 3\n"
+            "  groups: 3\n"
+            "  service_accounts: 1\n"
+            "  computers: 2\n"
+            "  memberships: 7\n"
             "  collection_errors: 0\n",
         )
-        zf.writestr("users.csv", _csv(["SamAccountName", "UserPrincipalName", "DisplayName", "Enabled", "SID", "DistinguishedName", "PrimaryGroupID", "ObjectGUID"], [["alice", "alice@corp.example.test", "Alice", "True", "S-1-5-21-100-200-300-1101", "CN=Alice,DC=corp,DC=example,DC=test", "513", "11111111-1111-1111-1111-111111111111"]]))
-        zf.writestr("computers.csv", _csv(["SamAccountName", "Name", "SID", "DistinguishedName", "Enabled", "DNSHostName", "Description", "ObjectGUID", "PrimaryGroupID"], [["PC001$", "PC001", "S-1-5-21-100-200-300-4101", "CN=PC001,DC=corp,DC=example,DC=test", "True", "pc001.corp.example.test", "", "22222222-2222-2222-2222-222222222222", "515"]]))
-        zf.writestr("service_accounts.csv", _csv(["SamAccountName", "SID", "DistinguishedName", "Enabled", "ObjectClass", "PrimaryGroupID"], []))
-        zf.writestr("groups.csv", _csv(["SamAccountName", "Name", "SID", "DistinguishedName", "Description", "GroupScope", "GroupCategory"], [["Domain Users", "Domain Users", "S-1-5-21-100-200-300-513", "CN=Domain Users,CN=Users,DC=corp,DC=example,DC=test", "", "Global", "Security"], ["Domain Computers", "Domain Computers", "S-1-5-21-100-200-300-515", "CN=Domain Computers,CN=Users,DC=corp,DC=example,DC=test", "", "Global", "Security"]]))
-        zf.writestr("memberships.csv", _csv(["Group", "GroupSID", "Member", "MemberSID", "MemberType", "MemberDN", "MembershipType"], [["Domain Users", "S-1-5-21-100-200-300-513", "alice", "S-1-5-21-100-200-300-1101", "user", "CN=Alice,DC=corp,DC=example,DC=test", "primary_group"], ["Domain Computers", "S-1-5-21-100-200-300-515", "PC001$", "S-1-5-21-100-200-300-4101", "computer", "CN=PC001,DC=corp,DC=example,DC=test", "primary_group"], ["Domain Users", "S-1-5-21-100-200-300-513", "S-1-5-21-900-800-700-1501", "S-1-5-21-900-800-700-1501", "foreignSecurityPrincipal", "CN=S-1-5-21-900-800-700-1501,CN=ForeignSecurityPrincipals,DC=corp,DC=example,DC=test", "direct"]]))
+        zf.writestr(
+            "users.csv",
+            _csv(
+                ["SamAccountName", "UserPrincipalName", "DisplayName", "Mail", "Enabled", "SID", "DistinguishedName", "Description", "PrimaryGroupID", "LockedOut", "ObjectGUID", "LastLogonDate", "PasswordLastSet", "AccountExpirationDate", "WhenCreated", "ServicePrincipalName"],
+                [["alice", "alice@corp.example.test", "Alice", "alice@corp.example.test", "True", "S-1-5-21-100-200-300-1101", "CN=Alice,DC=corp,DC=example,DC=test", "Standard user", "513", "False", "11111111-1111-1111-1111-111111111111", "", "", "", "", ""]],
+            ),
+        )
+        zf.writestr(
+            "computers.csv",
+            _csv(
+                ["SamAccountName", "Name", "SID", "DistinguishedName", "Enabled", "DNSHostName", "Description", "ObjectGUID", "PrimaryGroupID"],
+                [
+                    ["PC001$", "PC001", "S-1-5-21-100-200-300-4101", "CN=PC001,DC=corp,DC=example,DC=test", "True", "pc001.corp.example.test", "Grouped workstation", "33333333-3333-3333-3333-333333333333", "515"],
+                    ["PC002$", "PC002", "S-1-5-21-100-200-300-4102", "CN=PC002,DC=corp,DC=example,DC=test", "True", "pc002.corp.example.test", "Ungrouped workstation", "44444444-4444-4444-4444-444444444444", "515"],
+                ],
+            ),
+        )
+        zf.writestr(
+            "service_accounts.csv",
+            _csv(
+                ["SamAccountName", "Name", "DisplayName", "SID", "DistinguishedName", "Enabled", "Description", "ObjectClass", "ObjectGUID", "PrimaryGroupID", "ServicePrincipalName"],
+                [["gmsa_web$", "gmsa_web$", "gmsa_web$", "S-1-5-21-100-200-300-3101", "CN=gmsa_web,CN=Managed Service Accounts,DC=corp,DC=example,DC=test", "True", "Web gMSA", "msDS-GroupManagedServiceAccount", "22222222-2222-2222-2222-222222222222", "513", "HTTP/web.corp.example.test"]],
+            ),
+        )
+        zf.writestr(
+            "groups.csv",
+            _csv(
+                ["SamAccountName", "Name", "SID", "DistinguishedName", "Description", "GroupScope", "GroupCategory"],
+                [
+                    ["Domain Users", "Domain Users", "S-1-5-21-100-200-300-513", "CN=Domain Users,CN=Users,DC=corp,DC=example,DC=test", "Primary users", "Global", "Security"],
+                    ["Domain Computers", "Domain Computers", "S-1-5-21-100-200-300-515", "CN=Domain Computers,CN=Users,DC=corp,DC=example,DC=test", "Primary computers", "Global", "Security"],
+                    ["APP_REVIEWERS", "APP_REVIEWERS", "S-1-5-21-100-200-300-2200", "CN=APP_REVIEWERS,DC=corp,DC=example,DC=test", "Application reviewers", "Global", "Security"],
+                ],
+            ),
+        )
+        zf.writestr(
+            "memberships.csv",
+            _csv(
+                ["Group", "GroupSID", "Member", "MemberSID", "MemberType", "MemberDN", "MembershipType"],
+                [
+                    ["APP_REVIEWERS", "S-1-5-21-100-200-300-2200", "alice", "S-1-5-21-100-200-300-1101", "user", "CN=Alice,DC=corp,DC=example,DC=test", "direct"],
+                    ["APP_REVIEWERS", "S-1-5-21-100-200-300-2200", "PC001$", "S-1-5-21-100-200-300-4101", "computer", "CN=PC001,DC=corp,DC=example,DC=test", "direct"],
+                    ["APP_REVIEWERS", "S-1-5-21-100-200-300-2200", "S-1-5-21-900-800-700-1501", "S-1-5-21-900-800-700-1501", "foreignSecurityPrincipal", "CN=S-1-5-21-900-800-700-1501,CN=ForeignSecurityPrincipals,DC=corp,DC=example,DC=test", "direct"],
+                    ["Domain Users", "S-1-5-21-100-200-300-513", "alice", "S-1-5-21-100-200-300-1101", "user", "CN=Alice,DC=corp,DC=example,DC=test", "primary_group"],
+                    ["Domain Users", "S-1-5-21-100-200-300-513", "gmsa_web$", "S-1-5-21-100-200-300-3101", "msDS-GroupManagedServiceAccount", "CN=gmsa_web,CN=Managed Service Accounts,DC=corp,DC=example,DC=test", "primary_group"],
+                    ["Domain Computers", "S-1-5-21-100-200-300-515", "PC001$", "S-1-5-21-100-200-300-4101", "computer", "CN=PC001,DC=corp,DC=example,DC=test", "primary_group"],
+                    ["Domain Computers", "S-1-5-21-100-200-300-515", "PC002$", "S-1-5-21-100-200-300-4102", "computer", "CN=PC002,DC=corp,DC=example,DC=test", "primary_group"],
+                ],
+            ),
+        )
         zf.writestr("collection-errors.csv", "ObjectType,ObjectIdentifier,ObjectSID,Operation,ErrorCode,ErrorMessage\n")
     return archive
-
 
 def _csv(headers: list[str], rows: list[list[str]]) -> str:
     stream = StringIO()

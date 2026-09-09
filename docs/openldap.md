@@ -28,7 +28,11 @@ The importer supports `inetOrgPerson`, `posixAccount`, `groupOfNames`, `groupOfU
 
 The collector may load a local `.env` file before reading process environment variables. The real
 `.env` file is ignored by Git. Use `.env.example` as a template and keep only fake values in tracked
-files.
+files. Keep local secrets readable only by the account running the collector:
+
+```bash
+chmod 600 .env
+```
 
 Variables used by the OpenLDAP collector:
 
@@ -36,8 +40,9 @@ Variables used by the OpenLDAP collector:
 - `BASE_DN`, required search base.
 - `PROVIDER_NAME`, provider name written to the manifest.
 - `BIND_DN`, optional bind DN.
-- `LDAP_PASSWORD` or `LDAP_PASSWORD_FILE`, used only when `BIND_DN` is set. The script passes the
-  secret to `ldapsearch` through a password file, not as a visible process argument.
+- `LDAP_PASSWORD` or `LDAP_PASSWORD_FILE`, used only when `BIND_DN` is set. The script keeps
+  `LDAP_PASSWORD` as a shell variable only, removes it from the child-process environment, and passes
+  the secret to `ldapsearch` through a password file, not as a visible process argument.
 - `LDAP_CA_CERT`, optional CA bundle/path exported as `LDAPTLS_CACERT`.
   TLS certificate and hostname verification remain required by default.
 - `START_TLS`, set to `1` for StartTLS on `ldap://`.
