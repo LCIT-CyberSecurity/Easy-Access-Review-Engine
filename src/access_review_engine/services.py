@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Iterable
@@ -578,13 +579,13 @@ def create_snapshot(
     access_relations: list[AccessRelation] | None = None,
 ) -> Snapshot:
     snapshot = Snapshot(
-        providers=providers,  # type: ignore[arg-type]
-        identities=identities,
-        resources=resources,  # type: ignore[arg-type]
-        accesses=accesses,
-        access_assignments=assignments,
-        source_import_ids=source_import_ids,
-        access_relations=list(access_relations or []),
+        providers=deepcopy(providers),  # type: ignore[arg-type]
+        identities=deepcopy(identities),
+        resources=deepcopy(resources),  # type: ignore[arg-type]
+        accesses=deepcopy(accesses),
+        access_assignments=deepcopy(assignments),
+        source_import_ids=list(source_import_ids),
+        access_relations=deepcopy(list(access_relations or [])),
     )
     snapshot.comparison_states = compare_snapshot(snapshot, golden_version, import_scope)
     return snapshot.finalize()

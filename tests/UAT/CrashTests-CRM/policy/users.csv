@@ -1,0 +1,23 @@
+username,native_id,display_name,email,department,account_type,status,owner
+alice.martin,CRM-UID-00001,Alice Martin,alice.martin@example.test,Finance,human,active,
+bruno.leroy,CRM-UID-00002,Bruno Leroy,bruno.leroy@example.test,Finance,human,active,
+chloe.bernard,CRM-UID-00003,Chloe Bernard,chloe.bernard@example.test,Finance,human,active,
+david.robert,CRM-UID-00004,David Robert,david.robert@example.test,Finance,human,active,
+emma.laurent,CRM-UID-00005,Emma Laurent,emma.laurent@example.test,Sales,human,active,
+fiona.moreau,CRM-UID-00006,Fiona Moreau,fiona.moreau@example.test,Sales,human,active,
+gabriel.petit,CRM-UID-00007,Gabriel Petit,gabriel.petit@example.test,Sales,human,active,
+hana.dubois,CRM-UID-00008,Hana Dubois,hana.dubois@example.test,Sales,human,active,
+ivan.garnier,CRM-UID-00009,Ivan Garnier,ivan.garnier@example.test,Sales,human,active,
+julia.faure,CRM-UID-00010,Julia Faure,julia.faure@example.test,Sales,human,active,
+karim.roux,CRM-UID-00011,Karim Roux,karim.roux@example.test,Logistics,human,active,
+lea.mercier,CRM-UID-00012,Lea Mercier,lea.mercier@example.test,Logistics,human,active,
+marc.blanc,CRM-UID-00013,Marc Blanc,marc.blanc@example.test,Logistics,human,active,
+nora.chevalier,CRM-UID-00014,Nora Chevalier,nora.chevalier@example.test,Logistics,human,active,
+oscar.perrin,CRM-UID-00015,Oscar Perrin,oscar.perrin@example.test,Support,human,active,
+paula.morin,CRM-UID-00016,Paula Morin,paula.morin@example.test,Support,human,active,
+quentin.girard,CRM-UID-00017,Quentin Girard,quentin.girard@example.test,Support,human,active,
+rosa.andre,CRM-UID-00018,Rosa Andre,rosa.andre@example.test,Support,human,active,
+samir.noel,CRM-UID-00019,Samir Noel,samir.noel@example.test,Support,human,active,
+thierry.admin,CRM-UID-00020,Thierry Admin,thierry.admin@example.test,IT,human,active,
+svc-crm-import,CRM-SVC-00001,CRM Import Service,svc-crm-import@example.test,IT,technical,active,thierry.admin
+crm-shared-sales,CRM-SHARED-00001,Shared Sales Desk,crm-shared-sales@example.test,Sales,shared,active,emma.laurent
