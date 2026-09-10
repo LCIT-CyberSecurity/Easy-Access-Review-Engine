@@ -109,8 +109,10 @@ def test_html_report_contains_required_sections_and_filters(tmp_path: Path) -> N
     html = render_html_report(campaign, rows)
     assert "Access Review - q1" in html
     assert "Golden Source version: none" in html
-    assert "filter-owner" in html
+    assert "filter-reviewer" in html
     assert "filter-identity" in html
+    assert "filter-access" in html
+    assert "Roles only" in html
     assert "GG_CRM:member" in html
     assert "Native description" not in html
     assert "CRM access" in html
