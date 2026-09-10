@@ -30,6 +30,16 @@ main() {
   docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate
   state="$(docker inspect -f '{{.State.Status}}' eare-crashtests-crm 2>/dev/null || true)"
   [[ "${state}" == "running" ]] || fail "container is not running; current state: ${state:-unknown}"
+  for attempt in $(seq 1 60); do
+    if docker exec eare-crashtests-crm test -f /srv/crm/.ready >/dev/null 2>&1; then
+      break
+    fi
+    if [[ "${attempt}" == "60" ]]; then
+      capture_diagnostics
+      fail "lab did not become ready after ACL/data generation"
+    fi
+    sleep 1
+  done
   capture_diagnostics
   (
     cd "${REPO_ROOT}"
