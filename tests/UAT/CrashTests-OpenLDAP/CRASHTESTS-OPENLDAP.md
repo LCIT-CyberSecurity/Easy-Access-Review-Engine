@@ -27,7 +27,7 @@ AccessAssignment, AccessRelation, Origin, Golden Source, snapshots and campaigns
 From the repository root:
 
 ```bash
-tests/UAT/CrashTests-OpenLDAP/run.sh
+tests/UAT/CrashTests-OpenLDAP/Run_CrashTests-OpenLDAP.sh
 ```
 
 Direct pytest run:
@@ -42,7 +42,7 @@ Remote execution example:
 
 ```bash
 ssh vm-integrations \
-  'cd ~/Easy-Access-Review-Engine && tests/UAT/CrashTests-OpenLDAP/run.sh'
+  'cd ~/Easy-Access-Review-Engine && tests/UAT/CrashTests-OpenLDAP/Run_CrashTests-OpenLDAP.sh'
 ```
 
 ## Docker Target

@@ -63,3 +63,13 @@ def _ad_environment_ready() -> tuple[bool, str]:
     if not os.environ.get("EARE_AD_UAT_DOMAIN"):
         return False, "EARE_AD_UAT_DOMAIN is not set"
     return True, ""
+
+def test_ct_ad_004_uat_powershell_exporter_uses_existing_ad_archive_format() -> None:
+    script = ROOT / "powershell" / "Export-CrashTestsAD.ps1"
+    text = script.read_text(encoding="utf-8")
+
+    assert "exporters/active-directory/export-active-directory.ps1" in text
+    assert "Invoke-ActiveDirectoryExport" in text
+    assert "ad-export.zip" in text
+    assert "Credential" not in text
+    assert "Password" not in text

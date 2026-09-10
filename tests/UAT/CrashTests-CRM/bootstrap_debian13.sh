@@ -67,7 +67,7 @@ main() {
   }
   printf '\nCrashTests-CRM lab is ready.\n'
   printf 'Run the UAT suite with:\n'
-  printf '  tests/UAT/CrashTests-CRM/run.sh\n'
+  printf '  tests/UAT/CrashTests-CRM/Run_CrashTests-CRM.sh\n'
   printf 'Or run pytest directly with:\n'
   printf '  python3 -m pytest tests/UAT/CrashTests-CRM/crashtests -v\n'
 }

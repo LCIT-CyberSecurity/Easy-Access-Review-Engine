@@ -33,7 +33,31 @@ AccessAssignment, AccessRelation, Origin, Golden Source, snapshots and campaigns
 From the repository root:
 
 ```bash
-tests/UAT/CrashTests-AD/run.sh
+tests/UAT/CrashTests-AD/Run_CrashTests-AD.sh
+```
+
+This Bash script runs on the repository host, not on the domain controller. It orchestrates pytest,
+captures artifacts and checks that the AD integration environment is reachable. Real AD collection
+must be executed through PowerShell against Windows Server, either from a Linux host with `pwsh`
+and remoting configured, or directly on the Windows integration VM.
+
+To trigger a real AD export before pytest:
+
+```bash
+EARE_AD_UAT_EXPORT=1 \
+EARE_AD_UAT_PROVIDER=crashtests-ad \
+EARE_AD_UAT_HOST=<integration_vm> \
+tests/UAT/CrashTests-AD/Run_CrashTests-AD.sh
+```
+
+The PowerShell exporter can also be run directly from a Windows integration VM:
+
+```powershell
+pwsh -NoProfile -File tests/UAT/CrashTests-AD/powershell/Export-CrashTestsAD.ps1 `
+  -ProviderName crashtests-ad `
+  -Output tests/UAT/CrashTests-AD/artifacts/ad-export.zip `
+  -Server <integration_vm> `
+  -AllowPartial
 ```
 
 Direct pytest run:
@@ -48,7 +72,7 @@ Remote execution example:
 
 ```bash
 ssh vm-integrations \
-  'cd ~/Easy-Access-Review-Engine && tests/UAT/CrashTests-AD/run.sh'
+  'cd ~/Easy-Access-Review-Engine && tests/UAT/CrashTests-AD/Run_CrashTests-AD.sh'
 ```
 
 ## Environment Contract
@@ -56,6 +80,21 @@ ssh vm-integrations \
 The runner expects PowerShell to be available as `pwsh` and an integration domain controller to be
 configured outside the repository. Do not store credentials, IP addresses, hostnames, passwords,
 tokens or SSH keys in this directory.
+
+Execution model:
+
+```text
+Linux repository host
+  -> Run_CrashTests-AD.sh
+  -> pytest
+  -> tests/UAT/CrashTests-AD/powershell/Export-CrashTestsAD.ps1 when EARE_AD_UAT_EXPORT=1
+  -> pwsh / Windows integration VM
+  -> AD export archive
+  -> generic EARE import and review
+```
+
+Do not try to run Bash on the domain controller. The Windows-side implementation belongs in
+PowerShell scripts or remote PowerShell commands.
 
 Use generic environment variables in local automation if needed:
 

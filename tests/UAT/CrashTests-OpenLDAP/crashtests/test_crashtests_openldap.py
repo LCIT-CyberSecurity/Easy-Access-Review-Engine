@@ -58,7 +58,7 @@ def _docker_container_ready() -> tuple[bool, str]:
         check=False,
     )
     if inspect.returncode != 0 or inspect.stdout.strip() != "running":
-        return False, "container is not running; run tests/UAT/CrashTests-OpenLDAP/run.sh"
+        return False, "container is not running; run tests/UAT/CrashTests-OpenLDAP/Run_CrashTests-OpenLDAP.sh"
     return True, ""
 
 

@@ -28,7 +28,7 @@ tests/UAT/CrashTests-CRM/bootstrap_debian13.sh
 Then:
 
 ```bash
-tests/UAT/CrashTests-CRM/run.sh
+tests/UAT/CrashTests-CRM/Run_CrashTests-CRM.sh
 ```
 
 Direct pytest run:
@@ -43,7 +43,7 @@ Remote execution example:
 
 ```bash
 ssh vm-integrations \
-  'cd ~/Easy-Access-Review-Engine && tests/UAT/CrashTests-CRM/run.sh'
+  'cd ~/Easy-Access-Review-Engine && tests/UAT/CrashTests-CRM/Run_CrashTests-CRM.sh'
 ```
 
 ## Docker Lab

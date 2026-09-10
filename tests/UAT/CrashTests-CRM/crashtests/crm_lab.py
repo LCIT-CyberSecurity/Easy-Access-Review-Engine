@@ -90,7 +90,7 @@ def docker_available() -> tuple[bool, str]:
         check=False,
     )
     if inspect.returncode != 0 or inspect.stdout.strip() != "running":
-        return False, "CrashTests-CRM container is not running; run tests/UAT/CrashTests-CRM/run.sh"
+        return False, "CrashTests-CRM container is not running; run tests/UAT/CrashTests-CRM/Run_CrashTests-CRM.sh"
     return True, ""
 
 
