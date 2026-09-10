@@ -66,12 +66,76 @@ def write_reports(
         writer.writeheader()
         writer.writerows(_spreadsheet_safe_rows(rows))
     reference_links = []
+    role_permissions: dict[str, list[str]] = {}
     matrix = path.parent / "policy" / "role-permissions.csv"
     if matrix.exists():
-        reference_links.append({"label": "Access matrix", "href": "../policy/role-permissions.csv"})
+        role_permissions = _role_permission_summary(matrix)
+        (path / "access-matrix.html").write_text(render_access_matrix(matrix), encoding="utf-8")
+        reference_links.append({"label": "Access matrix", "href": "access-matrix.html"})
     (path / "campaign-report.html").write_text(
-        render_html_report(campaign, rows, golden_version, reference_links), encoding="utf-8"
+        render_html_report(campaign, rows, golden_version, reference_links, role_permissions), encoding="utf-8"
     )
+
+
+def _role_permission_summary(csv_path: str | Path) -> dict[str, list[str]]:
+    with Path(csv_path).open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    values: dict[str, set[str]] = {}
+    for row in rows:
+        values.setdefault(row["role"], set()).add(f"{row['resource']}: {row['permission']}")
+    return {role: sorted(items) for role, items in sorted(values.items())}
+
+
+def render_access_matrix(csv_path: str | Path) -> str:
+    path = Path(csv_path)
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    roles = sorted({row["role"] for row in rows})
+    resources = sorted({row["resource"] for row in rows})
+    permissions = {
+        (row["role"], row["resource"]): sorted(
+            item["permission"] for item in rows if item["role"] == row["role"] and item["resource"] == row["resource"]
+        )
+        for row in rows
+    }
+    head = "".join(f"<th>{escape(role)}</th>" for role in roles)
+    body = "".join(
+        "<tr>"
+        + f"<th>{escape(resource)}</th>"
+        + "".join(_matrix_cell(permissions.get((role, resource), [])) for role in roles)
+        + "</tr>"
+        for resource in resources
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Access Matrix</title>
+<style>
+:root {{ --bg:#f7f8fa; --ink:#151a21; --muted:#667085; --line:#d9dee5; --accent:#0f766e; --soft:#e4f5f2; }}
+body {{ margin:0; background:var(--bg); color:var(--ink); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
+main {{ max-width:1400px; margin:0 auto; padding:36px; }}
+h1 {{ margin:0; font-size:34px; }}
+p {{ color:var(--muted); }}
+.matrix {{ margin-top:24px; overflow:auto; background:white; border:1px solid var(--line); border-radius:14px; }}
+table {{ border-collapse:collapse; width:100%; min-width:900px; }}
+th,td {{ padding:14px; border-bottom:1px solid #edf1f5; border-right:1px solid #edf1f5; text-align:left; vertical-align:top; }}
+thead th {{ position:sticky; top:0; background:#fff; z-index:2; color:var(--muted); font-size:12px; text-transform:uppercase; }}
+tbody th {{ font-weight:800; background:#fbfcfd; }}
+.perms {{ display:flex; gap:6px; flex-wrap:wrap; }}
+.perm {{ border-radius:999px; padding:4px 8px; font-size:12px; font-weight:800; background:var(--soft); color:#134e4a; }}
+.empty {{ color:#a0a8b2; }}
+</style>
+</head>
+<body><main><h1>Access Matrix</h1><p>Role to resource permissions used as the UAT Golden policy reference.</p><section class="matrix"><table><thead><tr><th>Resource</th>{head}</tr></thead><tbody>{body}</tbody></table></section></main></body></html>"""
+
+
+def _matrix_cell(values: list[str]) -> str:
+    if not values:
+        return '<td><span class="empty">-</span></td>'
+    content = "".join(f'<span class="perm">{escape(value)}</span>' for value in values)
+    return f'<td><div class="perms">{content}</div></td>'
 
 
 def render_html_report(
@@ -79,8 +143,16 @@ def render_html_report(
     rows: list[dict[str, object]],
     golden_version: GoldenSourceVersion | None = None,
     reference_links: list[dict[str, str]] | None = None,
+    role_permissions: dict[str, list[str]] | None = None,
 ) -> str:
     summary = _summary(rows)
+    role_permissions_json = (
+        json.dumps(role_permissions or {})
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("</", "<\\/")
+    )
     data_json = (
         json.dumps(rows)
         .replace("&", "\\u0026")
@@ -90,8 +162,6 @@ def render_html_report(
     )
     links_html = _reference_links_html(reference_links or [])
     options = {
-        "service": sorted({str(row["service"]) for row in rows}),
-        "provider": sorted({str(row["provider"]) for row in rows}),
         "classification": sorted({str(row["classification"]) for row in rows}),
         "decision": sorted({str(row["decision"]) for row in rows}),
         "reviewer": sorted({str(row["reviewer"]) for row in rows}),
@@ -111,192 +181,104 @@ def render_html_report(
 <style>
 :root {{
   color-scheme: light;
-  --bg: #eef2f6;
-  --shell: #0f1720;
-  --shell-2: #182331;
-  --panel: #ffffff;
-  --panel-soft: #f7f9fb;
-  --ink: #111827;
+  --bg: #f7f8fa;
+  --ink: #151a21;
   --muted: #667085;
-  --line: #d9e2ec;
-  --line-strong: #b8c7d6;
-  --brand: #0f766e;
-  --brand-2: #155e75;
-  --brand-soft: #dff7f3;
-  --ok: #15803d;
-  --ok-bg: #e7f8ed;
-  --warn: #b45309;
-  --warn-bg: #fff4dc;
+  --soft: #eef1f4;
+  --line: #d9dee5;
+  --accent: #0f766e;
+  --accent-soft: #e4f5f2;
   --bad: #b42318;
-  --bad-bg: #feeceb;
-  --info: #2563eb;
-  --info-bg: #eaf1ff;
-  --shadow: 0 18px 45px rgba(15, 23, 32, 0.12);
+  --bad-soft: #fff0ef;
+  --warn: #a15c07;
+  --warn-soft: #fff6e5;
+  --ok: #16763b;
+  --ok-soft: #ecf8f0;
 }}
 * {{ box-sizing: border-box; }}
-body {{
-  margin: 0;
-  min-height: 100vh;
-  background: radial-gradient(circle at top left, #d7f4ee 0, transparent 32rem), var(--bg);
-  color: var(--ink);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 14px;
-  letter-spacing: 0;
-}}
-.app {{ display: grid; grid-template-columns: 320px minmax(0, 1fr); min-height: 100vh; }}
-aside {{
-  background: linear-gradient(180deg, var(--shell), var(--shell-2));
-  color: #e5edf5;
-  padding: 24px;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow: auto;
-}}
-.brand {{ display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }}
-.logo {{ width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #2dd4bf, #38bdf8); box-shadow: 0 12px 25px rgba(45, 212, 191, .25); }}
-.brand h1 {{ margin: 0; font-size: 17px; line-height: 1.15; font-weight: 780; }}
-.brand p {{ margin: 4px 0 0; color: #9fb0c3; font-size: 12px; }}
-.side-section {{ margin-top: 22px; }}
-.side-title {{ color: #9fb0c3; font-size: 11px; text-transform: uppercase; font-weight: 760; margin: 0 0 10px; }}
-.nav-list {{ display: grid; gap: 8px; }}
-.nav-item {{
-  width: 100%;
-  border: 1px solid rgba(255,255,255,.08);
-  background: rgba(255,255,255,.04);
-  color: #edf5fb;
-  border-radius: 10px;
-  padding: 10px 11px;
-  text-align: left;
-  cursor: pointer;
-}}
-.nav-item:hover, .nav-item.active {{ background: rgba(45,212,191,.14); border-color: rgba(45,212,191,.45); }}
-.nav-name {{ display: block; font-weight: 730; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.nav-meta {{ display: flex; gap: 7px; margin-top: 6px; color: #b7c5d3; font-size: 12px; }}
-.content {{ min-width: 0; padding: 28px; }}
-.hero {{
-  background: rgba(255,255,255,.84);
-  border: 1px solid rgba(184,199,214,.8);
-  border-radius: 14px;
-  box-shadow: var(--shadow);
-  padding: 24px;
-  margin-bottom: 18px;
-}}
-.hero-top {{ display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }}
-.hero h2 {{ margin: 0; font-size: 28px; font-weight: 790; }}
-.hero p {{ margin: 8px 0 0; color: var(--muted); }}
-.references {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }}
-.references a {{ color: #075985; background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 999px; padding: 7px 12px; font-weight: 740; text-decoration: none; }}
-.references a:hover {{ border-color: #0284c7; }}
-.summary {{ display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 12px; margin-top: 20px; }}
-.metric {{ background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }}
-.metric strong {{ display: block; color: var(--muted); font-size: 11px; font-weight: 780; text-transform: uppercase; }}
-.metric span {{ display: block; margin-top: 7px; font-size: 25px; font-weight: 800; }}
-.toolbar {{
-  background: rgba(255,255,255,.92);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 14px;
-  margin-bottom: 18px;
-  position: sticky;
-  top: 14px;
-  z-index: 4;
-  box-shadow: 0 12px 28px rgba(15,23,32,.08);
-}}
-.filters {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }}
-label span {{ display: block; margin-bottom: 5px; color: var(--muted); font-size: 11px; font-weight: 780; text-transform: uppercase; }}
-select,input {{ width: 100%; min-height: 38px; border: 1px solid var(--line-strong); border-radius: 9px; background: #fff; color: var(--ink); padding: 8px 10px; font: inherit; }}
-.quick {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }}
-.quick button {{ border: 1px solid var(--line); border-radius: 999px; background: #fff; color: #134e4a; padding: 8px 12px; font-weight: 760; cursor: pointer; }}
-.quick button:hover {{ border-color: var(--brand); background: var(--brand-soft); }}
-.board {{ display: grid; gap: 14px; }}
-.access-card {{ background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(15,23,32,.08); overflow: hidden; }}
-.card-head {{ display: grid; grid-template-columns: minmax(260px, 1fr) auto; gap: 16px; padding: 18px; border-bottom: 1px solid var(--line); }}
-.card-title {{ display: flex; align-items: center; gap: 10px; margin: 0; font-size: 18px; font-weight: 790; }}
-.role-dot {{ width: 11px; height: 11px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 4px var(--brand-soft); flex: 0 0 auto; }}
-.card-meta {{ margin-top: 5px; color: var(--muted); font-size: 13px; }}
-.badges {{ display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; align-content: flex-start; }}
-.badge {{ border-radius: 999px; padding: 5px 10px; font-size: 12px; font-weight: 780; white-space: nowrap; }}
-.ok {{ background: var(--ok-bg); color: var(--ok); }} .warn {{ background: var(--warn-bg); color: var(--warn); }} .bad {{ background: var(--bad-bg); color: var(--bad); }} .info {{ background: var(--info-bg); color: var(--info); }} .neutral {{ background: #eef2f6; color: #475569; }}
-.exception-strip {{ display: none; gap: 8px; flex-wrap: wrap; padding: 12px 18px; background: #fff7ed; border-bottom: 1px solid #fed7aa; color: #9a3412; font-weight: 720; }}
-.access-card.has-issues .exception-strip {{ display: flex; }}
-.table-wrap {{ overflow-x: auto; }}
-table {{ width: 100%; border-collapse: collapse; min-width: 1080px; }}
-th {{ background: #f8fafc; color: var(--muted); font-size: 11px; text-align: left; text-transform: uppercase; padding: 11px 12px; border-bottom: 1px solid var(--line); }}
-td {{ padding: 12px; border-bottom: 1px solid #edf2f7; vertical-align: top; }}
-tr:last-child td {{ border-bottom: 0; }}
-tr[data-classification="unexpected"] td {{ background: #fff7f7; }}
-tr[data-classification="missing"] td {{ background: #fffaf0; }}
-tr[data-classification="unknown_due_to_scope"] td {{ background: #f8fafc; }}
-.identity {{ font-weight: 780; }}
-.status-pill {{ display: inline-flex; border-radius: 999px; padding: 4px 8px; background: #eef2f6; color: #475569; font-weight: 720; font-size: 12px; }}
-.issue {{ color: var(--bad); font-weight: 780; }}
-.muted {{ color: var(--muted); }}
-.empty {{ background: var(--panel); border: 1px dashed var(--line-strong); border-radius: 14px; padding: 30px; color: var(--muted); }}
-@media (max-width: 1100px) {{ .app {{ grid-template-columns: 1fr; }} aside {{ position: relative; height: auto; }} .summary {{ grid-template-columns: repeat(2, minmax(120px, 1fr)); }} .card-head, .hero-top {{ grid-template-columns: 1fr; display: grid; }} .badges {{ justify-content: flex-start; }} }}
+body {{ margin: 0; background: var(--bg); color: var(--ink); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; letter-spacing: 0; }}
+.shell {{ max-width: 1500px; margin: 0 auto; padding: 34px 34px 54px; }}
+.hero {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: end; padding: 10px 0 28px; border-bottom: 1px solid var(--line); }}
+.kicker {{ color: var(--accent); font-weight: 800; text-transform: uppercase; font-size: 12px; margin: 0 0 10px; }}
+h1 {{ margin: 0; font-size: 38px; line-height: 1.05; font-weight: 820; letter-spacing: 0; }}
+.subtitle {{ margin: 12px 0 0; color: var(--muted); font-size: 15px; }}
+.references {{ display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }}
+.references a {{ color: #075985; background: #e8f5fb; border: 1px solid #c8e6f3; border-radius: 999px; padding: 8px 12px; font-weight: 750; text-decoration: none; }}
+.metrics {{ display: grid; grid-template-columns: repeat(6, minmax(120px, 1fr)); gap: 18px; padding: 24px 0; }}
+.metric {{ min-width: 0; }}
+.metric strong {{ display: block; color: var(--muted); font-size: 12px; font-weight: 760; text-transform: uppercase; }}
+.metric span {{ display: block; margin-top: 6px; font-size: 28px; font-weight: 820; }}
+.workspace {{ display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 34px; align-items: start; }}
+.sidebar {{ position: sticky; top: 18px; padding-top: 8px; }}
+.side-title {{ margin: 0 0 12px; color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }}
+.role-list {{ display: grid; gap: 4px; }}
+.role-link {{ border: 0; background: transparent; border-radius: 8px; padding: 9px 10px; text-align: left; cursor: pointer; color: #354052; }}
+.role-link:hover, .role-link.active {{ background: var(--accent-soft); color: #134e4a; }}
+.role-link b {{ display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.role-link span {{ color: var(--muted); font-size: 12px; }}
+.toolbar {{ display: grid; gap: 12px; margin-bottom: 28px; }}
+.filters {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }}
+label span {{ display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }}
+select,input {{ width: 100%; min-height: 40px; border: 1px solid var(--line); border-radius: 9px; background: white; color: var(--ink); padding: 8px 11px; font: inherit; }}
+.quick {{ display: flex; flex-wrap: wrap; gap: 8px; }}
+.quick button {{ border: 0; background: var(--soft); color: #354052; border-radius: 999px; padding: 8px 12px; font-weight: 760; cursor: pointer; }}
+.quick button:hover {{ background: var(--accent-soft); color: #134e4a; }}
+.focus {{ display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 16px; }}
+.focus h2 {{ margin: 0; font-size: 22px; font-weight: 800; }}
+.focus p {{ margin: 4px 0 0; color: var(--muted); }}
+.counts {{ display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }}
+.pill {{ border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 800; background: var(--soft); color: #475467; }}
+.pill.ok {{ background: var(--ok-soft); color: var(--ok); }} .pill.warn {{ background: var(--warn-soft); color: var(--warn); }} .pill.bad {{ background: var(--bad-soft); color: var(--bad); }}
+.access-section {{ padding: 26px 0; border-top: 1px solid var(--line); }}
+.access-section:first-of-type {{ border-top: 0; padding-top: 0; }}
+.access-head {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: start; margin-bottom: 14px; }}
+.access-title {{ margin: 0; font-size: 20px; font-weight: 820; }}
+.access-meta {{ margin: 5px 0 0; color: var(--muted); }}
+.exceptions {{ margin: 12px 0 16px; padding-left: 14px; border-left: 3px solid var(--bad); color: var(--bad); font-weight: 720; display: grid; gap: 5px; }}
+.grants {{ display:flex; flex-wrap:wrap; gap:7px; margin:10px 0 18px; }}
+.grant {{ border-radius:999px; padding:5px 9px; background:var(--accent-soft); color:#134e4a; font-weight:760; font-size:12px; }}
+.review-list {{ display: grid; gap: 8px; }}
+.review-row {{ display: grid; grid-template-columns: minmax(190px, 1.1fr) 130px 130px minmax(150px, 1fr) minmax(170px, 1fr); gap: 14px; align-items: center; padding: 12px 0; border-top: 1px solid #e8edf2; }}
+.review-row:first-child {{ border-top: 0; }}
+.identity {{ font-weight: 800; }}
+.sub {{ color: var(--muted); font-size: 12px; margin-top: 2px; }}
+.status {{ display: inline-flex; width: fit-content; border-radius: 999px; padding: 4px 8px; background: var(--soft); color: #475467; font-weight: 760; font-size: 12px; }}
+.classification.unexpected, .issue:not(:empty) {{ color: var(--bad); font-weight: 800; }}
+.classification.missing {{ color: var(--warn); font-weight: 800; }}
+.classification.expected_and_observed {{ color: var(--ok); font-weight: 800; }}
+.decision {{ font-weight: 780; }}
+.empty {{ padding: 42px 0; color: var(--muted); border-top: 1px dashed var(--line); }}
+@media (max-width: 1050px) {{ .workspace {{ grid-template-columns: 1fr; }} .sidebar {{ position: relative; top: auto; }} .metrics {{ grid-template-columns: repeat(2, 1fr); }} .hero, .access-head, .focus {{ grid-template-columns: 1fr; }} .references, .counts {{ justify-content: flex-start; }} .review-row {{ grid-template-columns: 1fr; gap: 6px; }} }}
 </style>
 </head>
 <body>
-<div class="app">
-<aside>
-  <div class="brand"><div class="logo"></div><div><h1>Access Review</h1><p>Campaign control room</p></div></div>
-  <div class="side-section"><p class="side-title">Roles and accesses</p><div id="nav-list" class="nav-list"></div></div>
-  <div class="side-section"><p class="side-title">Current focus</p><div id="focus-summary" class="nav-meta">All review items</div></div>
-</aside>
-<div class="content">
-<section class="hero">
-  <div class="hero-top"><div><h2>{escape(campaign.display_name or campaign.name)}</h2><p>Golden Source version: {escape(str(golden_version.version) if golden_version else "none")}</p></div><div class="badges"><span class="badge neutral" id="visible-count"></span><span class="badge bad" id="issue-count"></span></div></div>
+<div class="shell">
+<header class="hero">
+  <div><p class="kicker">Access review campaign</p><h1>{escape(campaign.display_name or campaign.name)}</h1><p class="subtitle">Golden Source version: {escape(str(golden_version.version) if golden_version else "none")}</p></div>
   {links_html}
-  <div class="summary">{_summary_html(summary)}</div>
-</section>
-<section class="toolbar">
-  <div class="filters">{filters}<label><span>identity</span><input id="filter-identity" placeholder="Search identity"></label><label><span>role / access</span><input id="filter-access" placeholder="Search role or permission"></label><label><span>finding</span><input id="filter-finding" placeholder="Search finding"></label></div>
-  <div class="quick"><button type="button" data-classification="">All</button><button type="button" data-classification="unexpected">Unexpected</button><button type="button" data-classification="missing">Missing</button><button type="button" data-classification="expected_and_observed">Expected and observed</button><button type="button" data-access-prefix="CRM-">Roles only</button></div>
-</section>
-<section id="board" class="board"></section>
+</header>
+<section class="metrics">{_summary_html(summary)}</section>
+<div class="workspace">
+  <aside class="sidebar"><p class="side-title">Roles / Accesses</p><div id="role-list" class="role-list"></div></aside>
+  <main>
+    <section class="toolbar"><div class="filters">{filters}<label><span>identity</span><input id="filter-identity" placeholder="Search identity"></label><label><span>role / access</span><input id="filter-access" placeholder="Search role or permission"></label><label><span>finding</span><input id="filter-finding" placeholder="Search finding"></label></div><div class="quick"><button type="button" data-classification="">All</button><button type="button" data-classification="unexpected">Unexpected</button><button type="button" data-classification="missing">Missing</button><button type="button" data-classification="expected_and_observed">Expected and observed</button><button type="button" data-access-prefix="CRM-">Roles only</button></div></section>
+    <section class="focus"><div><h2 id="focus-title">All review items</h2><p id="focus-subtitle"></p></div><div id="focus-counts" class="counts"></div></section>
+    <section id="board"></section>
+  </main>
 </div>
 </div>
 <script>
 const rows = {data_json};
-const filters = ["service","provider","classification","decision","reviewer"];
+const rolePermissions = {role_permissions_json};
+const filters = ["classification","decision","reviewer"];
 function val(id) {{ return document.getElementById(id).value.toLowerCase(); }}
-function match(row) {{
-  for (const f of filters) {{ const v = val("filter-" + f); if (v && String(row[f]).toLowerCase() !== v) return false; }}
-  const identity = val("filter-identity"); if (identity && !String(row.identity).toLowerCase().includes(identity)) return false;
-  const access = val("filter-access"); if (access && !String(row.access).toLowerCase().includes(access)) return false;
-  const finding = val("filter-finding"); if (finding && !String(row.findings).toLowerCase().includes(finding) && !String(row.issue).toLowerCase().includes(finding)) return false;
-  return true;
-}}
+function match(row) {{ for (const f of filters) {{ const v = val("filter-" + f); if (v && String(row[f]).toLowerCase() !== v) return false; }} const identity = val("filter-identity"); if (identity && !String(row.identity).toLowerCase().includes(identity)) return false; const access = val("filter-access"); if (access && !String(row.access).toLowerCase().includes(access)) return false; const finding = val("filter-finding"); if (finding && !String(row.findings).toLowerCase().includes(finding) && !String(row.issue).toLowerCase().includes(finding)) return false; return true; }}
 function textEl(tag, value, className) {{ const el = document.createElement(tag); el.textContent = value == null ? "" : String(value); if (className) el.className = className; return el; }}
-function pill(value, kind) {{ return textEl("span", value, "badge " + kind); }}
-function summarize(items) {{ const out = {{total: items.length, ok: 0, unexpected: 0, missing: 0, scoped: 0, issues: 0, pending: 0, approve: 0, revoke: 0}}; for (const row of items) {{ if (row.classification === "expected_and_observed") out.ok++; if (row.classification === "unexpected") out.unexpected++; if (row.classification === "missing") out.missing++; if (row.classification === "unknown_due_to_scope") out.scoped++; if (row.issue) out.issues++; if (out[row.decision] != null) out[row.decision]++; }} return out; }}
-function groupsFor(items) {{ const groups = new Map(); for (const row of items) {{ const key = row.access; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(row); }} return [...groups.entries()].sort((a,b) => a[0].localeCompare(b[0])); }}
-function renderNav(groups) {{ const nav = document.getElementById("nav-list"); nav.replaceChildren(); for (const [access, items] of groups) {{ const s = summarize(items); const btn = document.createElement("button"); btn.className = "nav-item"; btn.appendChild(textEl("span", access, "nav-name")); btn.appendChild(textEl("span", s.total + " items · " + s.issues + " issues", "nav-meta")); btn.addEventListener("click", () => {{ document.getElementById("filter-access").value = access; render(); }}); nav.appendChild(btn); }} }}
-function render() {{
-  const board = document.getElementById("board");
-  const visible = rows.filter(match);
-  const groups = groupsFor(visible);
-  const total = summarize(visible);
-  document.getElementById("visible-count").textContent = visible.length + " visible";
-  document.getElementById("issue-count").textContent = total.issues + " issues";
-  document.getElementById("focus-summary").textContent = val("filter-access") || "All review items";
-  renderNav(groups);
-  board.replaceChildren();
-  if (!visible.length) {{ board.appendChild(textEl("div", "No matching review items.", "empty")); return; }}
-  for (const [access, items] of groups) {{
-    const s = summarize(items);
-    const card = document.createElement("article"); card.className = "access-card" + (s.issues ? " has-issues" : "");
-    const head = document.createElement("div"); head.className = "card-head";
-    const titleBox = document.createElement("div"); const title = document.createElement("h3"); title.className = "card-title"; title.appendChild(textEl("span", "", "role-dot")); title.appendChild(textEl("span", access)); titleBox.appendChild(title);
-    const first = items[0]; titleBox.appendChild(textEl("div", (first.service || "No service") + " / " + first.provider + " / " + (first.control_object_type || "access"), "card-meta"));
-    const badges = document.createElement("div"); badges.className = "badges"; badges.appendChild(pill(s.total + " items", "neutral")); badges.appendChild(pill(s.ok + " ok", "ok")); badges.appendChild(pill(s.unexpected + " unexpected", "bad")); badges.appendChild(pill(s.missing + " missing", "warn")); badges.appendChild(pill(s.approve + " approved", "info")); badges.appendChild(pill(s.revoke + " revoke", "bad"));
-    head.appendChild(titleBox); head.appendChild(badges); card.appendChild(head);
-    const strip = document.createElement("div"); strip.className = "exception-strip"; strip.appendChild(textEl("span", "Findings / exceptions: " + items.filter(r => r.issue).map(r => r.identity + " · " + r.issue).join(" | "))); card.appendChild(strip);
-    const wrap = document.createElement("div"); wrap.className = "table-wrap"; const table = document.createElement("table"); const thead = document.createElement("thead"); const hr = document.createElement("tr"); ["Identity","Status","Expected","Observed","Classification","Review decision","Issue","Findings","Reviewer","Comment"].forEach(label => hr.appendChild(textEl("th", label))); thead.appendChild(hr); const tbody = document.createElement("tbody");
-    for (const row of items.sort((a,b) => String(a.identity).localeCompare(String(b.identity)))) {{ const tr = document.createElement("tr"); tr.dataset.classification = String(row.classification || ""); const cols = ["identity","identity_status","expected","observed","classification","decision","issue","findings","reviewer","comment"]; for (const key of cols) {{ const cls = key === "identity" ? "identity" : key === "issue" ? "issue" : key === "identity_status" ? "status-pill" : ""; tr.appendChild(textEl("td", row[key], cls)); }} tbody.appendChild(tr); }}
-    table.appendChild(thead); table.appendChild(tbody); wrap.appendChild(table); card.appendChild(wrap); board.appendChild(card);
-  }}
-}}
+function summarize(items) {{ const out = {{total: items.length, ok: 0, unexpected: 0, missing: 0, scoped: 0, issues: 0, approve: 0, revoke: 0, pending: 0}}; for (const row of items) {{ if (row.classification === "expected_and_observed") out.ok++; if (row.classification === "unexpected") out.unexpected++; if (row.classification === "missing") out.missing++; if (row.classification === "unknown_due_to_scope") out.scoped++; if (row.issue) out.issues++; if (out[row.decision] != null) out[row.decision]++; }} return out; }}
+function groupsFor(items) {{ const groups = new Map(); for (const row of items) {{ if (!groups.has(row.access)) groups.set(row.access, []); groups.get(row.access).push(row); }} return [...groups.entries()].sort((a,b) => a[0].localeCompare(b[0])); }}
+function pill(value, kind) {{ return textEl("span", value, "pill " + (kind || "")); }}
+function renderSidebar(groups) {{ const nav = document.getElementById("role-list"); nav.replaceChildren(); for (const [access, items] of groups) {{ const s = summarize(items); const btn = document.createElement("button"); btn.className = "role-link"; btn.appendChild(textEl("b", access)); btn.appendChild(textEl("span", s.total + " items · " + s.issues + " issues")); btn.addEventListener("click", () => {{ document.getElementById("filter-access").value = access; render(); }}); nav.appendChild(btn); }} }}
+function render() {{ const visible = rows.filter(match); const groups = groupsFor(visible); const total = summarize(visible); renderSidebar(groups); document.getElementById("focus-title").textContent = val("filter-access") || "All review items"; document.getElementById("focus-subtitle").textContent = visible.length + " visible review items"; const counts = document.getElementById("focus-counts"); counts.replaceChildren(pill(total.ok + " ok", "ok"), pill(total.unexpected + " unexpected", "bad"), pill(total.missing + " missing", "warn"), pill(total.issues + " issues", total.issues ? "bad" : "")); const board = document.getElementById("board"); board.replaceChildren(); if (!visible.length) {{ board.appendChild(textEl("div", "No matching review items.", "empty")); return; }} for (const [access, items] of groups) {{ const s = summarize(items); const section = document.createElement("section"); section.className = "access-section"; const head = document.createElement("div"); head.className = "access-head"; const title = document.createElement("div"); title.appendChild(textEl("h3", access, "access-title")); const first = items[0]; title.appendChild(textEl("p", (first.service || "No service") + " / " + first.provider + " / " + (first.control_object_type || "access"), "access-meta")); const badges = document.createElement("div"); badges.className = "counts"; badges.append(pill(s.total + " items"), pill(s.ok + " ok", "ok"), pill(s.unexpected + " unexpected", "bad"), pill(s.missing + " missing", "warn")); head.append(title, badges); section.appendChild(head); const grants = rolePermissions[access] || []; if (grants.length) {{ const grantsEl = document.createElement("div"); grantsEl.className = "grants"; for (const grant of grants) grantsEl.appendChild(textEl("span", grant, "grant")); section.appendChild(grantsEl); }} const issueRows = items.filter(r => r.issue); if (issueRows.length) {{ const ex = document.createElement("div"); ex.className = "exceptions"; for (const row of issueRows) ex.appendChild(textEl("div", row.identity + " · " + row.issue)); section.appendChild(ex); }} const list = document.createElement("div"); list.className = "review-list"; for (const row of items.sort((a,b) => String(a.identity).localeCompare(String(b.identity)))) {{ const line = document.createElement("div"); line.className = "review-row"; const who = document.createElement("div"); who.appendChild(textEl("div", row.identity, "identity")); who.appendChild(textEl("div", row.identity_provider + " · " + row.identity_status, "sub")); line.appendChild(who); line.appendChild(textEl("div", row.classification, "classification " + row.classification)); line.appendChild(textEl("div", "Review: " + row.decision, "decision")); line.appendChild(textEl("div", row.issue, "issue")); line.appendChild(textEl("div", row.findings || row.comment || "", "sub")); list.appendChild(line); }} section.appendChild(list); board.appendChild(section); }} }}
 document.querySelectorAll("select,input").forEach(el => el.addEventListener("input", render));
 document.querySelectorAll("button[data-classification]").forEach(el => el.addEventListener("click", () => {{ document.getElementById("filter-classification").value = el.dataset.classification; render(); }}));
 document.querySelectorAll("button[data-access-prefix]").forEach(el => el.addEventListener("click", () => {{ document.getElementById("filter-access").value = el.dataset.accessPrefix; render(); }}));
@@ -309,8 +291,12 @@ render();
 def _issue_label(classification: object, findings: list[str]) -> str:
     if findings:
         return ", ".join(str(item) for item in findings)
-    if classification in {"unexpected", "missing", "unknown_due_to_scope"}:
-        return str(classification)
+    if classification == "missing":
+        return "Expected access not observed"
+    if classification == "unexpected":
+        return "Observed access not expected"
+    if classification == "unknown_due_to_scope":
+        return "Collection scope incomplete"
     return ""
 
 
