@@ -6,7 +6,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from access_review_engine.domain import Campaign, DecisionValue, GoldenSourceAssignment, GoldenSourceVersion, OwnerRef, ReviewItem
+from access_review_engine.domain import Campaign, DecisionValue, OwnerRef
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif
 from access_review_engine.reporting import build_report_rows, render_html_report, write_reports
@@ -215,64 +215,6 @@ def test_html_report_premium_controls_and_findings_are_defined() -> None:
     assert ">null<" not in html
     assert "None" not in html
 
-
-
-def test_reporting_exports_findings_delta_decisions_and_golden_source(tmp_path: Path) -> None:
-    campaign = Campaign("export-review", "snapshot-1", display_name="Export Review")
-    item = _report_row(
-        identity="alice",
-        service="CRM",
-        access="CRM-Admin",
-        classification="unexpected",
-        expected="no",
-        observed="yes",
-        decision="revoke",
-        findings="disabled_with_access",
-        identity_status="disabled",
-    )
-    golden = GoldenSourceVersion(
-        "golden-1",
-        2,
-        "imported",
-        "checksum",
-        [GoldenSourceAssignment("corp-ad", "CRM-Admin", "corp-ad", "alice")],
-    )
-    out = tmp_path / "reports"
-    write_reports(out, campaign, [], [], golden)
-
-    html = (out / "campaign-report.html").read_text(encoding="utf-8")
-    assert "Golden Source / matrice d’habilitation" in html
-    assert "Why it matters" in html
-    assert "Recommendation" in html
-    assert 'href="campaign-findings.csv"' in html
-    assert 'id="export-pdf"' in html
-
-    write_reports(out, campaign, [
-        ReviewItem(
-            campaign_id=campaign.id,
-            identity_provider="corp-ad",
-            identity_identifier="alice",
-            identity_status="disabled",
-            access_provider="corp-ad",
-            access_name="CRM-Admin",
-            control_object={"type": "role", "identifier": "CRM-Admin"},
-            permission={"identifier": "admin"},
-            target={"service": {"display_name": "CRM"}, "component": {"display_name": "Production"}},
-            description="",
-            origin=None,
-            expected=False,
-            observed=True,
-            classification="unexpected",
-            findings=["disabled_with_access"],
-            account_owner=None,
-            access_owner=None,
-            reviewer=None,
-        )
-    ], [], golden)
-    for name in ("campaign-findings.csv", "golden-source.csv", "campaign-delta.csv", "campaign-decisions.csv"):
-        assert (out / name).exists()
-    assert "Disabled identity with access" in (out / "campaign-findings.csv").read_text(encoding="utf-8")
-    assert "CRM-Admin" in (out / "golden-source.csv").read_text(encoding="utf-8")
 
 
 def test_campaign_csv_report_neutralizes_spreadsheet_formulas(tmp_path: Path) -> None:

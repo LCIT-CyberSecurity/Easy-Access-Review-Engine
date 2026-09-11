@@ -76,135 +76,6 @@ def write_reports(
     (path / "campaign-report.html").write_text(
         render_html_report(campaign, rows, golden_version, reference_links, role_permissions), encoding="utf-8"
     )
-    _write_csv(path / "campaign-findings.csv", _finding_rows(campaign, rows))
-    _write_csv(path / "golden-source.csv", _golden_source_rows(golden_version, rows, role_permissions))
-    _write_csv(path / "campaign-delta.csv", _delta_rows(campaign, rows))
-    _write_csv(path / "campaign-decisions.csv", _decision_rows(campaign, review_items, decisions))
-
-
-_FINDING_DEFINITIONS: dict[str, dict[str, str]] = {
-    "unexpected": {"level": "ACTION REQUIRED", "title": "Unexpected access", "description": "An observed access is not expected by the Golden Source.", "risk": "The identity may have more privilege than the approved role requires.", "recommendation": "Verify the business need and revoke the access if it is not justified."},
-    "missing": {"level": "ACTION REQUIRED", "title": "Missing expected access", "description": "An access required by the Golden Source was not observed.", "risk": "The identity may be unable to perform an approved business activity.", "recommendation": "Check collection completeness, then restore the access or correct the Golden Source."},
-    "disabled_with_access": {"level": "ACTION REQUIRED", "title": "Disabled identity with access", "description": "A disabled identity still has an observed access.", "risk": "A disabled account with usable access increases the risk of unauthorized use.", "recommendation": "Disable or remove the access after confirming the account lifecycle state."},
-    "technical_account_without_owner": {"level": "ACTION REQUIRED", "title": "Technical account without owner", "description": "A technical account has access but no accountable owner.", "risk": "Responsibility for reviewing and maintaining the access is unclear.", "recommendation": "Assign an active owner and confirm the access remains necessary."},
-    "shared_account_without_owner": {"level": "ACTION REQUIRED", "title": "Shared account without owner", "description": "A shared account has access but no accountable owner.", "risk": "Shared credentials reduce traceability and leave access responsibility is not clearly assigned.", "recommendation": "Assign an owner and review whether a named account can replace it."},
-    "unknown_due_to_scope": {"level": "WARNING", "title": "Unknown due to collection scope", "description": "The available collection scope is insufficient to determine the access state.", "risk": "The result must not be interpreted as proof of compliance or non-compliance.", "recommendation": "Verify the collection perimeter before making a review decision."},
-    "collection_incomplete": {"level": "WARNING", "title": "Incomplete collection", "description": "The source reported an incomplete collection.", "risk": "Missing source data can hide unexpected or missing access.", "recommendation": "Complete or validate the collection before closing the review."},
-}
-
-
-def _script_json(value: object) -> str:
-    return (
-        json.dumps(value)
-        .replace("&", "\\u0026")
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-        .replace("</", "<\\/")
-    )
-
-
-def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
-    fields = list(rows[0]) if rows else ["campaign"]
-    with path.open("w", newline="", encoding="utf-8-sig") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(_spreadsheet_safe_rows(rows))
-
-
-def _finding_rows(campaign: Campaign, rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    result = []
-    for row in rows:
-        finding_names = _row_findings(row)
-        if row.get("classification") in {"unexpected", "missing", "unknown_due_to_scope"}:
-            finding_names = list(dict.fromkeys([str(row["classification"]), *finding_names]))
-        for finding in finding_names:
-            definition = _FINDING_DEFINITIONS.get(finding, {"level": "INFORMATION", "title": _human_label(finding), "description": "The engine reported this review condition.", "risk": "Review the condition in its campaign context.", "recommendation": "Assess the access and record the appropriate decision."})
-            result.append({
-                "campaign": campaign.display_name or campaign.name,
-                "finding_type": finding,
-                "finding_level": definition["level"],
-                "finding_title": definition["title"],
-                "description": definition["description"],
-                "risk": definition["risk"],
-                "identity": row.get("identity", ""),
-                "identity_type": row.get("identity_status", ""),
-                "provider": row.get("provider", ""),
-                "role": row.get("access", ""),
-                "service": row.get("service", ""),
-                "component": row.get("component", ""),
-                "permission": row.get("permission", ""),
-                "owner": row.get("owner", ""),
-                "status": row.get("identity_status", ""),
-                "decision": row.get("decision", ""),
-                "expected": row.get("expected", ""),
-                "observed": row.get("observed", ""),
-                "recommendation": definition["recommendation"],
-            })
-    return result
-
-
-def _row_findings(row: dict[str, object]) -> list[str]:
-    return [item.strip() for item in str(row.get("findings", "")).split(",") if item.strip()]
-
-
-def _human_label(value: str) -> str:
-    return value.replace("_", " ").strip().capitalize()
-
-
-def _golden_source_rows(
-    golden_version: GoldenSourceVersion | None,
-    rows: list[dict[str, object]],
-    role_permissions: dict[str, list[str]],
-) -> list[dict[str, object]]:
-    if not golden_version:
-        return []
-    by_key = {(str(row.get("provider")), str(row.get("access")), str(row.get("identity_provider")), str(row.get("identity"))): row for row in rows}
-    result = []
-    for assignment in golden_version.assignments:
-        row = by_key.get(assignment.key(), {})
-        result.append({
-            "role": assignment.access_name,
-            "service": row.get("service", ""),
-            "component": row.get("component", "") or row.get("access", ""),
-            "provider": assignment.access_provider,
-            "resource_type": row.get("control_object_type", ""),
-            "resource_identifier": row.get("control_object", ""),
-            "permission": row.get("permission", "") or assignment.access_permission or "",
-            "identity": assignment.identity_identifier,
-            "population": assignment.identity_identifier,
-            "owner": row.get("owner", ""),
-            "origin": "Golden Source",
-        })
-    return result
-
-
-def _delta_rows(campaign: Campaign, rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [{
-        "campaign": campaign.display_name or campaign.name,
-        "identity": row.get("identity", ""),
-        "provider": row.get("provider", ""),
-        "role": row.get("access", ""),
-        "service": row.get("service", ""),
-        "component": row.get("component", ""),
-        "permission": row.get("permission", ""),
-        "status": row.get("classification", ""),
-        "expected": row.get("expected", ""),
-        "observed": row.get("observed", ""),
-    } for row in rows]
-
-
-def _decision_rows(campaign: Campaign, review_items: list[ReviewItem], decisions: list[Decision]) -> list[dict[str, object]]:
-    items = {item.id: item for item in review_items}
-    latest = latest_decisions(decisions)
-    return [{
-        "campaign": campaign.display_name or campaign.name,
-        "reviewer": decision.decided_by or "",
-        "identity": items.get(decision.review_item_id).identity_identifier if items.get(decision.review_item_id) else "",
-        "access": items.get(decision.review_item_id).access_name if items.get(decision.review_item_id) else "",
-        "decision": decision.value,
-        "comment": decision.comment or "",
-        "timestamp": decision.created_at,
-    } for decision in latest.values()]
 
 
 def _role_permission_summary(csv_path: str | Path) -> dict[str, list[str]]:
@@ -307,8 +178,6 @@ def render_html_report(
         .replace("</", "<\\/")
     )
     labels_json = json.dumps(_report_labels()).replace("</", "<\\/")
-    findings_json = _script_json(_finding_rows(campaign, rows))
-    golden_json = _script_json(_golden_source_rows(golden_version, rows, role_permissions))
     html = """<!doctype html>
 <html lang="en">
 <head>
@@ -352,8 +221,6 @@ main { max-width:1480px; margin:0 auto; padding:0 40px 96px; }
   padding:72px 0 76px;
   margin-bottom:88px;
 }
-.export-bar { display:flex; gap:14px; flex-wrap:wrap; margin-top:34px; }
-.export-bar a, .export-bar button { min-height:44px; border:1px solid rgba(255,255,255,.35); border-radius:8px; padding:0 16px; background:rgba(255,255,255,.1); color:white; font:inherit; font-weight:800; text-decoration:none; cursor:pointer; }
 .hero-inner { max-width:1480px; margin:0 auto; padding:0 40px; }
 .eyebrow { margin:0 0 18px; color:#bfdbfe; font-size:13px; font-weight:800; text-transform:uppercase; letter-spacing:.08em; }
 h1 { margin:0; font-size:40px; line-height:1.08; letter-spacing:0; }
@@ -402,16 +269,6 @@ h2 { margin:8px 0 0; font-size:32px; line-height:1.15; letter-spacing:0; }
 .finding-count { font-size:34px; line-height:1; font-weight:900; }
 .finding-label { margin-top:20px; font-weight:900; }
 .finding-copy { margin-top:8px; color:var(--muted); font-size:14px; }
-.finding-detail { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:14px; }
-.finding-detail strong { display:block; margin-top:12px; color:var(--ink); font-size:12px; text-transform:uppercase; }
-.finding-objects { margin-top:8px; color:var(--ink); overflow-wrap:anywhere; }
-.golden-summary { display:flex; flex-direction:column; gap:28px; }
-.role-card { background:var(--surface); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); overflow:hidden; }
-.role-toggle { width:100%; border:0; background:white; color:var(--ink); padding:28px 30px; display:flex; justify-content:space-between; gap:24px; text-align:left; font:inherit; cursor:pointer; }
-.role-title { font-size:22px; font-weight:900; }
-.role-meta { margin-top:10px; color:var(--muted); }
-.role-detail { padding:0 30px 30px; border-top:1px solid var(--line); overflow:auto; }
-.matrix-table { min-width:900px; }
 .finding-card.warning { border-color:#fed7aa; }
 .finding-card.danger { border-color:#fecaca; }
 .filter-panel { padding:30px; margin-bottom:36px; }
@@ -469,8 +326,8 @@ tbody tr:hover { background:#f8fbff; }
   .report-hero { color:var(--ink); background:white; padding:28px 0 36px; margin-bottom:48px; border-bottom:1px solid var(--line); }
   .eyebrow, .hero-subtitle, .meta-label, .meta-value { color:var(--ink); }
   .meta-item, .kpi-card, .chart-card, .finding-card, .service-card { box-shadow:none; break-inside:avoid; }
-  .filter-panel, .references, .export-bar { display:none; }
-  .service-detail, .role-detail { display:block !important; }
+  .filter-panel, .references { display:none; }
+  .service-detail { display:block !important; }
   .report-section { margin-top:56px; break-inside:avoid; }
   th { position:static; }
 }
@@ -484,18 +341,11 @@ tbody tr:hover { background:#f8fbff; }
     <p class="hero-subtitle">Analyse des habilitations et comparaison avec la Golden Source.</p>
     <div class="hero-meta">
       <div class="meta-item"><span class="meta-label">Organisation / Provider</span><span class="meta-value">__PROVIDERS__</span></div>
-      <div class="meta-item"><span class="meta-label">Golden Source</span><span class="meta-value">__GOLDEN_VERSION__</span></div>
+      <div class="meta-item"><span class="meta-label">Golden Source</span><span class="meta-value">__GOLDEN__</span></div>
       <div class="meta-item"><span class="meta-label">Generated on</span><span class="meta-value">__GENERATED__</span></div>
       <div class="meta-item"><span class="meta-label">Status</span><span class="meta-value">__STATUS__</span></div>
     </div>
     __REFERENCES__
-    <div class="export-bar" aria-label="Exports">
-      <a href="campaign-findings.csv" download>Exporter Findings CSV</a>
-      <a href="golden-source.csv" download>Exporter Golden Source CSV</a>
-      <a href="campaign-delta.csv" download>Exporter Delta CSV</a>
-      <a href="campaign-decisions.csv" download>Exporter Decisions CSV</a>
-      <button type="button" id="export-pdf">Exporter en PDF</button>
-    </div>
   </div>
 </header>
 <main>
@@ -530,32 +380,7 @@ tbody tr:hover { background:#f8fbff; }
       <h2 id="findings-title">Findings</h2>
       <p class="section-copy">Anomalies et points nécessitant une attention.</p>
     </div>
-    <section class="filter-panel findings-filter-panel" aria-label="Findings filters">
-      <div class="filter-grid">
-        <label class="field">Recherche Findings<input id="finding-search" type="search" placeholder="Search finding, identity, provider, role..."></label>
-        <label class="field">Type<select id="finding-type"><option value="">All types</option>__FINDING_TYPES__</select></label>
-        <label class="field">Provider<select id="finding-provider"><option value="">All providers</option>__FINDING_PROVIDERS__</select></label>
-        <label class="field">Service<select id="finding-service"><option value="">All services</option>__FINDING_SERVICES__</select></label>
-        <label class="field">Status<select id="finding-status"><option value="">All statuses</option>__FINDING_STATUSES__</select></label>
-        <label class="field">Decision<select id="finding-decision"><option value="">All decisions</option>__FINDING_DECISIONS__</select></label>
-        <label class="field">Tri<select id="finding-sort"><option value="finding_type">Type</option><option value="provider">Provider</option><option value="identity">Identity</option><option value="service">Service</option><option value="component">Component</option><option value="role">Role</option></select></label>
-      </div>
-    </section>
     <div class="findings-grid" id="findings-grid"></div>
-    <div class="finding-results" id="finding-results"></div>
-  </section>
-
-  <section class="report-section" aria-labelledby="golden-title">
-    <div class="section-heading">
-      <div class="section-number">03B</div>
-      <div class="section-kicker">Référence des droits</div>
-      <h2 id="golden-title">Golden Source / matrice d’habilitation</h2>
-      <p class="section-copy">Lecture par rôle, service, composant, permission et population attendue.</p>
-    </div>
-    <div class="filter-panel golden-filter-panel">
-      <label class="field">Rechercher dans la Golden Source<input id="golden-search" type="search" placeholder="Search role, service, component, permission, identity, owner..."></label>
-    </div>
-    <div class="golden-summary" id="golden-summary"></div>
   </section>
 
   <section class="report-section" aria-labelledby="details-title">
@@ -579,8 +404,6 @@ tbody tr:hover { background:#f8fbff; }
 </main>
 <script>
 const rows = __DATA__;
-const findingRows = __FINDINGS__;
-const goldenRows = __GOLDEN_ROWS__;
 const labels = __LABELS__;
 const filterNames = ["service","classification","decision","finding","status","reviewer"];
 const sortFields = ["identity","identity_status","expected","observed","classification","findings","decision","reviewer"];
@@ -795,71 +618,17 @@ function renderFindingCards() {
     grid.appendChild(card);
   }
 }
-function renderFindingDetails() {
-  const target = document.getElementById("finding-results");
-  target.replaceChildren();
-  const search = document.getElementById("finding-search").value.toLowerCase();
-  const filtered = findingRows.filter(item => {
-    const haystack = Object.values(item).join(" ").toLowerCase();
-    return (!search || haystack.includes(search))
-      && (!document.getElementById("finding-type").value || item.finding_type === document.getElementById("finding-type").value)
-      && (!document.getElementById("finding-provider").value || item.provider === document.getElementById("finding-provider").value)
-      && (!document.getElementById("finding-service").value || item.service === document.getElementById("finding-service").value)
-      && (!document.getElementById("finding-status").value || item.status === document.getElementById("finding-status").value)
-      && (!document.getElementById("finding-decision").value || item.decision === document.getElementById("finding-decision").value);
-  });
-  const sortKey = document.getElementById("finding-sort").value;
-  filtered.sort((a, b) => String(a[sortKey] || "").localeCompare(String(b[sortKey] || ""), "en", {numeric: true, sensitivity: "base"}));
-  for (const item of filtered) {
-    const card = document.createElement("article"); card.className = "finding-card " + (item.finding_level === "ACTION REQUIRED" ? "danger" : "warning");
-    card.appendChild(textEl("div", item.finding_title, "finding-label"));
-    card.appendChild(textEl("div", item.description, "finding-copy"));
-    const detail = document.createElement("div"); detail.className = "finding-detail";
-    detail.appendChild(textEl("strong", "Why it matters")); detail.appendChild(textEl("div", item.risk));
-    detail.appendChild(textEl("strong", "Objects concerned")); detail.appendChild(textEl("div", [item.identity, item.provider, item.role, item.service, item.component, item.permission, item.owner].filter(Boolean).join(" · "), "finding-objects"));
-    detail.appendChild(textEl("strong", "Recommendation")); detail.appendChild(textEl("div", item.recommendation));
-    card.appendChild(detail); target.appendChild(card);
-  }
-}
-function renderGoldenSource() {
-  const target = document.getElementById("golden-summary"); target.replaceChildren();
-  const search = document.getElementById("golden-search").value.toLowerCase();
-  const filtered = goldenRows.filter(item => Object.values(item).join(" ").toLowerCase().includes(search));
-  const groups = new Map();
-  for (const item of filtered) { if (!groups.has(item.role)) groups.set(item.role, []); groups.get(item.role).push(item); }
-  for (const [role, items] of groups) {
-    const article = document.createElement("article"); article.className = "role-card";
-    const button = document.createElement("button"); button.className = "role-toggle"; button.type = "button"; button.setAttribute("aria-expanded", "false");
-    const title = document.createElement("div"); title.appendChild(textEl("div", role || "Role not specified", "role-title")); title.appendChild(textEl("div", items.length + " expected access" + (items.length === 1 ? "" : "es") + " · " + new Set(items.map(item => item.identity)).size + " identities", "role-meta"));
-    button.appendChild(title); button.appendChild(textEl("span", "Show details"));
-    const detail = document.createElement("div"); detail.className = "role-detail"; detail.hidden = true;
-    const table = document.createElement("table"); table.className = "matrix-table";
-    const headers = ["Service", "Component", "Permission", "Provider", "Identity / population", "Owner", "Origin"];
-    const thead = document.createElement("thead"); const headRow = document.createElement("tr"); headers.forEach(header => headRow.appendChild(textEl("th", header))); thead.appendChild(headRow); table.appendChild(thead);
-    const body = document.createElement("tbody"); items.forEach(item => { const tr = document.createElement("tr"); [item.service, item.component, item.permission, item.provider, item.population || item.identity, item.owner, item.origin].forEach(value => tr.appendChild(textEl("td", value))); body.appendChild(tr); }); table.appendChild(body); detail.appendChild(table);
-    button.addEventListener("click", () => { detail.hidden = !detail.hidden; button.setAttribute("aria-expanded", detail.hidden ? "false" : "true"); button.lastChild.textContent = detail.hidden ? "Show details" : "Hide details"; });
-    article.appendChild(button); article.appendChild(detail); target.appendChild(article);
-  }
-  if (!filtered.length) target.appendChild(textEl("p", "No Golden Source assignments.", "empty-state"));
-}
 function resetFilters() {
   document.getElementById("filter-search").value = "";
   document.getElementById("filter-anomalies").checked = false;
   for (const name of filterNames) document.getElementById("filter-" + name).value = "";
-  for (const id of ["finding-search", "finding-type", "finding-provider", "finding-service", "finding-status", "finding-decision"]) document.getElementById(id).value = "";
-  renderFindingDetails();
   renderDetails();
 }
 for (const name of ["search", ...filterNames]) document.getElementById("filter-" + name).addEventListener("input", renderDetails);
 document.getElementById("filter-anomalies").addEventListener("change", renderDetails);
 document.getElementById("reset-filters").addEventListener("click", resetFilters);
-for (const id of ["finding-search", "finding-type", "finding-provider", "finding-service", "finding-status", "finding-decision", "finding-sort"]) document.getElementById(id).addEventListener("input", renderFindingDetails);
-document.getElementById("golden-search").addEventListener("input", renderGoldenSource);
-document.getElementById("export-pdf").addEventListener("click", () => window.print());
 renderCharts();
 renderFindingCards();
-renderFindingDetails();
-renderGoldenSource();
 renderDetails();
 </script>
 </body>
@@ -867,7 +636,7 @@ renderDetails();
     replacements = {
         "__CAMPAIGN_TITLE__": escape(campaign_name),
         "__PROVIDERS__": escape(", ".join(providers) if providers else "No provider"),
-        "__GOLDEN_VERSION__": escape(f"Golden Source v{golden_version.version}" if golden_version else "none"),
+        "__GOLDEN__": escape(f"Golden Source v{golden_version.version}" if golden_version else "none"),
         "__GENERATED__": escape(generated_at),
         "__STATUS__": escape(str(campaign.status)),
         "__REFERENCES__": references,
@@ -875,21 +644,10 @@ renderDetails();
         "__FILTERS__": filters,
         "__DATA__": data_json,
         "__LABELS__": labels_json,
-        "__FINDINGS__": findings_json,
-        "__GOLDEN_ROWS__": golden_json,
-        "__FINDING_TYPES__": _select_options(sorted({str(item["finding_type"]) for item in _finding_rows(campaign, rows)})),
-        "__FINDING_PROVIDERS__": _select_options(sorted({str(item["provider"]) for item in _finding_rows(campaign, rows)})),
-        "__FINDING_SERVICES__": _select_options(sorted({str(item["service"]) for item in _finding_rows(campaign, rows)})),
-        "__FINDING_STATUSES__": _select_options(sorted({str(item["status"]) for item in _finding_rows(campaign, rows)})),
-        "__FINDING_DECISIONS__": _select_options(sorted({str(item["decision"]) for item in _finding_rows(campaign, rows)})),
     }
     for placeholder, value in replacements.items():
         html = html.replace(placeholder, value)
     return html
-
-
-def _select_options(values: list[str]) -> str:
-    return "".join(f'<option value="{escape(value, quote=True)}">{escape(_human_label(value))}</option>' for value in values if value)
 
 
 def _filter_select_html(name: str, values: list[str]) -> str:
