@@ -194,13 +194,25 @@ def _authentication_report_html(
     assessments = {row["control"]: row for row in rows}
     cards = [f'<div class="auth-provider"><strong>Provider</strong><span>{escape(source.provider)}</span></div>']
     control_names = sorted(
-        {"password_policy", "mfa", "federation", "tokens", "session_policy", "local_authentication"}
-        | set((expected.controls if expected else {}))
+        set((expected.controls if expected else {}))
         | set((observed.controls if observed else {}))
     )
     for name in control_names:
         control = (observed.controls.get(name) if observed else None) or {}
         expected_control = (expected.controls.get(name) if expected else None) or {}
+        expected_has_value = any(
+            key not in {"status", "expected", "observed", "value", "operator", "policies"}
+            and expected_control[key] not in (None, "")
+            for key in expected_control
+        ) or expected_control.get("expected", expected_control.get("value")) not in (None, "")
+        observed_status = str(control.get("status", "not_collected"))
+        observed_has_value = any(
+            key not in {"status", "expected", "observed", "value", "operator"}
+            and control[key] not in (None, "")
+            for key in control
+        ) or control.get("observed", control.get("value")) not in (None, "")
+        if not expected_has_value and not observed_has_value and observed_status in {"not_collected", "not_supported", "unknown", "error"}:
+            continue
         nested = [
             key for key in expected_control
             if key not in {"status", "expected", "observed", "value", "operator", "policies"}
@@ -235,9 +247,12 @@ def _authentication_cards_html(policies: list[dict[str, str]]) -> str:
         ("local_authentication", "Local authentication"), ("status", "Status"),
     ]
     for policy in policies:
+        available = [(key, label) for key, label in fields if policy.get(key) not in (None, "", "Not collected")]
+        if not available:
+            continue
         rows_html = "".join(
-            f'<div class="auth-field"><dt>{escape(label)}</dt><dd>{escape(policy.get(key) or "Not collected")}</dd></div>'
-            for key, label in fields
+            f'<div class="auth-field"><dt>{escape(label)}</dt><dd>{escape(policy[key])}</dd></div>'
+            for key, label in available
         )
         cards.append(f'<article class="auth-card"><h3>{escape(policy["provider"])}</h3><dl class="auth-fields">{rows_html}</dl></article>')
     return f'<div class="authentication-cards">{"".join(cards)}</div>'
