@@ -9,7 +9,7 @@ import pytest
 from access_review_engine.domain import Campaign, DecisionValue, OwnerRef
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif
-from access_review_engine.reporting import build_report_rows, render_html_report, write_reports
+from access_review_engine.reporting import build_report_rows, render_access_matrix, render_html_report, write_reports
 from access_review_engine.services import create_decision, create_snapshot, open_campaign
 
 
@@ -219,6 +219,41 @@ def test_html_report_premium_controls_and_findings_are_defined() -> None:
     assert ">null<" not in html
     assert "None" not in html
 
+
+
+def test_authentication_policy_is_explicit_and_secret_free(tmp_path: Path) -> None:
+    rows = [
+        _report_row(identity="alice", service="CRM", access="CRM-Sales", classification="expected_and_observed", expected="yes", observed="yes", decision="approve", findings=""),
+        _report_row(identity="bob", service="CRM", access="CRM-Admin", classification="expected_and_observed", expected="yes", observed="yes", decision="approve", findings=""),
+    ]
+    rows[0]["authentication"] = {
+        "authentication_method": "Password + SSO",
+        "mfa_requirement": "Required",
+        "mfa_methods": ["TOTP", "FIDO2"],
+        "password_policy": {"minimum_length": 14, "history": 12},
+        "token_policy": {"expiration": "90 days", "token_value": "do-not-render"},
+        "authentication_status": "Compliant",
+    }
+    rows[0]["provider"] = "openldap-corp"
+    rows[1]["provider"] = "entra-corp"
+
+    html = render_html_report(Campaign("auth", "snapshot-1"), rows)
+    assert html.index("Authentication Posture") < html.index("Visualisations")
+    assert "Password + SSO" in html
+    assert "Required" in html
+    assert "TOTP, FIDO2" in html
+    assert "Minimum_length" not in html
+    assert "Minimum Length: 14" in html
+    assert "Compliant" in html
+    assert "Not collected" in html
+    assert "do-not-render" not in html
+
+    matrix_path = tmp_path / "role-permissions.csv"
+    _write_csv(matrix_path, [{"role": "CRM-Admin", "resource": "invoices", "permission": "write"}])
+    matrix = render_access_matrix(matrix_path, [{"provider": "openldap-corp", "authentication": "Password", **{key: "Not collected" for key in ("password", "password_policy", "mfa", "mfa_methods", "sso", "tokens", "token_policy", "session_policy", "local_authentication", "status")}}])
+    assert matrix.index("01 — Authentication Policy") < matrix.index("02 — Golden Access Matrix")
+    assert "openldap-corp" in matrix
+    assert "CRM-Admin" in matrix
 
 
 def test_campaign_csv_report_neutralizes_spreadsheet_formulas(tmp_path: Path) -> None:

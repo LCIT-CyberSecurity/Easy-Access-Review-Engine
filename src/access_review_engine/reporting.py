@@ -71,7 +71,9 @@ def write_reports(
     matrix = path.parent / "policy" / "role-permissions.csv"
     if matrix.exists():
         role_permissions = _role_permission_summary(matrix)
-        (path / "access-matrix.html").write_text(render_access_matrix(matrix), encoding="utf-8")
+        (path / "access-matrix.html").write_text(
+            render_access_matrix(matrix, _authentication_policies(rows)), encoding="utf-8"
+        )
         reference_links.append({"label": "Access matrix", "href": "access-matrix.html"})
     (path / "campaign-report.html").write_text(
         render_html_report(campaign, rows, golden_version, reference_links, role_permissions), encoding="utf-8"
@@ -87,7 +89,105 @@ def _role_permission_summary(csv_path: str | Path) -> dict[str, list[str]]:
     return {role: sorted(items) for role, items in sorted(values.items())}
 
 
-def render_access_matrix(csv_path: str | Path) -> str:
+def _authentication_policies(rows: list[dict[str, object]]) -> list[dict[str, str]]:
+    providers = sorted({str(row.get("provider", "")) for row in rows if str(row.get("provider", ""))})
+    if not providers:
+        return [{"provider": "No provider", **_unknown_authentication_values()}]
+    policies = []
+    for provider in providers:
+        provider_rows = [row for row in rows if str(row.get("provider", "")) == provider]
+        source = {}
+        for row in provider_rows:
+            for key in ("authentication", "authentication_policy", "auth"):
+                value = row.get(key)
+                if isinstance(value, dict):
+                    source.update(value)
+            for key in (
+                "authentication_method", "password_authentication", "password_policy",
+                "mfa_requirement", "mfa_methods", "sso_federation", "token_authentication",
+                "token_policy", "session_policy", "local_authentication", "authentication_status",
+            ):
+                if row.get(key) not in (None, ""):
+                    source[key] = row[key]
+        policies.append({"provider": provider, **_authentication_policy_values(source)})
+    return policies
+
+
+def _unknown_authentication_values() -> dict[str, str]:
+    return {
+        "authentication": "Not collected",
+        "password": "Not collected",
+        "password_policy": "Not collected",
+        "mfa": "Not collected",
+        "mfa_methods": "Not collected",
+        "sso": "Not collected",
+        "tokens": "Not collected",
+        "token_policy": "Not collected",
+        "session_policy": "Not collected",
+        "local_authentication": "Not collected",
+        "status": "Not collected",
+    }
+
+
+def _authentication_policy_values(source: dict[str, object]) -> dict[str, str]:
+    unknown = _unknown_authentication_values()
+    aliases = {
+        "authentication": ("authentication", "authentication_method", "method"),
+        "password": ("password", "password_authentication", "password_enabled"),
+        "password_policy": ("password_policy",),
+        "mfa": ("mfa", "mfa_requirement", "mfa_required"),
+        "mfa_methods": ("mfa_methods", "methods"),
+        "sso": ("sso", "sso_federation", "federation"),
+        "tokens": ("tokens", "token_authentication", "token_enabled"),
+        "token_policy": ("token_policy",),
+        "session_policy": ("session_policy",),
+        "local_authentication": ("local_authentication", "local_auth_allowed"),
+        "status": ("status", "authentication_status"),
+    }
+    for output, keys in aliases.items():
+        for key in keys:
+            if key in source and source[key] not in (None, ""):
+                unknown[output] = _safe_auth_value(source[key])
+                break
+    return unknown
+
+
+def _safe_auth_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "Enabled" if value else "Disabled"
+    if isinstance(value, dict):
+        allowed = {
+            "minimum_length", "history", "lockout_threshold", "lockout_duration",
+            "maximum_age", "expiration", "rotation", "ttl", "scopes", "owner",
+            "required", "enabled", "forbidden", "managed_by",
+        }
+        values = [f"{key.replace('_', ' ').title()}: {value[key]}" for key in value if key in allowed and value[key] not in (None, "")]
+        return "; ".join(values) or "Configured"
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(item) for item in value) or "Not collected"
+    return str(value)
+
+
+def _authentication_cards_html(policies: list[dict[str, str]]) -> str:
+    cards = []
+    fields = [
+        ("authentication", "Authentication"), ("password", "Password"),
+        ("password_policy", "Password policy"), ("mfa", "MFA"),
+        ("mfa_methods", "MFA methods"), ("sso", "SSO / federation"),
+        ("tokens", "Tokens"), ("token_policy", "Token policy"),
+        ("session_policy", "Session policy"),
+        ("local_authentication", "Local authentication"), ("status", "Status"),
+    ]
+    for policy in policies:
+        rows_html = "".join(
+            f'<div class="auth-field"><dt>{escape(label)}</dt><dd>{escape(policy.get(key) or "Not collected")}</dd></div>'
+            for key, label in fields
+        )
+        cards.append(f'<article class="auth-card"><h3>{escape(policy["provider"])}</h3><dl class="auth-fields">{rows_html}</dl></article>')
+    return f'<div class="authentication-cards">{"".join(cards)}</div>'
+
+
+def render_access_matrix(csv_path: str | Path, authentication_policies: list[dict[str, str]] | None = None) -> str:
     path = Path(csv_path)
     with path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
@@ -107,7 +207,7 @@ def render_access_matrix(csv_path: str | Path) -> str:
         + "</tr>"
         for resource in resources
     )
-    return f"""<!doctype html>
+    html = f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -118,7 +218,15 @@ def render_access_matrix(csv_path: str | Path) -> str:
 body {{ margin:0; background:var(--bg); color:var(--ink); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }}
 main {{ max-width:1400px; margin:0 auto; padding:36px; }}
 h1 {{ margin:0; font-size:34px; }}
+h2 {{ margin-top:0; font-size:28px; }}
 p {{ color:var(--muted); }}
+.auth-section {{ margin:64px 0 88px; }}
+.authentication-cards {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:24px; }}
+.auth-card {{ background:white; border:1px solid var(--line); border-radius:8px; padding:28px; box-shadow:0 14px 35px rgba(15,23,42,.06); }}
+.auth-card h3 {{ margin:0 0 24px; font-size:22px; }}
+.auth-fields {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px 24px; }}
+.auth-field dt {{ color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; }}
+.auth-field dd {{ margin:5px 0 0; font-weight:800; overflow-wrap:anywhere; }}
 .matrix {{ margin-top:24px; overflow:auto; background:white; border:1px solid var(--line); border-radius:14px; }}
 table {{ border-collapse:collapse; width:100%; min-width:900px; }}
 th,td {{ padding:14px; border-bottom:1px solid #edf1f5; border-right:1px solid #edf1f5; text-align:left; vertical-align:top; }}
@@ -129,7 +237,9 @@ tbody th {{ font-weight:800; background:#fbfcfd; }}
 .empty {{ color:#a0a8b2; }}
 </style>
 </head>
-<body><main><h1>Access Matrix</h1><p>Role to resource permissions used as the UAT Golden policy reference.</p><section class="matrix"><table><thead><tr><th>Resource</th>{head}</tr></thead><tbody>{body}</tbody></table></section></main></body></html>"""
+<body><main><h1>Golden Source</h1><p>Authentication policy and role-to-resource permissions used as the reference for access reviews.</p><section class="auth-section"><h2>01 — Authentication Policy</h2><p>Expected authentication controls. Unknown values are shown explicitly when the source did not collect them.</p>__AUTHENTICATION_CARDS__</section><section class="matrix"><h2>02 — Golden Access Matrix</h2><table><thead><tr><th>Resource</th>{head}</tr></thead><tbody>{body}</tbody></table></section></main></body></html>"""
+    html = html.replace("__AUTHENTICATION_CARDS__", _authentication_cards_html(authentication_policies or [{"provider": "No provider", **_unknown_authentication_values()}]))
+    return html
 
 
 def _matrix_cell(values: list[str]) -> str:
@@ -169,6 +279,7 @@ def render_html_report(
     }
     filters = "".join(_filter_select_html(name, values) for name, values in options.items())
     references = _reference_links_html(reference_links or [])
+    authentication_html = _authentication_cards_html(_authentication_policies(rows))
     report_rows = _html_safe_rows(rows)
     data_json = (
         json.dumps(report_rows)
@@ -238,6 +349,12 @@ h1 { margin:0; font-size:40px; line-height:1.08; letter-spacing:0; }
 h2 { margin:8px 0 0; font-size:32px; line-height:1.15; letter-spacing:0; }
 .section-copy { margin:16px 0 0; color:var(--muted); font-size:17px; }
 .kpi-groups { display:flex; flex-direction:column; gap:32px; }
+.authentication-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:28px; }
+.auth-card { background:var(--surface); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); padding:30px; }
+.auth-card h3 { margin:0 0 26px; font-size:22px; }
+.auth-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:22px 28px; }
+.auth-field dt { color:var(--muted); font-size:12px; font-weight:900; text-transform:uppercase; }
+.auth-field dd { margin:6px 0 0; font-size:15px; font-weight:800; overflow-wrap:anywhere; }
 .kpi-group { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:28px; }
 .kpi-card, .chart-card, .finding-card, .service-card, .filter-panel {
   background:var(--surface);
@@ -358,6 +475,16 @@ tbody tr:hover { background:#f8fbff; }
       <p class="section-copy">Indicateurs clés de la campagne d’Access Review.</p>
     </div>
     __SUMMARY__
+  </section>
+
+  <section class="report-section" aria-labelledby="authentication-title">
+    <div class="section-heading">
+      <div class="section-number">02</div>
+      <div class="section-kicker">Golden Source</div>
+      <h2 id="authentication-title">Authentication Posture</h2>
+      <p class="section-copy">Expected authentication controls used as the reference for access reviews.</p>
+    </div>
+    __AUTHENTICATION__
   </section>
 
   <section class="report-section" aria-labelledby="charts-title">
@@ -644,6 +771,7 @@ renderDetails();
         "__STATUS__": escape(str(campaign.status)),
         "__REFERENCES__": references,
         "__SUMMARY__": _summary_html(summary),
+        "__AUTHENTICATION__": authentication_html,
         "__FILTERS__": filters,
         "__DATA__": data_json,
         "__LABELS__": labels_json,
@@ -736,8 +864,13 @@ def _kpi_card_html(key: str, value: int) -> str:
 
 
 def _html_safe_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    authentication_payload_keys = {"authentication", "authentication_policy", "auth"}
     return [
-        {key: ("" if value is None else value) for key, value in row.items()}
+        {
+            key: ("" if value is None else value)
+            for key, value in row.items()
+            if key not in authentication_payload_keys
+        }
         for row in rows
     ]
 
