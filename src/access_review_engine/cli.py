@@ -112,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
             golden = next(
                 (
                     hydrate_golden_version(row)
-                    for row in repo.list_payloads("golden_source_versions")
+                    for row in repo.list_payloads("golden_versions")
                     if row["id"] == campaign.golden_source_version_id
                 ),
                 None,
