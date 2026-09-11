@@ -1,0 +1,17 @@
+{
+  "provider": "openldap-corp",
+  "source": "CrashTests-CRM observed authentication fixture",
+  "completeness": "full",
+  "controls": {
+    "password_policy": {
+      "status": "collected",
+      "minimum_length": 14,
+      "history": 12,
+      "maximum_age_seconds": 7776000,
+      "lockout_threshold": 5
+    },
+    "mfa": {"status": "not_supported"},
+    "federation": {"status": "not_supported"},
+    "tokens": {"status": "not_supported"}
+  }
+}

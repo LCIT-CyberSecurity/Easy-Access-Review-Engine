@@ -66,18 +66,13 @@ def collect_crm(
         relations=relations if relations is not None else build_relations(role_permissions(policy_dir)),
         completeness=completeness,
         scope=scope or {"type": "all", "completeness": str(completeness)},
-        authentication_posture=AuthenticationPosture(
-            provider="openldap-corp",
-            source="CrashTests-CRM observed fixture",
-            completeness=str(completeness),
-            controls={
-                "password_policy": {"status": AuthenticationStatus.NOT_COLLECTED},
-                "mfa": {"status": AuthenticationStatus.NOT_SUPPORTED},
-                "federation": {"status": AuthenticationStatus.NOT_SUPPORTED},
-                "tokens": {"status": AuthenticationStatus.NOT_SUPPORTED},
-            },
-        ),
+        authentication_posture=observed_authentication_posture(policy_dir),
     )
+
+
+def observed_authentication_posture(policy_dir: Path = POLICY_DIR) -> AuthenticationPosture:
+    payload = json.loads((policy_dir / "observed-authentication-posture.json").read_text(encoding="utf-8"))
+    return AuthenticationPosture(**payload)
 
 
 def golden_authentication_policy(policy_dir: Path = POLICY_DIR) -> AuthenticationPosture:

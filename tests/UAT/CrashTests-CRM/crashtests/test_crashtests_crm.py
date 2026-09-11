@@ -63,7 +63,7 @@ from access_review_engine.storage import (
     hydrate_snapshot,
 )
 
-from crm_collector import (CRMCollection, collect_crm, direct_permission_assignment, golden_authentication_policy, reject_access_name_collisions)
+from crm_collector import (CRMCollection, collect_crm, direct_permission_assignment, golden_authentication_policy, observed_authentication_posture, reject_access_name_collisions)
 from crm_lab import (
     ARTIFACTS_DIR,
     POLICY_DIR,
