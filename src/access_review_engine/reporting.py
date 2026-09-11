@@ -193,8 +193,14 @@ def _authentication_report_html(
     rows = compare_authentication_posture(expected, observed) if expected else []
     assessments = {row["control"]: row for row in rows}
     cards = [f'<div class="auth-provider"><strong>Provider</strong><span>{escape(source.provider)}</span></div>']
-    for name, control in source.controls.items():
-        nested = [key for key in control if key not in {"status", "expected", "observed", "value", "operator", "policies"}]
+    control_names = sorted(set((expected.controls if expected else {}) | (observed.controls if observed else {})))
+    for name in control_names:
+        control = (observed.controls.get(name) if observed else None) or {}
+        expected_control = (expected.controls.get(name) if expected else None) or {}
+        nested = [
+            key for key in expected_control
+            if key not in {"status", "expected", "observed", "value", "operator", "policies"}
+        ]
         fields = nested or [name]
         for field_name in fields:
             assessment_row = assessments.get(field_name) or assessments.get(name, {})

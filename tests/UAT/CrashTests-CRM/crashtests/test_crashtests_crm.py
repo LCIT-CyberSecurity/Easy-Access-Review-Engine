@@ -608,7 +608,7 @@ def test_reports_are_written_for_troubleshooting_artifacts() -> None:
     campaign, items = open_campaign(_campaign(snapshot, golden), snapshot)
     decisions = [_decision_for(item) for item in items]
     close_campaign(campaign, items, decisions)
-    write_reports(ARTIFACTS_DIR, campaign, items, decisions, golden)
+    write_reports(ARTIFACTS_DIR, campaign, items, decisions, golden, snapshot.authentication_posture)
 
     assert (ARTIFACTS_DIR / "campaign-report.html").exists()
     assert (ARTIFACTS_DIR / "campaign-results.json").exists()
