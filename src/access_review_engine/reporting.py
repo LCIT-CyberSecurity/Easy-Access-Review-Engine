@@ -206,6 +206,8 @@ def _authentication_report_html(
             for key in expected_control
         ) or expected_control.get("expected", expected_control.get("value")) not in (None, "")
         observed_status = str(control.get("status", "not_collected"))
+        if name == "mfa" and observed_status != "collected":
+            continue
         observed_has_value = any(
             key not in {"status", "expected", "observed", "value", "operator"}
             and control[key] not in (None, "")
