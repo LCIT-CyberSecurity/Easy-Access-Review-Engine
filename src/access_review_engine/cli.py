@@ -101,13 +101,28 @@ def main(argv: list[str] | None = None) -> int:
             campaigns = repo.list_payloads("campaigns")
             if not campaigns:
                 raise SystemExit("No campaign found")
-            from access_review_engine.storage import hydrate_campaign, hydrate_decision, hydrate_review_item
+            from access_review_engine.storage import (
+                hydrate_campaign,
+                hydrate_decision,
+                hydrate_golden_version,
+                hydrate_review_item,
+            )
 
+            campaign = hydrate_campaign(campaigns[-1])
+            golden = next(
+                (
+                    hydrate_golden_version(row)
+                    for row in repo.list_payloads("golden_versions")
+                    if row["id"] == campaign.golden_source_version_id
+                ),
+                None,
+            )
             write_reports(
                 args.output_dir,
-                hydrate_campaign(campaigns[-1]),
-                [hydrate_review_item(row) for row in repo.list_payloads("review_items")],
+                campaign,
+                [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row["campaign_id"] == campaign.id],
                 [hydrate_decision(row) for row in repo.list_payloads("decisions")],
+                golden,
             )
             print(f"exported {args.output_dir}")
             return 0
