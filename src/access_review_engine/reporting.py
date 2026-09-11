@@ -193,7 +193,11 @@ def _authentication_report_html(
     rows = compare_authentication_posture(expected, observed) if expected else []
     assessments = {row["control"]: row for row in rows}
     cards = [f'<div class="auth-provider"><strong>Provider</strong><span>{escape(source.provider)}</span></div>']
-    control_names = sorted(set((expected.controls if expected else {}) | (observed.controls if observed else {})))
+    control_names = sorted(
+        {"password_policy", "mfa", "federation", "tokens", "session_policy", "local_authentication"}
+        | set((expected.controls if expected else {}))
+        | set((observed.controls if observed else {}))
+    )
     for name in control_names:
         control = (observed.controls.get(name) if observed else None) or {}
         expected_control = (expected.controls.get(name) if expected else None) or {}
