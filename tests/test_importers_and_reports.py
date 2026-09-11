@@ -126,6 +126,10 @@ def test_html_report_contains_required_sections_and_filters(tmp_path: Path) -> N
     assert "GG_CRM:member" in html
     assert "Native description" not in html
     assert "CRM access" in html
+    fallback_row = _report_row(identity="bob", service="CRM", access="CRM-Admin", classification="unexpected", expected="no", observed="yes", decision="pending", findings="")
+    fallback_row["issue"] = "Observed access not expected"
+    fallback_html = render_html_report(Campaign("finding-table", "snapshot-1"), [fallback_row])
+    assert "Observed access not expected" in fallback_html
 
     out = tmp_path / "reports"
     write_reports(out, campaign, items, decisions)

@@ -304,6 +304,7 @@ tbody tr:hover { background:#f8fbff; }
 .badge.missing, .badge.pending, .badge.unknown_due_to_scope { background:var(--orange-soft); color:#92400e; }
 .badge.not_applicable, .badge.no { background:var(--gray-soft); color:#475569; }
 .finding-list { display:flex; flex-wrap:wrap; gap:8px; }
+.finding-text { color:var(--red); font-weight:800; }
 .no-findings { color:var(--muted); font-weight:800; }
 .results-summary { margin:0 0 22px; color:var(--muted); font-weight:800; }
 @media (max-width:1180px) {
@@ -459,10 +460,12 @@ function groupedRows(items) {
 
 function renderFindingsCell(td, row) {
   const items = normalizedFindings(row);
-  if (!items.length) { td.appendChild(textEl("span", "No findings", "no-findings")); return; }
+  const fallback = value(row, "issue") || (value(row, "classification") !== "expected_and_observed" ? label(value(row, "classification")) : "");
+  if (!items.length && !fallback) { td.appendChild(textEl("span", "No findings", "no-findings")); return; }
   const list = document.createElement("div");
   list.className = "finding-list";
   for (const item of items) list.appendChild(badge(label(item), "warn"));
+  if (!items.length && fallback) list.appendChild(textEl("span", fallback, "finding-text"));
   td.appendChild(list);
 }
 
@@ -758,6 +761,13 @@ def _report_labels() -> dict[str, str]:
         "disabled_with_access": "Disabled user with access",
         "technical_account_without_owner": "Technical account without owner",
         "shared_account_without_owner": "Shared account without owner",
+        "collection_incomplete": "Incomplete collection",
+        "invalid_owner": "Invalid owner",
+        "unknown_identity": "Unknown identity",
+        "unknown_provider": "Unknown provider",
+        "orphaned_access": "Orphaned access",
+        "deleted_account_with_access": "Deleted account with access",
+        "decision_on_missing_object": "Decision on missing object",
         "approve": "Approve",
         "revoke": "Revoke",
         "not_applicable": "Not applicable",
