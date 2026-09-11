@@ -1,0 +1,9 @@
+services:
+  crashtests-openldap:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eare-crashtests-openldap:debian13-slim
+    container_name: eare-crashtests-openldap
+    network_mode: none
+    command: ["/bin/sh", "-c", "slapd -h 'ldap:/// ldapi:///' -d 0"]

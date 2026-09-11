@@ -46,7 +46,7 @@ def main() -> int:
     failures = 0
     skipped = 0
     tests = 0
-    for path in sorted((root / "tests").rglob("test_*.py")):
+    for path in _iter_test_paths(root, sys.argv[1:]):
         module = _load_module(path)
         for name, value in sorted(vars(module).items()):
             if name.startswith("test_") and callable(value):
@@ -64,6 +64,28 @@ def main() -> int:
                     traceback.print_exc()
     print(f"{tests - failures - skipped} passed, {failures} failed, {skipped} skipped")
     return 1 if failures else 0
+
+
+def _iter_test_paths(root: Path, args: list[str]) -> list[Path]:
+    selected = [arg for arg in args if arg and not arg.startswith("-")]
+    if not selected:
+        return sorted((root / "tests").rglob("test_*.py"))
+
+    paths: list[Path] = []
+    seen: set[Path] = set()
+    for value in selected:
+        candidate = (root / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+        if candidate.is_dir():
+            matches = sorted(candidate.rglob("test_*.py"))
+        elif candidate.is_file():
+            matches = [candidate]
+        else:
+            continue
+        for match in matches:
+            if match not in seen:
+                seen.add(match)
+                paths.append(match)
+    return paths
 
 
 def _load_module(path: Path) -> Any:

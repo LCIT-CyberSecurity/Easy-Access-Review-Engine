@@ -1,0 +1,17 @@
+services:
+  crashtests-crm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eare-crashtests-crm:debian13-slim
+    container_name: eare-crashtests-crm
+    network_mode: none
+    volumes:
+      - crashtests-crm-data:/srv/crm
+      - ./policy:/opt/crashtests-crm/policy:ro
+      - ./seed:/opt/crashtests-crm/seed:ro
+    command: ["/bin/sh", "-c", "rm -f /srv/crm/.ready && python3 /opt/crashtests-crm/seed/generate_data.py --root /srv/crm --policy /opt/crashtests-crm/policy && touch /srv/crm/.ready && sleep infinity"]
+
+volumes:
+  crashtests-crm-data:
+    name: eare-crashtests-crm-data
