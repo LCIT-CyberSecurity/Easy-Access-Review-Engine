@@ -58,6 +58,15 @@ class Completeness(StrEnum):
     UNKNOWN = "unknown"
 
 
+class AuthenticationStatus(StrEnum):
+    COLLECTED = "collected"
+    NOT_CONFIGURED = "not_configured"
+    NOT_SUPPORTED = "not_supported"
+    NOT_COLLECTED = "not_collected"
+    UNKNOWN = "unknown"
+    ERROR = "error"
+
+
 class ComparisonState(StrEnum):
     EXPECTED_AND_OBSERVED = "expected_and_observed"
     UNEXPECTED = "unexpected"
@@ -382,6 +391,16 @@ class GoldenSourceAssignment:
 
 
 @dataclass
+class AuthenticationPosture:
+    provider: str
+    controls: dict[str, JsonDict] = field(default_factory=dict)
+    source: str | None = None
+    completeness: str = str(Completeness.UNKNOWN)
+    id: str = field(default_factory=new_id)
+    collected_at: str = field(default_factory=now_utc)
+
+
+@dataclass
 class GoldenSourceVersion:
     golden_source_id: str
     version: int
@@ -393,6 +412,7 @@ class GoldenSourceVersion:
     parent_version_id: str | None = None
     comment: str | None = None
     created_by: str | None = None
+    golden_authentication_policy: AuthenticationPosture | None = None
     id: str = field(default_factory=new_id)
     created_at: str = field(default_factory=now_utc)
 
@@ -407,6 +427,7 @@ class Snapshot:
     source_import_ids: list[str]
     access_relations: list[AccessRelation] = field(default_factory=list)
     comparison_states: list[JsonDict] = field(default_factory=list)
+    authentication_posture: AuthenticationPosture | None = None
     id: str = field(default_factory=new_id)
     created_at: str = field(default_factory=now_utc)
     immutable: bool = True

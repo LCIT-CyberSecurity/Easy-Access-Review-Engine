@@ -15,7 +15,7 @@ LDAP_PASSWORD="${LDAP_PASSWORD:-}"
 LDAP_PASSWORD_FILE="${LDAP_PASSWORD_FILE:-}"
 LDAP_CA_CERT="${LDAP_CA_CERT:-}"
 SEARCH_SCOPE="${SEARCH_SCOPE:-sub}"
-LDAP_FILTER="${LDAP_FILTER:-(|(objectClass=inetOrgPerson)(objectClass=posixAccount)(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))}"
+LDAP_FILTER="${LDAP_FILTER:-(|(objectClass=inetOrgPerson)(objectClass=posixAccount)(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup)(objectClass=pwdPolicy))}"
 START_TLS="${START_TLS:-0}"
 ALLOW_ANONYMOUS="${ALLOW_ANONYMOUS:-0}"
 ALLOW_PARTIAL="${ALLOW_PARTIAL:-0}"
@@ -28,7 +28,7 @@ if [[ "$OUTPUT" != /* ]]; then
   OUTPUT="$PWD/$OUTPUT"
 fi
 COLLECTOR_VERSION="1"
-LDIF_ATTRIBUTES=(objectClass entryUUID uid cn mail description member uniqueMember memberUid)
+LDIF_ATTRIBUTES=(objectClass entryUUID uid cn mail description member uniqueMember memberUid pwdMinLength pwdInHistory pwdMinAge pwdMaxAge pwdMaxFailure pwdFailureCountInterval pwdLockout pwdLockoutDuration pwdMustChange pwdAllowUserChange pwdSafeModify pwdPolicySubentry)
 
 for value_name in PAGE_SIZE CONNECTION_TIMEOUT_SECONDS SEARCH_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS; do
   value="${!value_name}"

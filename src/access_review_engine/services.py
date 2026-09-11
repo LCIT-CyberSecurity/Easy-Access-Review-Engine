@@ -11,6 +11,7 @@ from access_review_engine.domain import (
     AccessPath,
     AccessRelation,
     AccessRelationType,
+    AuthenticationPosture,
     AuditEvent,
     Campaign,
     CampaignStatus,
@@ -577,6 +578,7 @@ def create_snapshot(
     golden_version: GoldenSourceVersion | None = None,
     import_scope: dict[str, object] | None = None,
     access_relations: list[AccessRelation] | None = None,
+    authentication_posture: AuthenticationPosture | None = None,
 ) -> Snapshot:
     snapshot = Snapshot(
         providers=deepcopy(providers),  # type: ignore[arg-type]
@@ -586,6 +588,7 @@ def create_snapshot(
         access_assignments=deepcopy(assignments),
         source_import_ids=list(source_import_ids),
         access_relations=deepcopy(list(access_relations or [])),
+        authentication_posture=deepcopy(authentication_posture),
     )
     snapshot.comparison_states = compare_snapshot(snapshot, golden_version, import_scope)
     return snapshot.finalize()
@@ -604,13 +607,17 @@ def create_golden_version(
     source_campaign_id: str | None = None,
     parent_version_id: str | None = None,
     comment: str | None = None,
+    golden_authentication_policy: AuthenticationPosture | None = None,
 ) -> GoldenSourceVersion:
     previous = list(previous_versions)
     version = max((item.version for item in previous), default=0) + 1
     incoming = list(assignments)
     _reject_duplicate_stable_golden_keys(incoming)
     ordered = sorted(set(incoming), key=lambda item: item.key())
-    checksum = stable_checksum([asdict(item) for item in ordered])
+    checksum = stable_checksum({
+        "assignments": [asdict(item) for item in ordered],
+        "golden_authentication_policy": asdict(golden_authentication_policy) if golden_authentication_policy else None,
+    })
     return GoldenSourceVersion(
         golden_source_id=golden_source.id,
         version=version,
@@ -621,6 +628,7 @@ def create_golden_version(
         source_campaign_id=source_campaign_id,
         parent_version_id=parent_version_id,
         comment=comment,
+        golden_authentication_policy=deepcopy(golden_authentication_policy),
     )
 
 
@@ -669,6 +677,7 @@ def promote_snapshot(
         previous,
         source_snapshot_id=snapshot.id,
         parent_version_id=parent_id,
+        golden_authentication_policy=snapshot.authentication_posture,
     )
 
 

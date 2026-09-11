@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from io import TextIOWrapper
@@ -11,6 +12,7 @@ from access_review_engine.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
+    AuthenticationPosture,
     AssignmentType,
     Completeness,
     ControlObject,
@@ -27,7 +29,7 @@ from access_review_engine.domain import (
 )
 
 REQUIRED_AD_FILES = {"manifest.yaml", "users.csv", "groups.csv", "memberships.csv"}
-OPTIONAL_AD_FILES = {"service_accounts.csv", "computers.csv", "collection-errors.csv"}
+OPTIONAL_AD_FILES = {"service_accounts.csv", "computers.csv", "collection-errors.csv", "authentication-posture.json"}
 ALLOWED_AD_FILES = REQUIRED_AD_FILES | OPTIONAL_AD_FILES
 MAX_AD_ZIP_FILES = 16
 DEFAULT_AD_ARCHIVE_BYTES = 500_000_000
@@ -59,6 +61,7 @@ class ImportResult:
     accesses: list[Access]
     assignments: list[AccessAssignment]
     access_relations: list[AccessRelation] = field(default_factory=list)
+    authentication_posture: AuthenticationPosture | None = None
 
 
 def import_ad_zip(
@@ -106,6 +109,10 @@ def import_ad_zip(
             computers = _read_csv(zf, "computers.csv") if "computers.csv" in unique_names else []
             collection_errors = (
                 _read_csv(zf, "collection-errors.csv") if "collection-errors.csv" in unique_names else []
+            )
+            authentication_posture = (
+                _read_authentication_posture(zf.read("authentication-posture.json"), str(provider_name))
+                if "authentication-posture.json" in unique_names else None
             )
     except BadZipFile as exc:
         raise ValueError("Invalid ZIP archive") from exc
@@ -188,6 +195,7 @@ def import_ad_zip(
             "computers": computers,
             "memberships": memberships,
             "collection_errors": collection_errors,
+            "authentication_posture": authentication_posture,
         }
     )
     batch = ImportBatch(
@@ -207,7 +215,47 @@ def import_ad_zip(
     from access_review_engine.domain import now_utc
 
     batch.completed_at = now_utc()
-    return ImportResult(batch, provider, identities, accesses, assignments)
+    return ImportResult(
+        batch, provider, identities, accesses, assignments, authentication_posture=authentication_posture
+    )
+
+
+_FORBIDDEN_AUTH_KEYS = {
+    "userpassword", "unicodepwd", "supplementalcredentials", "ntpwdhistory",
+    "passwordhash", "token", "accesstoken", "refreshtoken", "apikey",
+    "privatekey", "clientsecret", "credential", "credentials",
+}
+
+def _read_authentication_posture(raw: bytes, expected_provider: str) -> AuthenticationPosture:
+    payload = json.loads(raw.decode("utf-8-sig"))
+    if not isinstance(payload, dict):
+        raise ValueError("authentication-posture.json must contain an object")
+    def clean(value: object) -> object:
+        if isinstance(value, dict):
+            result = {}
+            for key, item in value.items():
+                if str(key).replace("_", "").replace("-", "").lower() in _FORBIDDEN_AUTH_KEYS:
+                    raise ValueError("authentication posture contains a forbidden secret field")
+                result[str(key)] = clean(item)
+            return result
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        return value
+    safe = clean(payload)
+    provider = safe.get("provider")
+    if not isinstance(provider, str) or not provider:
+        raise ValueError("authentication-posture.json must define provider")
+    if safe.get("provider") != expected_provider:
+        raise ValueError("authentication-posture.json provider does not match manifest provider")
+    controls = safe.get("controls", {})
+    if not isinstance(controls, dict):
+        raise ValueError("authentication-posture.json controls must be an object")
+    return AuthenticationPosture(
+        provider=provider,
+        controls=controls,
+        source=safe.get("source"),
+        completeness=str(safe.get("completeness", Completeness.UNKNOWN)),
+    )
 
 
 def _validate_zip_members(

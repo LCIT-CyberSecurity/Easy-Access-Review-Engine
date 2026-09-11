@@ -32,6 +32,7 @@ from access_review_engine.storage import (
     hydrate_assignment,
     hydrate_identity,
     hydrate_provider,
+    hydrate_authentication_posture,
 )
 
 
@@ -128,6 +129,18 @@ def persist_import_result(
     if authoritative and resolved_authoritative:
         snapshot_assignments = _load_assignments(repo, result.provider.name)
 
+    authentication_posture = result.authentication_posture
+    if (
+        authentication_posture is None
+        or result.batch.completeness != Completeness.FULL
+        or authentication_posture.completeness != str(Completeness.FULL)
+    ):
+        for payload in reversed(repo.list_payloads("snapshots")):
+            previous = payload.get("authentication_posture")
+            if isinstance(previous, dict) and previous.get("provider") == result.provider.name:
+                authentication_posture = hydrate_authentication_posture(previous)
+                break
+
     snapshot = create_snapshot(
         [result.provider],
         _load_identities(repo),
@@ -138,6 +151,7 @@ def persist_import_result(
         golden_version,
         result.batch.scope,
         _load_access_relations(repo),
+        authentication_posture=authentication_posture,
     )
     repo.insert_append_only("snapshots", snapshot)
     return snapshot

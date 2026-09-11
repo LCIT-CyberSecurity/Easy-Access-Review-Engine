@@ -10,6 +10,7 @@ from access_review_engine.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
+    AuthenticationPosture,
     AuditEvent,
     Campaign,
     Decision,
@@ -282,6 +283,12 @@ def hydrate_access_relation(data: dict[str, Any]) -> AccessRelation:
     return AccessRelation(**(data | {"origin": Origin(**data["origin"])}))
 
 
+def hydrate_authentication_posture(data: dict[str, Any] | None) -> AuthenticationPosture | None:
+    if not data:
+        return None
+    return AuthenticationPosture(**data)
+
+
 def hydrate_snapshot(data: dict[str, Any]) -> Snapshot:
     return Snapshot(
         providers=[hydrate_provider(item) for item in data["providers"]],
@@ -294,6 +301,7 @@ def hydrate_snapshot(data: dict[str, Any]) -> Snapshot:
             hydrate_access_relation(item) for item in data.get("access_relations", [])
         ],
         comparison_states=data.get("comparison_states", []),
+        authentication_posture=hydrate_authentication_posture(data.get("authentication_posture")),
         id=data["id"],
         created_at=data["created_at"],
         immutable=data.get("immutable", True),
@@ -309,7 +317,10 @@ def hydrate_golden_version(data: dict[str, Any]) -> GoldenSourceVersion:
     from access_review_engine.domain import GoldenSourceAssignment
 
     return GoldenSourceVersion(
-        **(data | {"assignments": [GoldenSourceAssignment(**item) for item in data["assignments"]]})
+        **(data | {
+            "assignments": [GoldenSourceAssignment(**item) for item in data["assignments"]],
+            "golden_authentication_policy": hydrate_authentication_posture(data.get("golden_authentication_policy")),
+        })
     )
 
 
