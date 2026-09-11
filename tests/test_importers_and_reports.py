@@ -107,12 +107,22 @@ def test_html_report_contains_required_sections_and_filters(tmp_path: Path) -> N
     decisions = [create_decision(items[0], DecisionValue.APPROVE, None, "jean.dupont")]
     rows = build_report_rows(items, decisions)
     html = render_html_report(campaign, rows)
-    assert "Access Review - q1" in html
-    assert "Golden Source version: none" in html
+    assert "Access Review Report - q1" in html
+    assert "Golden Source" in html
+    assert "none" in html
+    assert "Vue d’ensemble" in html
+    assert "Visualisations" in html
+    assert "Findings" in html
+    assert "Par service / accès" in html
+    assert "filter-search" in html
+    assert "filter-service" in html
+    assert "filter-classification" in html
+    assert "filter-decision" in html
+    assert "filter-finding" in html
+    assert "filter-status" in html
     assert "filter-reviewer" in html
-    assert "filter-identity" in html
-    assert "filter-access" in html
-    assert "Roles only" in html
+    assert "Only anomalies" in html
+    assert "Reset filters" in html
     assert "GG_CRM:member" in html
     assert "Native description" not in html
     assert "CRM access" in html
@@ -122,6 +132,88 @@ def test_html_report_contains_required_sections_and_filters(tmp_path: Path) -> N
     assert (out / "campaign-report.html").exists()
     assert (out / "campaign-results.csv").exists()
     assert (out / "campaign-results.json").exists()
+
+
+
+def test_html_report_handles_empty_campaign_with_premium_sections() -> None:
+    html = render_html_report(Campaign("empty", "snapshot-1"), [])
+    assert "No provider" in html
+    assert "Access Review Outcome" in html
+    assert "No data" in html
+    assert "No matching rows." in html
+    assert "kpi-groups" in html
+    assert "charts-grid" in html
+
+
+def test_html_report_premium_controls_and_findings_are_defined() -> None:
+    campaign = Campaign("premium", "snapshot-1", status="open", display_name="Premium Review")
+    rows = [
+        _report_row(
+            identity="alice",
+            service="CRM-Sales",
+            access="CRM-Sales",
+            classification="expected_and_observed",
+            expected="yes",
+            observed="yes",
+            decision="approve",
+            findings="",
+            comment=None,
+        ),
+        _report_row(
+            identity="bob",
+            service="CRM-Admin",
+            access="CRM-Admin",
+            classification="unexpected",
+            expected="no",
+            observed="yes",
+            decision="revoke",
+            findings="disabled_with_access, technical_account_without_owner",
+            identity_status="disabled",
+        ),
+        _report_row(
+            identity="carol",
+            service="CRM-Support",
+            access="CRM-Support",
+            classification="missing",
+            expected="yes",
+            observed="no",
+            decision="pending",
+            findings="shared_account_without_owner",
+        ),
+        _report_row(
+            identity="dan",
+            service="CRM-Compta",
+            access="CRM-Compta",
+            classification="unknown_due_to_scope",
+            expected="no",
+            observed="yes",
+            decision="not_applicable",
+            findings="collection_incomplete",
+        ),
+    ]
+
+    html = render_html_report(campaign, rows)
+
+    assert "Premium Review" in html
+    assert "Access Review Outcome" in html
+    assert "Review Decisions" in html
+    assert "Accesses by service / role" in html
+    assert "No findings" in html
+    assert "Disabled user with access" in html
+    assert "Technical account without owner" in html
+    assert "Shared account without owner" in html
+    assert "Unknown due to scope" in html
+    assert "filter-anomalies" in html
+    assert "sortFields" in html
+    assert "identity_status" in html
+    assert "aria-expanded" in html
+    assert "service-card" in html
+    assert "donutChart" in html
+    assert "barChart" in html
+    assert "innerHTML" not in html
+    assert "undefined" not in html
+    assert ">null<" not in html
+    assert "None" not in html
 
 
 
@@ -165,6 +257,44 @@ def test_campaign_csv_report_neutralizes_spreadsheet_formulas(tmp_path: Path) ->
     json_report = (out / "campaign-results.json").read_text(encoding="utf-8")
     assert "HYPERLINK" in json_report
     assert "'=HYPERLINK" not in json_report
+
+
+def _report_row(
+    *,
+    identity: str,
+    service: str,
+    access: str,
+    classification: str,
+    expected: str,
+    observed: str,
+    decision: str,
+    findings: str,
+    identity_status: str = "active",
+    comment: str | None = "reviewed",
+) -> dict[str, object]:
+    return {
+        "owner": "corp-ad/reviewer",
+        "service": service,
+        "component": "",
+        "provider": "corp-ad",
+        "control_object_type": "group",
+        "control_object": access,
+        "permission": "member",
+        "access": access,
+        "description": "",
+        "identity": identity,
+        "identity_provider": "corp-ad",
+        "identity_status": identity_status,
+        "expected": expected,
+        "observed": observed,
+        "classification": classification,
+        "findings": findings,
+        "issue": findings,
+        "decision": decision,
+        "reviewer": "corp-ad/reviewer",
+        "comment": comment,
+    }
+
 
 def _ad_zip(tmp_path: Path) -> Path:
     archive = tmp_path / "corp-ad-export.zip"
