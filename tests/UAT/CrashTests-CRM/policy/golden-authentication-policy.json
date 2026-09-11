@@ -1,0 +1,14 @@
+{
+  "provider": "openldap-corp",
+  "source": "CrashTests-CRM Golden fixture",
+  "completeness": "full",
+  "controls": {
+    "password_policy": {
+      "minimum_length": {"value": 14, "operator": "gte"},
+      "history": {"value": 12, "operator": "gte"},
+      "maximum_age_seconds": {"value": 7776000, "operator": "lte"},
+      "lockout_threshold": {"value": 5, "operator": "lte"}
+    },
+    "mfa": {"expected": "required"}
+  }
+}

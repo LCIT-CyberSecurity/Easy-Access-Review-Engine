@@ -192,18 +192,25 @@ def _authentication_report_html(
     assert source is not None
     rows = compare_authentication_posture(expected, observed) if expected else []
     assessments = {row["control"]: row for row in rows}
-    cards = []
+    cards = [f'<div class="auth-provider"><strong>Provider</strong><span>{escape(source.provider)}</span></div>']
     for name, control in source.controls.items():
-        status = str(control.get("status", "not_collected"))
-        assessment = assessments.get(name, {}).get("assessment", status)
-        expected_value = assessments.get(name, {}).get("expected", "Not configured")
-        observed_value = assessments.get(name, {}).get("observed", control.get("value", status))
-        cards.append(
-            f'<article class="auth-card"><h3>{escape(name.replace("_", " ").title())}</h3>'
-            f'<dl class="auth-fields"><div class="auth-field"><dt>Expected</dt><dd>{escape(_safe_auth_value(expected_value))}</dd></div>'
-            f'<div class="auth-field"><dt>Observed</dt><dd>{escape(_safe_auth_value(observed_value))}</dd></div>'
-            f'<div class="auth-field"><dt>Assessment</dt><dd>{escape(str(assessment).title())}</dd></div></dl></article>'
-        )
+        nested = [key for key in control if key not in {"status", "expected", "observed", "value", "operator", "policies"}]
+        fields = nested or [name]
+        for field_name in fields:
+            assessment_row = assessments.get(field_name) or assessments.get(name, {})
+            expected_value = assessment_row.get("expected", "Not configured")
+            if field_name == name:
+                observed_value = assessment_row.get("observed", control.get("value", control.get("status", "Not collected")))
+            else:
+                observed_value = assessment_row.get("observed", control.get(field_name, control.get("status", "Not collected")))
+            assessment = assessment_row.get("assessment", control.get("status", "not_collected"))
+            title = name.replace("_", " ").title() if field_name == name else f"{name.replace('_', ' ').title()} — {field_name.replace('_', ' ').title()}"
+            cards.append(
+                f'<article class="auth-card"><h3>{escape(title)}</h3>'
+                f'<dl class="auth-fields"><div class="auth-field"><dt>Expected</dt><dd>{escape(_safe_auth_value(expected_value))}</dd></div>'
+                f'<div class="auth-field"><dt>Observed</dt><dd>{escape(_safe_auth_value(observed_value))}</dd></div>'
+                f'<div class="auth-field"><dt>Assessment</dt><dd>{escape(str(assessment).title())}</dd></div></dl></article>'
+            )
     return f'<div class="authentication-cards">{"".join(cards)}</div>'
 
 

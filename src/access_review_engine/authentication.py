@@ -18,11 +18,13 @@ def compare_authentication_posture(
         fields = _expected_fields(expected_control)
         if not fields:
             fields = [(control_name, expected_control.get("expected", expected_control.get("value")), expected_control)]
+        status = str(observed_control.get("status", AuthenticationStatus.NOT_COLLECTED))
         for field_name, expected_value, constraint in fields:
             observed_value = observed_control.get(field_name)
             if field_name == control_name and observed_value is None:
                 observed_value = observed_control.get("observed", observed_control.get("value"))
-            status = str(observed_control.get("status", AuthenticationStatus.NOT_COLLECTED))
+            if observed_value is None and status != str(AuthenticationStatus.COLLECTED):
+                observed_value = status
             assessment = _assessment(constraint, observed_control, status, expected_value, observed_value)
             rows.append({"control": field_name if field_name != control_name else control_name, "expected": expected_value, "observed": observed_value, "assessment": assessment})
     return rows
