@@ -147,6 +147,44 @@ Access.permission.identifier = member
 
 The access is not the assignment. It describes what can be held. The assignment describes who holds it and through which origin.
 
+
+For the stable core, an access may be opaque, composite or fine-grained. `target` and `permission`
+are optional, and `permission` remains singular: separate actions are separate Access objects.
+A composite role is not a new domain class; it is an Access with direct `AccessRelation` edges of
+type `grants`. Derived effective access is calculated from direct assignments and relations and is
+not persisted as a direct assignment.
+
+The historical `(provider, name)` identity is retained for SQLite and legacy compatibility. A
+provider `native_id` is a reconciliation aid for stable renames such as AD SID and OpenLDAP
+`entryUUID`; it is not automatically a universal Access identity. A `null` to known enrichment is
+accepted, while known values are not erased by a less complete collection. Incompatible known
+Target or Permission values under the same logical key are rejected with
+`ACCESS_DEFINITION_COLLISION` rather than merged silently.
+
+
+The descriptors have deliberately narrow responsibilities:
+
+- `ControlObject` identifies the native or logical object when one exists, such as an AD group or
+  an application role.
+- `Target` identifies a real target when supplied by the source. It is optional and is not invented
+  for opaque entitlements.
+- `Permission` identifies one provider-specific action and is optional. Examples include `read`,
+  `write`, `SELECT`, `get`, `list` and `s3:GetObject`.
+- `Origin` and metadata preserve source context, conditions and native details without turning EARE
+  into a universal policy evaluator.
+
+Examples:
+
+```text
+PREMIUM_USER                         target=null                  permission=null
+CRM-Sales                            target=null                  permission=null
+Contacts                             target=Contacts              permission=null
+Contacts:Read                        target=Contacts              permission=read
+FinanceBucket:GetObject              target=arn:aws:s3:::finance/* permission=s3:GetObject
+```
+
+`Contacts:Read` and `Contacts:Write` remain separate Access objects even when they share a target.
+
 ### 4.4 AccessAssignment
 
 An `AccessAssignment` links an identity to an access. It also carries the origin of that observation.
@@ -772,6 +810,13 @@ Current MVP mostly covers this phase:
 - standalone reporting;
 - minimal CLI/API;
 - safety tests for incomplete collection and stable IDs.
+
+
+
+The `improve-model` hardening branch currently reports `197 passed, 0 failed, 7 skipped`. The
+skipped checks require Docker or PowerShell. Multi-provider future systems are currently covered
+by model fixtures only; no AWS, Azure, GCP, Entra ID, Keycloak, Kubernetes or GitHub connector is
+part of this MVP.
 
 Remaining Phase 1 hardening:
 

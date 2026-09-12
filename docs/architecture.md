@@ -37,6 +37,37 @@ pas de champ AD, LDAP, cloud ou application-specifique. Une appartenance AD/LDAP
 observee est un `AccessAssignment`. Les groupes peuvent eux-memes etre titulaires d'assignments, ce
 qui preserve les groupes imbriques sans aplatir les chemins.
 
+### Contrat Access stabilise
+
+- `Access` peut etre opaque, composite ou fin.
+- `target` et `permission` sont optionnels; une permission reste singuliere.
+- Un role ou groupe compose reste un `Access`; ses enfants sont des `AccessRelation` de type
+  `grants`.
+- `AccessAssignment` represente uniquement une attribution directe. Les droits effectifs sont
+  calcules et portent leurs chemins de provenance sans etre materialises comme assignments.
+- La cle historique `(provider, name)` est conservee pour la compatibilite SQLite, snapshots,
+  Golden et campagnes. `native_id` aide la reconciliation des renommages AD/OpenLDAP mais ne devient
+  pas une identite universelle.
+- Un enrichissement `null -> valeur` est accepte; une collecte moins riche ne remplace pas une
+  valeur connue par `null`. Deux definitions connues incompatibles sont refusees avec
+  `ACCESS_DEFINITION_COLLISION`.
+
+### Frontiere des connecteurs
+
+AD et OpenLDAP sont les seuls connecteurs integres et testes. AWS, Azure, GCP, Entra ID, Keycloak,
+Kubernetes et GitHub sont couverts uniquement par des fixtures de modele: aucune collecte native ni
+moteur IAM specifique n'est introduit dans le coeur.
+
+La branche `improve-model` valide le coeur avec `197 passed, 0 failed, 7 skipped`. Les tests ignores
+necessitent Docker ou `pwsh`; les controles `ruff` et `mypy` restent a executer dans un environnement
+de developpement equipe.
+
+
+Les CrashTests-CRM constituent la reference executable de cette composition: ils couvrent
+`CRM-Sales`, les permissions `contacts:read`/`contacts:write`, le role composition drift, les
+multipaths, les cycles, la provenance, la persistence SQLite, la Golden Source, les campagnes et
+la remediation.
+
 ## Collecte distante
 
 La collecte distante reste une couche d'acquisition uniquement:

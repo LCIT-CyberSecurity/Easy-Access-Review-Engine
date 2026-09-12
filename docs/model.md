@@ -30,6 +30,34 @@ Le type de relation MVP est limite a `grants`. Une relation porte un `origin` et
 
 Les descripteurs `ControlObject`, `Permission`, `Target` et `Origin` restent attaches aux Access ou aux relations. Ils decrivent l'objet controle, la permission, la cible et la provenance sans transformer le core en modele IAM specifique a un provider.
 
+
+### A quoi servent les descripteurs
+
+- `ControlObject` identifie l'objet natif ou logique auquel l'habilitation se rapporte quand il
+  existe, par exemple un groupe AD, un role applicatif ou un permission set. Il peut rester absent
+  pour un Access opaque.
+- `Target` identifie la cible lorsque le provider la fournit reellement. Il est optionnel et ne doit
+  pas etre invente pour un entitlement opaque. Exemples: `Contacts`, `/srv/finance`,
+  `arn:aws:s3:::finance/*` ou `namespace/prod/pods`.
+- `Permission` identifie l'action sur la cible. Elle est optionnelle, singuliere et peut garder la
+  syntaxe native du provider: `read`, `write`, `SELECT`, `s3:GetObject`, `get` ou `list`.
+- `Origin` explique d'ou vient l'observation: import AD, groupe LDAP, role applicatif ou policy
+  native. Les details provider-specific restent dans `origin.raw` et `metadata`.
+
+Exemples representables simultanement:
+
+```text
+Access(name="PREMIUM_USER", target=null, permission=null)
+Access(name="CRM-Sales", target=null, permission=null)
+Access(name="Contacts", target="Contacts", permission=null)
+Access(name="Contacts:Read", target="Contacts", permission="read")
+Access(name="FinanceBucket:GetObject", target="arn:aws:s3:::finance/*", permission="s3:GetObject")
+```
+
+`Contacts:Read` et `Contacts:Write` sont deux Access distincts. Cela permet une revocation
+partielle, un diff Golden precis, une campagne separee, une provenance propre et une remediation
+ciblee. L'interface peut les afficher comme `R/W`, mais le modele ne fusionne pas les permissions.
+
 ## Acces directs et effectifs
 
 Un acces direct est observe comme attribue a une Identity:
@@ -55,6 +83,24 @@ customers:export
 ```
 
 Si un provider encode deja la permission dans `access_name`, ce format reste compatible. L'identite stable d'un Access ne doit pas confondre `resource=customers permission=read` avec `resource=customers permission=write`.
+
+### Schema CrashTests-CRM
+
+```text
+                         AccessRelation: grants
+  Emma  ── AccessAssignment ──> CRM-Sales ─────────────────> contacts:read
+                                      │                     └> contacts:write
+                                      └─────────────────────> invoices:read
+
+  Golden Source attend: Emma -> CRM-Sales
+  Calcul effectif:      Emma -> CRM-Sales -> contacts:read/write, invoices:read
+```
+
+Le bloc de gauche est l'attribution directe certifiable. Les fleches `grants` composent le role
+CRM. Le calcul effectif explique les droits sans les persister comme assignments directs.
+
+Dans les CrashTests-CRM, un ajout ou retrait d'une relation modifie le graphe effectif, mais ne
+modifie pas automatiquement l'attendu Golden `Emma -> CRM-Sales`.
 
 ## Exemples
 
