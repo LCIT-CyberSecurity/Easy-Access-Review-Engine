@@ -123,3 +123,19 @@ Bob -> reports:read
 Les droits effectifs issus de la Golden peuvent etre calcules en appliquant le graphe de relations a ses assignments directs. Si la composition d'un role change entre deux versions de relations, l'affectation directe peut rester inchangee alors que les droits effectifs changent. Le service de diff effectif expose cette information sans creer automatiquement un finding metier.
 
 Les snapshots et bases legacy qui ne contiennent pas `AccessRelation` sont interpretes comme `access_relations = []`.
+
+## Identite et enrichissement conservateurs
+
+Access.key() conserve la cle historique (provider, name). Cette branche ne fait pas de migration
+de cle SQLite et ne traite pas native_id comme une identite universelle: il sert a reconnaitre un
+objet renomme lorsqu'il est stable dans le provider, comme un SID AD ou un entryUUID OpenLDAP.
+
+target et permission sont optionnels. Une collecte qui enrichit un Access de null vers une valeur
+connue peut completer l'objet existant. Une collecte moins riche ne remplace pas une valeur deja
+connue par null. Deux valeurs connues incompatibles sous le meme (provider, name) refusent la
+reconciliation avec le diagnostic ACCESS_DEFINITION_COLLISION; aucun ecrasement silencieux n'est
+autorise.
+
+Un Access opaque ou composite peut donc etre represente sans permission ni cible. Les permissions
+distinctes restent des Access distincts et les droits effectifs restent calcules par le graphe,
+sans etre persistes comme des AccessAssignment directs.

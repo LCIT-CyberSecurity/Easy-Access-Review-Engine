@@ -251,7 +251,7 @@ def _authentication_cards_html(policies: list[dict[str, str]]) -> str:
     for policy in policies:
         available = [(key, label) for key, label in fields if policy.get(key) not in (None, "", "Not collected")]
         if not available:
-            continue
+            available = [("status", "Status")]
         rows_html = "".join(
             f'<div class="auth-field"><dt>{escape(label)}</dt><dd>{escape(policy[key])}</dd></div>'
             for key, label in available
