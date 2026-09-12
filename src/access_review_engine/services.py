@@ -532,9 +532,9 @@ def _observed_stable_key(
         return None
     raw_access_native = assignment.origin.raw.get("GroupSID") or assignment.origin.raw.get("group_native_id")
     access_native_id = str(raw_access_native) if raw_access_native else None
-    if access_native_id is None and access is not None:
+    if access_native_id is None and access and access.control_object:
         access_native_id = access.control_object.native_id
-    permission_id = access.permission.identifier if access is not None else "member"
+    permission_id = access.permission.identifier if access and access.permission else "member"
     if not access_native_id and not identity.native_id:
         return None
     access_ref = (
@@ -664,8 +664,8 @@ def promote_snapshot(
                 access_name=item.access_name,
                 identity_provider=item.identity_provider,
                 identity_identifier=item.identity_identifier,
-                access_native_id=access.control_object.native_id if access else None,
-                access_permission=access.permission.identifier if access else None,
+                access_native_id=access.control_object.native_id if access and access.control_object else None,
+                access_permission=access.permission.identifier if access and access.permission else None,
                 identity_native_id=identity.native_id if identity else None,
             )
         )
@@ -804,8 +804,8 @@ def open_campaign(
                 identity_status=identity.status if identity else IdentityStatus.UNKNOWN,
                 access_provider=str(row["access_provider"]),
                 access_name=str(row["access_name"]),
-                control_object=asdict(access.control_object) if access else {},
-                permission=asdict(access.permission) if access else {},
+                control_object=asdict(access.control_object) if access and access.control_object else {},
+                permission=asdict(access.permission) if access and access.permission else {},
                 target=asdict(access.target) if access and access.target else None,
                 description=access.description if access else None,
                 origin=None,

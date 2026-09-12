@@ -224,9 +224,9 @@ class Repository:
         name = data.get("name") or data.get("identifier") or data.get("golden_source_id")
         if isinstance(obj, Identity) and data.get("status") == IdentityStatus.DELETED:
             name = f"{name}#deleted:{data.get('native_id') or data['id']}"
-        if isinstance(obj, Access) and data.get("control_object", {}).get("native_id"):
+        if isinstance(obj, Access) and (data.get("control_object") or {}).get("native_id"):
             native_id = data["control_object"]["native_id"]
-            permission = data.get("permission", {}).get("identifier", "")
+            permission = (data.get("permission") or {}).get("identifier", "")
             name = f"{name}#native:{native_id}:{permission}"
         if isinstance(obj, GoldenSourceVersion):
             name = obj.golden_source_id
@@ -263,8 +263,10 @@ def hydrate_access(data: dict[str, Any]) -> Access:
     owner = data.get("access_owner")
     return Access(
         **(data | {
-            "control_object": ControlObject(**data["control_object"]),
-            "permission": Permission(**data["permission"]),
+            "control_object": ControlObject(**data["control_object"])
+            if data.get("control_object")
+            else None,
+            "permission": Permission(**data["permission"]) if data.get("permission") else None,
             "target": Target(**data["target"]) if data.get("target") else None,
             "access_owner": OwnerRef(**owner) if owner else None,
         })

@@ -304,29 +304,129 @@ def _dedupe_identities(identities: Iterable[Identity]) -> list[Identity]:
     return list(by_key.values())
 
 
-def _reconcile_accesses(existing: Iterable[Access], imported: Iterable[Access]) -> list[Access]:
-    existing_by_name = {(access.provider, access.name): access for access in existing}
-    existing_by_native = {
-        (access.provider, access.control_object.native_id, access.permission.identifier): access
-        for access in existing
-        if access.control_object.native_id
+def _access_native_id(access: Access) -> str | None:
+    return access.control_object.native_id if access.control_object else None
+
+
+def _access_definition(access: Access) -> tuple[object, str | None]:
+    target = asdict(access.target) if access.target else None
+    permission = access.permission.identifier if access.permission else None
+    return target, permission
+
+
+def _access_collision_diagnostic(existing: Access, incoming: Access) -> dict[str, object]:
+    existing_target, existing_permission = _access_definition(existing)
+    incoming_target, incoming_permission = _access_definition(incoming)
+    return {
+        "type": "ACCESS_DEFINITION_COLLISION",
+        "provider": incoming.provider,
+        "name": incoming.name,
+        "existing_native_id": _access_native_id(existing),
+        "incoming_native_id": _access_native_id(incoming),
+        "existing_target": existing_target,
+        "incoming_target": incoming_target,
+        "existing_permission": existing_permission,
+        "incoming_permission": incoming_permission,
     }
-    reconciled: list[Access] = []
-    seen: set[tuple[str, str]] = set()
+
+
+def _raise_access_collision(existing: Access, incoming: Access) -> None:
+    diagnostic = _access_collision_diagnostic(existing, incoming)
+    raise ValueError(
+        "ACCESS_DEFINITION_COLLISION: "
+        f"provider={diagnostic['provider']!r} name={diagnostic['name']!r} "
+        f"existing_target={diagnostic['existing_target']!r} "
+        f"incoming_target={diagnostic['incoming_target']!r} "
+        f"existing_permission={diagnostic['existing_permission']!r} "
+        f"incoming_permission={diagnostic['incoming_permission']!r}"
+    )
+
+
+def _access_definitions_conflict(existing: Access, incoming: Access) -> bool:
+    existing_target, existing_permission = _access_definition(existing)
+    incoming_target, incoming_permission = _access_definition(incoming)
+    return (
+        existing_target is not None
+        and incoming_target is not None
+        and existing_target != incoming_target
+    ) or (
+        existing_permission is not None
+        and incoming_permission is not None
+        and existing_permission != incoming_permission
+    )
+
+
+def _enrich_access(existing: Access, incoming: Access) -> Access:
+    if existing.target is None and incoming.target is not None:
+        existing.target = incoming.target
+    if existing.permission is None and incoming.permission is not None:
+        existing.permission = incoming.permission
+    if existing.control_object is None and incoming.control_object is not None:
+        existing.control_object = incoming.control_object
+    elif existing.control_object and incoming.control_object:
+        existing.control_object.display_name = (
+            incoming.control_object.display_name or existing.control_object.display_name
+        )
+        existing.control_object.description = (
+            incoming.control_object.description or existing.control_object.description
+        )
+        existing.control_object.metadata = {
+            **existing.control_object.metadata,
+            **incoming.control_object.metadata,
+        }
+    existing.display_name = incoming.display_name or existing.display_name
+    existing.description = incoming.description or existing.description
+    existing.metadata = {**existing.metadata, **incoming.metadata}
+    return existing
+
+
+def _reconcile_accesses(existing: Iterable[Access], imported: Iterable[Access]) -> list[Access]:
+    existing_items = list(existing)
+    existing_by_name: dict[tuple[str, str], list[Access]] = {}
+    existing_by_native: dict[tuple[str, str, str | None], Access] = {}
+    for access in existing_items:
+        existing_by_name.setdefault((access.provider, access.name), []).append(access)
+        native_id = _access_native_id(access)
+        permission = access.permission.identifier if access.permission else None
+        if native_id is not None:
+            existing_by_native[(access.provider, native_id, permission)] = access
+    reconciled = list(existing_items)
+    seen: set[tuple[str, str, str | None]] = set()
     for access in imported:
-        previous = None
-        if access.control_object.native_id:
-            previous = existing_by_native.get(
-                (access.provider, access.control_object.native_id, access.permission.identifier)
-            )
-        else:
-            previous = existing_by_name.get((access.provider, access.name))
-        if previous is not None:
-            access.id = previous.id
         key = (access.provider, access.name)
-        if key not in seen:
+        candidates = existing_by_name.setdefault(key, [])
+        native_id = _access_native_id(access)
+        permission = access.permission.identifier if access.permission else None
+        previous = (
+            existing_by_native.get((access.provider, native_id, permission))
+            if native_id is not None
+            else None
+        )
+        if previous is None:
+            previous = next((item for item in candidates if _access_native_id(item) == native_id), None)
+        if previous is None and native_id is None:
+            previous = next((item for item in candidates if _access_native_id(item) is None), None)
+        if previous is None and len(candidates) == 1 and native_id is None:
+            previous = candidates[0]
+        if previous is not None:
+            if _access_definitions_conflict(previous, access):
+                _raise_access_collision(previous, access)
+            access.id = previous.id
+            if previous.name == access.name:
+                _enrich_access(previous, access)
+                access = previous
+            else:
+                position = reconciled.index(previous)
+                reconciled[position] = access
+                previous_candidates = existing_by_name[(previous.provider, previous.name)]
+                previous_candidates[previous_candidates.index(previous)] = access
+        elif any(_access_definitions_conflict(item, access) for item in candidates if native_id is None):
+            _raise_access_collision(candidates[0], access)
+        dedupe_key = (*key, native_id)
+        if dedupe_key not in seen and access not in reconciled:
             reconciled.append(access)
-            seen.add(key)
+            candidates.append(access)
+            seen.add(dedupe_key)
     return reconciled
 
 

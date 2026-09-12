@@ -225,8 +225,8 @@ class Target:
 class Access:
     name: str
     provider: str
-    control_object: ControlObject
-    permission: Permission
+    control_object: ControlObject | None = None
+    permission: Permission | None = None
     target: Target | None = None
     display_name: str | None = None
     description: str | None = None
