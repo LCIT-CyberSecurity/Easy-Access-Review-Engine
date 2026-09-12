@@ -1,134 +1,59 @@
 # Architecture
 
+Detailed design and implementation contracts live in [engineering.md](engineering.md).
 
-La conception detaillee et les contrats d'implementation sont dans
-[engineering.md](engineering.md). Ce document resume les frontieres d'architecture et les
-invariants principaux.
+## Model Invariants
 
-## Invariants du modele
+The application core is provider-agnostic. Active Directory, OpenLDAP, and future providers are importers or connectors that translate native objects into the normalized EARE model.
 
-Le coeur de l'application ne connait aucun fournisseur technique particulier. Active Directory,
-OpenLDAP, Entra ID, Keycloak, AWS, Azure, GCP, Google Workspace ou un autre systeme doivent etre
-ajoutes comme importeurs/connecteurs qui traduisent les objets natifs vers le modele normalise.
+Provider-specific fields stay in `metadata` or `origin.raw`. The core does not add AD, LDAP, cloud, or application-specific columns.
 
-Modele durable:
+An AD or LDAP group membership is an `AccessAssignment`. Nested groups and roles are represented through `AccessRelation` edges. Effective access is calculated from those inputs and keeps provenance paths.
 
-```text
-Provider
-   -> Identity
-   -> AccessAssignment
-   -> Access
-      -> Control Object
-      -> Permission
-      -> Target Resource
-```
+## Current Scope
 
-Cycle durable:
+The V1 core supports:
 
-```text
-Observed State
-    <-> GoldenSourceVersion
-    -> Comparison
-    -> Snapshot
-    -> Campaign
-    -> ReviewItem
-    -> Decision
-    -> Report / Remediation / Audit
-```
+- immutable snapshots;
+- versioned Golden Source;
+- campaigns and decisions;
+- conservative scoped and unknown imports;
+- stable rename reconciliation through provider native identifiers;
+- collision detection;
+- effective-access calculation through access relations.
 
+AWS, Azure, GCP, Entra ID, Keycloak, Kubernetes, and GitHub are currently model stress fixtures, not integrated native collectors.
 
-Imbrication des responsabilites:
+## Collection Layer
+
+Remote collection is only an acquisition layer:
 
 ```text
-Provider -> Identity
-Provider -> Access
-Identity + Access -> AccessAssignment (direct)
-Access -> AccessRelation(grants) -> Access
-Assignments + Relations -> effective access + provenance
-Snapshot -> Campaign -> ReviewItem -> Decision
-GoldenSourceVersion -> expected direct assignments
+remote source -> exporter -> archive/LDIF -> importer -> normalized model
 ```
 
-Les champs specifiques a un fournisseur restent dans `metadata` ou `origin.raw`. Le coeur n'ajoute
-pas de champ AD, LDAP, cloud ou application-specifique. Une appartenance AD/LDAP a un groupe est un
-`Access` dont `control_object.type = group` et `permission.identifier = member`; l'appartenance
-observee est un `AccessAssignment`. Les groupes peuvent eux-memes etre titulaires d'assignments, ce
-qui preserve les groupes imbriques sans aplatir les chemins.
+Active Directory and OpenLDAP collectors do not create a second domain model and do not implement review logic.
 
-### Contrat Access stabilise
+## Module Boundaries
 
-- `Access` peut etre opaque, composite ou fin.
-- `target` et `permission` sont optionnels; une permission reste singuliere.
-- Un role ou groupe compose reste un `Access`; ses enfants sont des `AccessRelation` de type
-  `grants`.
-- `AccessAssignment` represente uniquement une attribution directe. Les droits effectifs sont
-  calcules et portent leurs chemins de provenance sans etre materialises comme assignments.
-- La cle historique `(provider, name)` est conservee pour la compatibilite SQLite, snapshots,
-  Golden et campagnes. `native_id` aide la reconciliation des renommages AD/OpenLDAP mais ne devient
-  pas une identite universelle.
-- Un enrichissement `null -> valeur` est accepte; une collecte moins riche ne remplace pas une
-  valeur connue par `null`. Deux definitions connues incompatibles sont refusees avec
-  `ACCESS_DEFINITION_COLLISION`.
+- `domain`: domain objects, enums, fingerprints, and deterministic checksums.
+- `storage`: local SQLite MVP persistence.
+- `importers`: translation from AD/OpenLDAP artifacts to the normalized model.
+- `application`: import orchestration and persistence boundaries.
+- `services`: comparison, Golden Source, campaign, effective-access, and remediation services.
+- `reporting`: HTML/CSV/JSON report generation.
+- `api` and `cli`: thin interfaces that orchestrate services without business logic.
 
-### Frontiere des connecteurs
+## Completeness
 
-AD et OpenLDAP sont les seuls connecteurs integres et testes. AWS, Azure, GCP, Entra ID, Keycloak,
-Kubernetes et GitHub sont couverts uniquement par des fixtures de modele: aucune collecte native ni
-moteur IAM specifique n'est introduit dans le coeur.
+Each import carries `completeness` and `scope`:
 
-La branche `improve-model` valide le coeur avec `197 passed, 0 failed, 7 skipped`. Les tests ignores
-necessitent Docker ou `pwsh`; les controles `ruff` et `mypy` restent a executer dans un environnement
-de developpement equipe.
+- `full`: authoritative inside the declared scope;
+- `scoped`: intentionally partial;
+- `unknown`: collection error, timeout, limit, truncation, or inconsistent evidence.
 
+Partial exports must not produce false `missing` results or false deletions.
 
-Les CrashTests-CRM constituent la reference executable de cette composition: ils couvrent
-`CRM-Sales`, les permissions `contacts:read`/`contacts:write`, le role composition drift, les
-multipaths, les cycles, la provenance, la persistence SQLite, la Golden Source, les campagnes et
-la remediation.
+## Security
 
-## Collecte distante
-
-La collecte distante reste une couche d'acquisition uniquement:
-
-```text
-remote directory -> collector script -> existing offline export format -> existing importer and offline pipeline
-```
-
-Les collecteurs Active Directory et OpenLDAP ne creent ni second modele de donnees ni moteur metier
-remote. Ils produisent les fichiers deja acceptes par les importeurs offline, puis les memes etapes
-normalisees gerent DB, snapshot, Golden Source, campagnes et findings.
-
-## Frontieres
-
-- `domain`: objets metier, enums, fingerprints et checksums deterministes.
-- `storage`: persistance SQLite locale du MVP. Les tables suivent les frontieres prevues pour une
-  migration SQLAlchemy/Alembic.
-- `importers`: traduction des exports AD/OpenLDAP/YAML/JSON/CSV vers le modele normalise.
-- `services`: comparaison, snapshots immuables, Golden Source versionnee, campagnes, decisions,
-  remediations, rapports et audit.
-- `api` et `cli`: interfaces fines qui orchestrent les services sans contenir de logique metier.
-
-## Scope et completude
-
-Chaque import cree un `ImportBatch` avec `completeness` et `scope`. Les valeurs conservees sont:
-
-- `full`: le collecteur et l'importeur peuvent raisonnablement traiter le provider comme complet
-  pour le scope declare.
-- `scoped`: l'import couvre volontairement un sous-ensemble et ne doit pas remplacer l'etat global.
-- `unknown`: erreur, timeout, limite serveur, page manquante, resultat tronque ou incoherence de
-  collecte; l'import ne doit pas etre authoritative.
-
-Un export partiel ne produit pas de faux `missing`: si la Golden Source attend un acces hors du scope
-autoritaire de l'import, la classification est `unknown_due_to_scope`.
-
-## Immutabilite
-
-Les snapshots, les `GoldenSourceVersion` et les `ReviewItem` sont append-only au niveau applicatif.
-Une decision ne remplace jamais l'historique: chaque changement cree une nouvelle ligne. L'activation
-d'une version de Golden Source est separee de sa creation.
-
-## Securite des imports
-
-Les ZIP sont lus avec allowlist de noms de fichiers, limite de taille, detection Zip Slip et sans
-execution de contenu. Les descriptions natives sont conservees lorsqu'elles existent et restent
-`null` lorsqu'elles sont absentes.
+ZIP inputs are read with filename allowlists, size limits, Zip Slip detection, and no execution of embedded content. Native descriptions are preserved when available and must be escaped in reports.

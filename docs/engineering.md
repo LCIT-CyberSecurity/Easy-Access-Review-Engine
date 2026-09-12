@@ -20,9 +20,9 @@ without silently losing identity, scope, provenance or review meaning.
 AD and OpenLDAP are the integrated connectors. AWS, Azure, GCP, Entra ID, Keycloak, Kubernetes and
 GitHub are model stress-test domains only in this V1 scope.
 
-## 1 bis. Schemas synthetiques
+## 1.1 Synthetic Schemas
 
-### Objets du modele
+### Model objects
 
 ```text
 Provider
@@ -36,10 +36,10 @@ Provider
 ### Certification
 
 ```text
-Importeurs AD/OpenLDAP
+AD/OpenLDAP importers
           |
           v
-Etat observe -> Snapshot immutable -> comparaison Golden
+Observed state -> immutable Snapshot -> Golden comparison
                                       |
                                       v
                               Campaign / ReviewItem
@@ -48,14 +48,14 @@ Etat observe -> Snapshot immutable -> comparaison Golden
                               Decision / Report / Remediation
 ```
 
-### CRM: direct versus effectif
+### CRM: direct versus effective
 
 ```text
 Emma --direct--> CRM-Sales --grants--> contacts:read
                               \-------> contacts:write
 
 Golden:   Emma -> CRM-Sales
-Effectif: Emma -> CRM-Sales -> contacts:read + contacts:write
+Effective: Emma -> CRM-Sales -> contacts:read + contacts:write
 ```
 
 ## 2. System context

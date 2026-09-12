@@ -534,7 +534,7 @@ tbody tr:hover { background:#f8fbff; }
   <div class="hero-inner">
     <p class="eyebrow">Access Review Report</p>
     <h1>__CAMPAIGN_TITLE__</h1>
-    <p class="hero-subtitle">Analyse des habilitations et comparaison avec la Golden Source.</p>
+    <p class="hero-subtitle">Access entitlement analysis and Golden Source comparison.</p>
     <div class="hero-meta">
       <div class="meta-item"><span class="meta-label">Organisation / Provider</span><span class="meta-value">__PROVIDERS__</span></div>
       <div class="meta-item"><span class="meta-label">Golden Source</span><span class="meta-value">__GOLDEN__</span></div>
@@ -548,9 +548,9 @@ tbody tr:hover { background:#f8fbff; }
   <section class="report-section" aria-labelledby="overview-title">
     <div class="section-heading">
       <div class="section-number">01</div>
-      <div class="section-kicker">Synthèse</div>
-      <h2 id="overview-title">Vue d’ensemble</h2>
-      <p class="section-copy">Indicateurs clés de la campagne d’Access Review.</p>
+      <div class="section-kicker">Summary</div>
+      <h2 id="overview-title">Overview</h2>
+      <p class="section-copy">Key access review campaign indicators.</p>
     </div>
     __SUMMARY__
   </section>
@@ -568,23 +568,23 @@ tbody tr:hover { background:#f8fbff; }
   <section class="report-section" aria-labelledby="charts-title">
     <div class="section-heading">
       <div class="section-number">02</div>
-      <div class="section-kicker">Analyses</div>
-      <h2 id="charts-title">Visualisations</h2>
-      <p class="section-copy">Répartition des accès et décisions.</p>
+      <div class="section-kicker">Analysis</div>
+      <h2 id="charts-title">Visualizations</h2>
+      <p class="section-copy">Access and decision distribution.</p>
     </div>
     <div class="charts-grid">
-      <article class="chart-card"><h3 class="chart-title">Access Review Outcome</h3><p class="chart-copy">Expected, unexpected, missing et scope incomplet.</p><div class="chart-stage" id="outcome-chart"></div><div class="legend" id="outcome-legend"></div></article>
-      <article class="chart-card"><h3 class="chart-title">Review Decisions</h3><p class="chart-copy">Décisions de revue actuellement enregistrées.</p><div class="chart-stage" id="decision-chart"></div></article>
-      <article class="chart-card"><h3 class="chart-title">Accesses by service / role</h3><p class="chart-copy">Services et rôles les plus représentés.</p><div class="chart-stage" id="service-chart"></div></article>
+      <article class="chart-card"><h3 class="chart-title">Access Review Outcome</h3><p class="chart-copy">Expected, unexpected, missing, and incomplete scope.</p><div class="chart-stage" id="outcome-chart"></div><div class="legend" id="outcome-legend"></div></article>
+      <article class="chart-card"><h3 class="chart-title">Review Decisions</h3><p class="chart-copy">Currently recorded review decisions.</p><div class="chart-stage" id="decision-chart"></div></article>
+      <article class="chart-card"><h3 class="chart-title">Accesses by service / role</h3><p class="chart-copy">Most represented services and roles.</p><div class="chart-stage" id="service-chart"></div></article>
     </div>
   </section>
 
   <section class="report-section" aria-labelledby="findings-title">
     <div class="section-heading">
       <div class="section-number">03</div>
-      <div class="section-kicker">Points d’attention</div>
+      <div class="section-kicker">Attention Points</div>
       <h2 id="findings-title">Findings</h2>
-      <p class="section-copy">Anomalies et points nécessitant une attention.</p>
+      <p class="section-copy">Findings requiring attention.</p>
     </div>
     <div class="findings-grid" id="findings-grid"></div>
   </section>
@@ -592,9 +592,9 @@ tbody tr:hover { background:#f8fbff; }
   <section class="report-section" aria-labelledby="details-title">
     <div class="section-heading">
       <div class="section-number">04</div>
-      <div class="section-kicker">Résultats détaillés</div>
-      <h2 id="details-title">Par service / accès</h2>
-      <p class="section-copy">Détail des identités et de leurs droits.</p>
+      <div class="section-kicker">Detailed Results</div>
+      <h2 id="details-title">By Service / Access</h2>
+      <p class="section-copy">Identity and access details.</p>
     </div>
     <section class="filter-panel" aria-label="Report filters">
       <div class="search-row">

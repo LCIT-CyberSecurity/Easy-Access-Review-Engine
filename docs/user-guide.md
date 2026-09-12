@@ -1,262 +1,197 @@
-# Guide utilisateur EARE
+# EARE User Guide
 
-## 1. A quoi sert EARE ?
+## 1. What EARE Does
 
-Easy Access Review Engine (EARE) aide a repondre a trois questions:
+Easy Access Review Engine helps answer three operational questions:
 
-1. Quels acces sont actuellement observes ?
-2. Ces acces correspondent-ils a ce qui est attendu ?
-3. Que doit-on approuver, revoir ou retirer ?
+1. What access is currently observed?
+2. Does that access match what is expected?
+3. What should be approved, investigated, removed, or documented?
 
-EARE conserve les observations, les compare a une Golden Source optionnelle, ouvre des campagnes
-de revue et produit des rapports reutilisables pour l'audit et la remediation.
+EARE stores observations, compares them with an optional Golden Source, opens review campaigns, preserves decisions, and generates reusable reports for audit and remediation.
 
-## 2. Schema synthetique
+## 2. Core Concepts
 
 ```text
 Provider
   +-- Identity --------------------+
   |                                |
-  +-- Access                       +-- AccessAssignment direct
+  +-- Access                       +-- direct AccessAssignment
         +-- Target?                |
         +-- Permission?            v
-        +-- Origin / metadata   Access
+        +-- Origin / metadata    Access
                                   |
                      AccessRelation: grants
                                   |
                                   v
-                         Access effectif + provenance
+                         effective access + provenance
 
 Snapshot -> Golden Source -> Campaign -> Decision -> Report
 ```
 
-Lecture rapide:
+- `Provider` identifies the source, such as `corp-ad` or `ldap-prod`.
+- `Identity` is the reviewed subject: user, group, service account, shared account, or technical account.
+- `Access` is the entitlement being reviewed: group membership, role, permission set, or fine-grained permission.
+- `AccessAssignment` says who directly holds an Access.
+- `AccessRelation` explains what one Access grants to another Access.
+- Effective access is calculated from assignments and relations; it is not stored as fake direct access.
 
-- les objets du haut decrivent ce qui existe dans la source;
-- `AccessAssignment` dit qui detient directement un Access;
-- `AccessRelation` explique ce qu'un Access composite accorde;
-- l'acces effectif est calcule a partir des deux;
-- la Golden Source decrit l'attendu, puis la campagne collecte les decisions.
+## 3. Golden Source
 
-## 3. Les elements du modele
+The Golden Source is the expected access baseline. It is optional, versioned, and immutable per version.
 
-### Provider: d'ou vient l'information ?
-
-Un Provider est une source d'identites et d'acces. Exemples:
-
-```text
-corp-ad       Active Directory
-internal-ldap OpenLDAP
-```
-
-Le Provider evite de confondre deux objets qui portent le meme nom dans deux systemes differents.
-
-### Identity: qui peut recevoir un acces ?
-
-Une Identity est un sujet de revue:
+It lets EARE classify observed access as:
 
 ```text
-Alice Martin       user
-svc-backup         technical account
-CRM-Sales          group ou principal composite
-managed-app-prod   service principal futur
+expected_and_observed   expected and present
+unexpected              present but not expected
+missing                 expected but absent from an authoritative collection
+unknown_due_to_scope    no safe conclusion because collection is scoped or unknown
+no_reference            observed without any Golden Source reference
 ```
 
-Une Identity possede un identifiant dans son Provider, un statut (`active`, `disabled`, `deleted`,
-`unknown`) et, lorsque la source le fournit, un identifiant natif stable comme un SID AD ou un
-`entryUUID` OpenLDAP.
+Stable native identifiers, such as AD SID or OpenLDAP `entryUUID`, let EARE keep matching across reliable renames without turning those identifiers into new business keys.
 
-### Access: quelle habilitation est revue ?
+## 4. CLI Overview
 
-Un Access est l'habilitation observable et certifiable. Il peut etre opaque, composite ou detaille:
-
-```text
-PREMIUM_USER                         habilitation opaque
-CRM-Sales                            role composite
-Contacts                             cible connue, action inconnue
-Contacts:Read                        droit fin
-FinanceBucket:GetObject              droit provider-specific
-```
-
-Un Access n'est pas une personne et n'est pas encore l'attribution a une personne. Il decrit ce qui
-peut etre detenu.
-
-### Target: sur quoi porte l'acces ?
-
-`Target` est optionnel. Il sert uniquement lorsqu'une cible identifiable est fournie par la source:
-
-```text
-Contacts
-Invoices
-/srv/finance
-arn:aws:s3:::finance/*
-namespace/prod/pods
-```
-
-Pour un role opaque comme `CRM-Sales`, `Target` peut rester vide. EARE ne doit pas inventer une
-cible.
-
-### Permission: quelle action est accordee ?
-
-`Permission` est optionnelle et singuliere. Elle decrit une action lorsqu'elle est connue:
-
-```text
-read       write       member       SELECT
-get        list        s3:GetObject
-```
-
-Les permissions restent provider-specific. `Contacts:Read` et `Contacts:Write` sont deux Access
-separables, meme si l'interface les affiche ensemble.
-
-### AccessAssignment: qui detient directement quoi ?
-
-```text
-Alice -> CRM-Sales
-```
-
-Cette fleche est un `AccessAssignment`. C'est l'information principalement certifiee par la Golden
-Source. L'assignment conserve aussi son origine, par exemple groupe AD, groupe LDAP ou attribution
-directe.
-
-### AccessRelation: qu'accorde un role ou un groupe ?
-
-```text
-CRM-Sales --grants--> Contacts:Read
-CRM-Sales --grants--> Contacts:Write
-```
-
-C'est une relation entre deux Access, pas une nouvelle attribution a Alice. Elle peut etre composee
-sur plusieurs niveaux:
-
-```text
-Alice -> CRM-Manager -> CRM-Sales -> Contacts:Read
-```
-
-### Origin et metadata: pourquoi cette information existe-t-elle ?
-
-`Origin` indique la provenance de l'observation. `metadata` conserve des details provider-specific
-qui doivent rester tracables sans etre interpretes par le coeur:
-
-```text
-Origin:   AD nested group
-metadata: group SID, condition native, source file, collection context
-```
-
-Ces champs ne transforment pas EARE en moteur universel de policy.
-
-## 4. Les notions essentielles
-
-### Provider
-
-Un Provider est une source d'identites et d'acces, par exemple un domaine Active Directory ou un
-annuaire OpenLDAP.
-
-### Identity
-
-Une Identity est la personne, le groupe ou le compte observe dans la source. Les comptes
-techniques, comptes partages et groupes peuvent etre identifies selon les informations disponibles.
-
-### Access
-
-Un Access est une habilitation que l'on peut observer et revoir. Il peut etre:
-
-```text
-PREMIUM_USER                         habilitation opaque
-CRM-Sales                            role ou acces composite
-Contacts                             cible connue, action inconnue
-Contacts:Read                        cible Contacts, action read
-FinanceBucket:GetObject              cible AWS, action provider-specific
-```
-
-`Target` et `Permission` sont facultatifs. Une source qui ne fournit pas le detail d'une cible ou
-d'une action peut donc rester exploitable sans inventer d'information.
-
-### Attribution directe et acces effectif
-
-Une attribution directe est ce que la source donne directement a l'identite:
-
-```text
-Emma -> CRM-Sales
-```
-
-Un acces effectif peut venir de la composition du role:
-
-```text
-Emma -> CRM-Sales -> contacts:read
-```
-
-L'acces effectif explique pourquoi le droit est present; il ne remplace pas l'attribution directe.
-
-## 5. Parametrage utilisateur
-
-### Parametres de la commande EARE
-
-La base SQLite est configurable avec `--db`. Le parametre global se place avant la sous-commande:
+The recommended command name is:
 
 ```bash
-access-review --db data/review.db import corp-ad-export.zip
-access-review --db data/review.db findings-list
-access-review --db data/review.db access-effective "Alice Martin" --provider corp-ad
+eare
 ```
 
-Pour un import, les parametres disponibles sont:
-
-| Parametre | Utilite | Exemple |
-| --- | --- | --- |
-| `--provider` | nom du Provider pour un fichier LDIF OpenLDAP | `--provider internal-ldap` |
-| `--classification-rules` | fichier JSON de classification optionnelle des comptes AD | `--classification-rules rules.json` |
-| `--db` | chemin de la base SQLite | `--db data/eare.db` |
-
-Le Provider est lu dans le manifeste d'un export ZIP. Pour un LDIF, il est fourni par
-`--provider` et vaut `openldap` par defaut. Le fichier SQLite est cree s'il n'existe pas; choisir un
-chemin stable permet de conserver les snapshots, la Golden Source et les campagnes entre deux
-imports.
-
-Valider un fichier sans l'importer dans SQLite:
+The compatibility alias remains:
 
 ```bash
-access-review validate corp-ad-export.zip
-access-review validate directory.ldif
+access-review
 ```
 
-Cette commande verifie le format et les protections de l'archive. Elle ne produit ni snapshot ni
-modification de la base.
-
-### Classification optionnelle des comptes AD
-
-Par defaut, un utilisateur AD est conserve comme `user_account`. Pour reconnaitre des comptes de
-service ou partages selon des regles deterministes, fournir un fichier JSON:
-
-```json
-{
-  "identity_classification": {
-    "technical_account": {
-      "samaccountname_prefixes": ["svc_", "svc-"],
-      "dn_contains": ["OU=Service Accounts"],
-      "has_service_principal_name": true
-    },
-    "shared_account": {
-      "samaccountname_prefixes": ["shared_", "generic_"]
-    }
-  }
-}
-```
-
-Puis:
+Expected command groups:
 
 ```bash
-access-review import corp-ad-export.zip --classification-rules rules.json
+eare config ...
+eare check ...
+eare collect ...
+eare sync ...
+eare import ...
+eare analyze ...
+eare golden ...
+eare campaign ...
+eare export ...
 ```
 
-Ces regles modifient la classification de l'Identity, pas son Access ni ses permissions. Les
-comptes geres AD (MSA/gMSA) et les ordinateurs sont deja traites comme comptes techniques par le
-collecteur.
+Current compatibility commands include:
 
-### Parametres des collecteurs
+```bash
+access-review validate <file>
+access-review import <file>
+access-review findings-list
+access-review identities-list
+access-review access-effective <identity>
+access-review campaign-export <output-dir>
+```
 
-Les parametres de collecte sont appliques avant l'import, sur la machine qui interroge la source.
+## 5. Configuration, Secrets, and State
 
-Pour Active Directory:
+EARE separates configuration, secrets, and business state:
+
+```text
+YAML connector files  -> provider configuration
+.env / environment    -> secrets
+SQLite database       -> EARE state: imports, snapshots, Golden Source, campaigns, decisions
+```
+
+Connector YAML files should describe provider settings only. They must not contain passwords, tokens, private keys, API keys, or client secrets.
+
+Secrets belong in environment variables or local files referenced by environment variables. For OpenLDAP, the exporter supports `LDAP_PASSWORD` and `LDAP_PASSWORD_FILE`.
+
+## 6. Check, Collect, Sync, Import
+
+### check
+
+`check` is diagnostic. It validates configuration and, when supported, asks the existing collector to verify the provider. It must not modify SQLite or the provider.
+
+```bash
+eare check corp-ad
+eare check ldap-prod
+```
+
+Running `check` is useful, but it is not required before `sync`.
+
+### collect
+
+`collect` runs a read-only exporter and writes an artifact. It does not import into SQLite.
+
+```bash
+eare collect corp-ad --output /tmp/corp-ad.zip
+eare collect ldap-prod --output /tmp/ldap-prod.zip
+```
+
+### import
+
+`import` loads an existing artifact into EARE by calling the application import engine.
+
+```bash
+eare import corp-ad-export.zip
+eare import directory.ldif --provider ldap-prod
+```
+
+The import path reuses `import_file_to_repository(...)`; the CLI must not reimplement reconciliation.
+
+### sync
+
+`sync` is the main operator workflow. It combines configuration, collection, and import:
+
+```bash
+eare sync corp-ad
+eare sync ldap-prod
+eare sync --all
+```
+
+Multi-provider sync is sequential. If one provider fails, previous successful providers remain processed; there is no global multi-provider transaction.
+
+## 7. Dry Run
+
+`--dry-run` does not simulate changes to AD or LDAP. EARE collectors are already read-only.
+
+For EARE, dry-run means:
+
+```text
+perform the real read-only collection
+parse and normalize the real artifact
+run the real import and reconciliation engine
+show what would change in EARE
+leave the real SQLite database unchanged
+```
+
+The safe MVP strategy is to run the real engine against an isolated temporary SQLite database copy. If the real database does not exist yet, EARE can dry-run against a temporary empty database and report what would be created.
+
+Examples:
+
+```bash
+eare import corp-ad-export.zip --dry-run
+eare sync corp-ad --dry-run
+eare sync --all --dry-run
+```
+
+For scoped or unknown collections, dry-run must preserve the same safety rules as real imports: no false deletion, no false missing access, and no authoritative conclusion outside the observed scope.
+
+## 8. Analyze
+
+`analyze` is local only. It reads existing EARE state and must not contact AD, LDAP, or any connector.
+
+```bash
+eare analyze
+eare analyze --provider corp-ad
+eare analyze --identity alice
+eare analyze --access Finance
+```
+
+If no snapshot exists, the CLI should explain that no local analysis is available and suggest `eare sync <provider>` or `eare import <file>`.
+
+## 9. Active Directory Collection
+
+Use the existing exporter; do not reimplement AD collection in Python.
 
 ```powershell
 .\export-active-directory.ps1 `
@@ -266,18 +201,16 @@ Pour Active Directory:
   -OperationTimeoutSeconds 300
 ```
 
-`-Server` est optionnel et permet de cibler un controleur de domaine. Le timeout par operation vaut
-300 secondes par defaut. `-AllowPartial` autorise la production d'un export diagnostique incomplet;
-il ne le transforme pas en collecte `FULL` et ne doit pas etre utilise pour conclure a une
-suppression.
+`-AllowPartial` allows a diagnostic export after collection errors. It does not make the collection authoritative and must not be used to infer deletion.
 
-Pour OpenLDAP, les variables de l'environnement du collecteur configurent la connexion, la securite
-et le perimetre:
+## 10. OpenLDAP Collection
+
+Use the existing shell exporter; do not reimplement LDAP collection in Python.
 
 ```dotenv
 LDAP_URI=ldaps://ldap.example.test
 BASE_DN=dc=example,dc=test
-PROVIDER_NAME=internal-ldap
+PROVIDER_NAME=ldap-prod
 PAGE_SIZE=500
 CONNECTION_TIMEOUT_SECONDS=10
 SEARCH_TIMEOUT_SECONDS=60
@@ -285,182 +218,40 @@ SEARCH_SCOPE=sub
 LDAP_FILTER=(objectClass=*)
 ```
 
-`START_TLS=1` est reserve a une URI `ldap://`. Un bind authentifie exige LDAPS ou StartTLS; la
-verification TLS reste active. `ALLOW_PARTIAL=1` conserve un export apres erreur mais sa completude
-devient prudente (`UNKNOWN`). Les secrets doivent rester dans un fichier local non versionne, par
-exemple `LDAP_PASSWORD_FILE`; ne jamais les mettre dans le manifeste, une commande ou un rapport.
+Authenticated bind requires LDAPS or StartTLS. TLS verification remains strict. `ALLOW_PARTIAL=1` keeps a diagnostic artifact after an error, but completeness becomes conservative.
 
-### Completude et perimetre
+## 11. Completeness and Scope
 
-Le manifeste ou le collecteur peut qualifier une collecte:
+Collection completeness drives safety:
 
-| Etat | Effet dans EARE |
+| State | Meaning |
 | --- | --- |
-| `FULL` | l'absence observee peut remplacer l'etat autoritatif dans le perimetre collecte |
-| `SCOPED` ou `PARTIAL` | seuls les objets observes dans le perimetre sont mis a jour |
-| `UNKNOWN` | les informations deja connues sont conservees; aucune suppression implicite |
+| `FULL` | absence can replace authoritative state inside the declared scope |
+| `SCOPED` / `PARTIAL` | only observed objects inside the scope are updated |
+| `UNKNOWN` | existing knowledge is preserved; no implicit deletion |
 
-Pour les relations, `None` signifie que le collecteur n'a pas fourni cette information. `[]` signifie
-que le graphe observe est explicitement vide, mais sa suppression n'est appliquee que par une collecte
-`FULL` et autoritative dans le perimetre concerne. Une relation absente d'une collecte partielle n'est
-donc pas une relation supprimee.
+A scoped or unknown collection must never erase objects outside scope or produce certain missing access for unobserved data.
 
-Le meme principe protege les identites, Access et assignments: `SCOPED`, `PARTIAL` ou `UNKNOWN` ne
-doivent jamais effacer ce qui se trouve hors perimetre ou ce qui n'a pas pu etre observe.
+## 12. Campaigns and Reports
 
-## 6. Parcours habituel
+A campaign is opened from an immutable snapshot. Later imports do not mutate what reviewers saw.
 
-```text
-Collecter -> Importer -> Observer -> Comparer -> Revoir -> Decider -> Exporter
-```
+Review items include identity, access, expected/observed state, classification, findings, reviewer, decision, and comment.
 
-### Etape 1: importer une collecte
+Reports include:
 
-Pour Active Directory, utiliser l'exporteur prevu puis importer le ZIP:
+- campaign result HTML;
+- CSV and JSON exports;
+- findings and classifications;
+- reviewer decisions;
+- remediation exports.
 
-```bash
-access-review import corp-ad-export.zip
-```
+EARE exports remediation evidence. It does not apply remediation directly to directories.
 
-Pour OpenLDAP, importer un LDIF:
+## 13. Security Notes
 
-```bash
-access-review import directory.ldif --provider internal-ldap
-```
+Never put secrets in connector YAML, exports, snapshots, reports, or diagnostics.
 
-Une collecte peut etre complete, limitee a un perimetre ou inconnue. Une collecte incomplete ne doit
-pas provoquer automatiquement de faux acces manquants ou de fausses suppressions.
+Collection errors should be treated as incomplete evidence, not proof that access is absent.
 
-### Etape 2: consulter l'etat observe
-
-Commencer par verifier:
-
-- le Provider et le perimetre de collecte;
-- les identites actives, desactivees, supprimees ou inconnues;
-- les Access directs;
-- les relations de composition;
-- les acces effectifs et leur provenance;
-- les diagnostics de collecte ou de collision.
-
-### Etape 3: comparer avec la Golden Source
-
-Une Golden Source represente les attributions attendues, par exemple:
-
-```text
-Golden attend: Emma -> CRM-Sales
-```
-
-Elle ne liste pas obligatoirement tous les droits produits par le role. EARE calcule les acces
-effectifs a partir de la composition observee.
-
-## 7. Comprendre les resultats
-
-```text
-expected_and_observed  acces attendu et observe
-unexpected             acces observe mais non attendu
-missing                acces attendu absent d'une collecte authoritative
-unknown_due_to_scope   impossible de conclure avec le perimetre collecte
-no_reference           aucune Golden Source disponible
-```
-
-`unexpected` ne signifie pas automatiquement fraude. Cela signifie que l'acces n'est pas present
-dans la reference selectionnee et doit etre examine.
-
-`missing` n'est fiable que lorsqu'une collecte complete et authoritative prouve l'absence. Une
-collecte limitee ou inconnue produit un resultat prudent.
-
-## 8. Golden Source
-
-La Golden Source est la reference des attributions attendues. Ses versions sont historiques et ne
-sont pas modifiees retroactivement.
-
-```text
-Observation -> Snapshot -> comparaison Golden -> campagne -> nouvelle version eventuelle
-```
-
-Dans le cas CRM:
-
-```text
-Golden:  Emma -> CRM-Sales
-Role:    CRM-Sales grants contacts:read
-         CRM-Sales grants contacts:write
-```
-
-Si `contacts:write` est ajoute au role, EARE peut signaler un changement d'acces effectif meme si
-l'attribution directe d'Emma n'a pas change.
-
-## 9. Campagnes de revue
-
-Une campagne est ouverte a partir d'un snapshot. Elle contient les elements a examiner par les
-reviewers:
-
-- identite et statut;
-- Access observe;
-- attendu vs observe;
-- origine et provenance;
-- finding eventuel;
-- decision et commentaire.
-
-Une campagne ouverte reste fondee sur son snapshot. Les imports suivants ne changent pas ce que le
-reviewer a vu.
-
-Decisions disponibles:
-
-- `approve`: conserver ou accepter l'acces;
-- `revoke`: preparer la suppression de l'acces;
-- `not_applicable`: ne pas appliquer la decision a cet element.
-
-Les permissions `read` et `write` restent distinctes afin de permettre une decision ou une
-remediation partielle.
-
-## 10. Rapports et remediation
-
-EARE peut produire des rapports HTML, CSV et JSON ainsi que des exports de remediation.
-
-```bash
-access-review campaign-export reports/
-```
-
-Les rapports montrent notamment:
-
-- la matrice des acces;
-- les roles et permissions;
-- les findings;
-- les decisions;
-- la posture d'authentification lorsqu'elle est disponible;
-- les valeurs non collectees explicitement.
-
-Une recommandation de remediation ne signifie pas qu'EARE execute automatiquement une revocation
-sur le systeme source. L'export doit etre controle et applique selon les procedures de l'organisation.
-
-## 11. Active Directory et OpenLDAP
-
-### Active Directory
-
-Le support actuel couvre notamment les utilisateurs, groupes, imbrications, groupes primaires,
-ordinateurs, comptes de service, comptes geres, Foreign Security Principals, renommages, comptes
-desactives et certaines observations d'authentification.
-
-### OpenLDAP
-
-Le support actuel couvre notamment `entryUUID`, les renommages, `member`, `uniqueMember`, `memberUid`,
-les membres non resolus, la pagination, les collectes partielles et les modes TLS/StartTLS/LDAPS.
-
-## 12. Limites importantes
-
-EARE ne remplace pas le moteur d'autorisation natif. Il ne calcule pas automatiquement:
-
-- les ACL NTFS ou AD effectives;
-- les permissions Azure/Entra runtime;
-- l'evaluation complete des policies AWS/GCP;
-- les conditions PIM/JIT comme moteur de decision;
-- les politiques Kubernetes ou GitHub comme moteur d'execution.
-
-Les technologies AWS, Azure, GCP, Entra ID, Keycloak, Kubernetes et GitHub sont actuellement des
-cas de test du modele, pas des connecteurs integres.
-
-## 13. Securite et donnees sensibles
-
-Les mots de passe, tokens, cles privees, API keys, secrets clients et hashes ne doivent pas etre
-mis dans les exports de collecte, les snapshots, les rapports ou les diagnostics. Les erreurs de
-collecte doivent etre traitees comme des etats incomplets, pas comme une preuve d'absence d'acces.
+EARE improves review reliability by preserving provenance and using conservative behavior for incomplete data.

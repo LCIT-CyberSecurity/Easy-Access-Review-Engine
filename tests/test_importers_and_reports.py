@@ -110,10 +110,10 @@ def test_html_report_contains_required_sections_and_filters(tmp_path: Path) -> N
     assert "Access Review Report - q1" in html
     assert "Golden Source" in html
     assert "none" in html
-    assert "Vue d’ensemble" in html
-    assert "Visualisations" in html
+    assert "Overview" in html
+    assert "Visualizations" in html
     assert "Findings" in html
-    assert "Par service / accès" in html
+    assert "By Service / Access" in html
     assert "filter-search" in html
     assert "filter-service" in html
     assert "filter-classification" in html
@@ -238,7 +238,7 @@ def test_authentication_policy_is_explicit_and_secret_free(tmp_path: Path) -> No
     rows[1]["provider"] = "entra-corp"
 
     html = render_html_report(Campaign("auth", "snapshot-1"), rows)
-    assert html.index("Authentication Posture") < html.index("Visualisations")
+    assert html.index("Authentication Posture") < html.index("Visualizations")
     assert "Password + SSO" in html
     assert "Required" in html
     assert "TOTP, FIDO2" in html
