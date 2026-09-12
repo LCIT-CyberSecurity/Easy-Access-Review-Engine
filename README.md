@@ -136,7 +136,7 @@ Main command groups:
 
 ## Quick Start
 
-The fastest useful path is: install EARE, choose where evidence comes from, import it, inspect the first findings, and optionally create a Golden Source baseline.
+The fastest useful path is: connect EARE to an IDP with a read-only account, collect evidence remotely, import the generated artifact, inspect findings, and optionally create a Golden Source baseline.
 
 ### 1. Install the CLI
 
@@ -147,24 +147,13 @@ pip install -e ".[app]"
 access-review --help
 ```
 
-By default EARE stores its local state in `access-review.db`. To use another database file, pass `--db` before the command:
+By default EARE stores its local state in `access-review.db`. To use another database file, pass `--db` before the command.
 
-```bash
-access-review --db eare-prod.db import corp-ad-export.zip
-```
+### 2. Configure read-only IDP access
 
-### 2. Choose the evidence source
+Use a dedicated read-only account. Do not reuse an admin or remediation account.
 
-Use an existing export when another process already extracts the data:
-
-```bash
-access-review validate corp-ad-export.zip
-access-review import corp-ad-export.zip
-```
-
-Or use direct read-only IDP access to produce an importable artifact.
-
-Active Directory example:
+Active Directory remote read-only example:
 
 ```bash
 pwsh ./exporters/active-directory/export-active-directory.ps1 \
@@ -188,7 +177,7 @@ export LDAP_PASSWORD_FILE=/run/secrets/eare-ldap-readonly-password
 access-review import ldap-prod.zip --provider ldap-prod
 ```
 
-In this example EARE connects remotely to the IDP with a dedicated read-only bind account. The password value stays outside the command line and outside the repository; only the file path is referenced. Secrets belong in environment variables, `.env`, or secret-mounted files, never in connector YAML, reports, or SQLite.
+The password value stays outside the command line and outside the repository; only the secret file path is referenced. Secrets belong in environment variables, `.env`, or secret-mounted files, never in connector YAML, reports, or SQLite.
 
 ### 3. Inspect results immediately
 
@@ -213,11 +202,11 @@ You can build it from:
 Recommended first rollout:
 
 ```text
-import current evidence
+collect current IDP evidence with read-only access
 review findings with owners
 approve the expected access
 promote the reviewed baseline into Golden Source v1
-run the next import against that Golden Source
+run the next collection against that Golden Source
 ```
 
 The Golden Source workflow is described in [Golden Source](docs/golden-source.md). If you start without a Golden Source, EARE still saves time by producing inventory, findings, effective access, and reports; comparison states become more powerful once the baseline exists.
