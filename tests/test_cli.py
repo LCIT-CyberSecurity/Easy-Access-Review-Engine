@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from access_review_engine.cli.config_loader import ConfigError, load_connector, secret_environment, template, validate_connector
-from access_review_engine.cli.main import main
+from access_review_engine.cli.main import main, parser
 from access_review_engine.cli.runner import build_command
 
 
@@ -68,3 +68,19 @@ def test_config_check_does_not_create_database(tmp_path: Path) -> None:
     assert main(["config", "check", "corp-ad"]) == 0
     assert not (tmp_path / "access-review.db").exists()
     os.chdir(old)
+
+
+def test_provider_namespace_and_compatibility_commands(tmp_path: Path) -> None:
+    old = Path.cwd()
+    import os
+    os.chdir(tmp_path)
+    assert main(["provider", "init", "corp-ad", "--type", "active_directory"]) == 0
+    assert (tmp_path / "config" / "connectors" / "corp-ad.yaml").exists()
+    assert main(["provider", "show", "corp-ad"]) == 0
+    assert parser().parse_args(["provider", "sync", "--all"]).provider_command == "sync"
+    os.chdir(old)
+
+
+def test_noninteractive_no_argument_is_help_and_campaign_commands_parse() -> None:
+    assert parser().parse_args(["campaign", "create", "q1"]).campaign_command == "create"
+    assert parser().parse_args(["campaign", "close", "q1"]).campaign_command == "close"

@@ -10,11 +10,12 @@ from typing import Any
 from access_review_engine.application import import_file_to_repository, load_classification_rules, _zip_source_type
 from access_review_engine.cli.config_loader import ConfigError, connector_path, load_connector, secret_environment, template, validate_connector
 from access_review_engine.cli.runner import RunnerError, run_exporter
-from access_review_engine.domain import Finding
+from access_review_engine.cli.menu import run_global_menu
+from access_review_engine.domain import Campaign, CampaignStatus, Finding
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif, import_openldap_zip
 from access_review_engine.reporting import write_reports
-from access_review_engine.services import calculate_effective_accesses, golden_diff, promote_snapshot
+from access_review_engine.services import calculate_effective_accesses, close_campaign, create_golden_source, golden_diff, open_campaign, promote_snapshot
 from access_review_engine.storage import (
     Repository, hydrate_access, hydrate_access_relation, hydrate_assignment,
     hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version,
@@ -29,6 +30,31 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--config", dest="config_path")
     p.add_argument("--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
+    provider = sub.add_parser("provider", help="manage providers and run provider operations")
+    provider_sub = provider.add_subparsers(dest="provider_command", required=True)
+    provider_sub.add_parser("list").set_defaults(command="config", config_command="list")
+    for provider_action in ("check", "collect", "sync"):
+        action = provider_sub.add_parser(provider_action)
+        action.add_argument("provider", nargs="?")
+        action.add_argument("--all", action="store_true")
+        action.add_argument("--output")
+        action.add_argument("--dry-run", action="store_true")
+        action.set_defaults(command=provider_action)
+    pi = provider_sub.add_parser("init")
+    pi.add_argument("provider")
+    pi.add_argument("--type", required=True, choices=["active_directory", "openldap"])
+    pi.set_defaults(command="config", config_command="init")
+    ps = provider_sub.add_parser("set")
+    ps.add_argument("provider"); ps.add_argument("key"); ps.add_argument("value")
+    ps.set_defaults(command="config", config_command="set")
+    for action_name in ("show", "edit"):
+        action = provider_sub.add_parser(action_name); action.add_argument("provider")
+        action.set_defaults(command="provider_meta", provider_action=action_name)
+    setup = provider_sub.add_parser("setup")
+    setup.set_defaults(command="provider_setup")
+    pci = provider_sub.add_parser("import")
+    pci.add_argument("file"); pci.add_argument("--provider", default="openldap"); pci.add_argument("--classification-rules"); pci.add_argument("--dry-run", action="store_true")
+    pci.set_defaults(command="import")
     c = sub.add_parser("config"); cs = c.add_subparsers(dest="config_command", required=True)
     cs.add_parser("list")
     s = cs.add_parser("show"); s.add_argument("provider")
@@ -46,13 +72,26 @@ def parser() -> argparse.ArgumentParser:
     g = sub.add_parser("golden"); gs = g.add_subparsers(dest="golden_command", required=True)
     gs.add_parser("list"); x = gs.add_parser("show"); x.add_argument("name"); x = gs.add_parser("diff"); x.add_argument("name")
     x = gs.add_parser("promote"); x.add_argument("name"); x.add_argument("--snapshot", default="latest")
-    c = sub.add_parser("campaign"); cs = c.add_subparsers(dest="campaign_command", required=True); cs.add_parser("list"); x = cs.add_parser("export"); x.add_argument("output_dir")
+    x = gs.add_parser("edit"); x.add_argument("name")
+    c = sub.add_parser("campaign"); cs = c.add_subparsers(dest="campaign_command", required=True)
+    cs.add_parser("list")
+    x = cs.add_parser("create"); x.add_argument("name"); x.add_argument("--snapshot", default="latest")
+    x = cs.add_parser("open"); x.add_argument("name")
+    x = cs.add_parser("status"); x.add_argument("name", nargs="?")
+    x = cs.add_parser("close"); x.add_argument("name")
+    x = cs.add_parser("export"); x.add_argument("output_dir")
     e = sub.add_parser("export"); es = e.add_subparsers(dest="export_command", required=True); x = es.add_parser("report"); x.add_argument("--output", required=True); es.add_parser("revocations")
     return p
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    if not arguments:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            return run_global_menu()
+        parser().print_help()
+        return 0
     try:
-        return dispatch(parser().parse_args(argv))
+        return dispatch(parser().parse_args(arguments))
     except ConfigError as exc:
         print(f"CONFIGURATION_ERROR: {exc}", file=sys.stderr); return CONFIG_CODE
     except RunnerError as exc:
@@ -62,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
 
 def dispatch(a: argparse.Namespace) -> int:
     if a.command == "config": return config_command(a)
+    if a.command == "provider_meta": return provider_meta_command(a)
+    if a.command == "provider_setup": return provider_setup_command()
     if a.command == "check" and getattr(a, "config_command", None) == "check": return config_check(a)
     if a.command in {"check", "collect", "sync"}: return connector_command(a)
     if a.command in {"import", "validate"}: return import_command(a)
@@ -95,6 +136,60 @@ def config_command(a: argparse.Namespace) -> int:
     cursor[parts[-1]] = parse_value(a.value)
     path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
     print(f"updated {path}"); return 0
+
+
+
+def provider_meta_command(a: argparse.Namespace) -> int:
+    import yaml
+    path = connector_path(a.provider)
+    if not path.is_file():
+        raise ConfigError(f"Connector configuration not found: {path}")
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if a.provider_action == "show":
+        print(json.dumps(redact(data), indent=2))
+        return 0
+    current = data
+    print(f"Editing provider {a.provider}. Press Enter to keep the current value.")
+    if data["type"] == "active_directory":
+        value = input(f"Server [{data['connection'].get('server', '')}]: ").strip()
+        if value: current["connection"]["server"] = value
+    else:
+        for key in ("uri", "base_dn", "bind_dn"):
+            value = input(f"{key} [{data['connection'].get(key, '')}]: ").strip()
+            if value: current["connection"][key] = value
+    value = input(f"Allow partial [{data.get('collection', {}).get('allow_partial', False)}]: ").strip()
+    if value: current.setdefault("collection", {})["allow_partial"] = parse_value(value)
+    connector_path(a.provider).write_text(yaml.safe_dump({k:v for k,v in current.items() if k != "_path"}, sort_keys=False), encoding="utf-8")
+    print(f"updated {connector_path(a.provider)}")
+    return 0
+
+def provider_setup_command() -> int:
+    import yaml
+    kind = input("Provider type (active_directory/openldap): ").strip()
+    if kind not in {"active_directory", "openldap"}: raise ConfigError("Unsupported provider type")
+    name = input("Provider name: ").strip()
+    if not name: raise ConfigError("Provider name is required")
+    data = template(name, kind)
+    connection = data["connection"]
+    for key in tuple(connection):
+        connection[key] = input(f"{key}: ").strip()
+    data["credentials"] = {
+        "username_env": input("Username environment variable (optional): ").strip(),
+        "password_env": input("Password environment variable (optional): ").strip(),
+    }
+    data["credentials"] = {k:v for k,v in data["credentials"].items() if v}
+    path = connector_path(name); path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    print(f"created {path}")
+    return 0
+
+def edit_golden_source(repo: Repository, source: dict[str, Any]) -> int:
+    import yaml
+    description = input(f"Description [{source.get('description') or ''}]: ").strip()
+    if description: source["description"] = description
+    repo.upsert("golden_sources", source)
+    print(f"updated Golden Source {source['name']}")
+    return 0
 
 def config_check(a: argparse.Namespace) -> int:
     data = load_connector(a.provider, a.config_path)
@@ -227,8 +322,13 @@ def golden_command(a: argparse.Namespace) -> int:
             for row in sources: print(f"{row['name']} active_version={row.get('active_version_id')}")
             return 0
         source = next((r for r in sources if r["name"] == a.name), None)
+        if a.golden_command == "edit" and source is None:
+            source_object = create_golden_source(a.name)
+            repo.upsert("golden_sources", source_object)
+            source = repo.find_by_name("golden_sources", a.name)
         if source is None: raise ValueError(f"Golden Source not found: {a.name}")
         if a.golden_command == "show": print(json.dumps(source, indent=2)); return 0
+        if a.golden_command == "edit": return edit_golden_source(repo, source)
         versions = [hydrate_golden_version(r) for r in repo.list_payloads("golden_source_versions") if r["golden_source_id"] == source["id"]]
         if a.golden_command == "diff":
             if len(versions) < 2: print("No previous Golden Source version available"); return 0
@@ -246,13 +346,55 @@ def golden_command(a: argparse.Namespace) -> int:
 
 def campaign_command(a: argparse.Namespace) -> int:
     with repository(a.db) as repo:
-        if a.campaign_command == "list":
-            for row in repo.list_payloads("campaigns"): print(f"{row['name']} {row['status']}")
-            return 0
         campaigns = repo.list_payloads("campaigns")
-        if not campaigns: raise ValueError("No campaign found")
-        campaign = hydrate_campaign(campaigns[-1]); items = [hydrate_review_item(r) for r in repo.list_payloads("review_items") if r["campaign_id"] == campaign.id]
-        ids = {item.id for item in items}; decisions = [hydrate_decision(r) for r in repo.list_payloads("decisions") if r["review_item_id"] in ids]
+        if a.campaign_command == "list":
+            for row in campaigns:
+                print(f"{row['name']} {row['status']}")
+            return 0
+        if a.campaign_command == "status":
+            selected = campaigns if not a.name else [r for r in campaigns if r["name"] == a.name]
+            if not selected:
+                raise ValueError("Campaign not found")
+            for row in selected:
+                print(json.dumps({"name": row["name"], "status": row["status"], "snapshot_id": row["snapshot_id"]}, sort_keys=True))
+            return 0
+        if a.campaign_command == "create":
+            snapshots = repo.list_payloads("snapshots")
+            selected = snapshots[-1] if snapshots else None
+            if a.snapshot != "latest":
+                selected = next((r for r in snapshots if r["id"] == a.snapshot), None)
+            if selected is None:
+                raise ValueError("Snapshot not found")
+            campaign = Campaign(a.name, selected["id"], allow_unresolved_reviewers=True)
+            repo.upsert("campaigns", campaign)
+            print(f"created campaign={campaign.name} snapshot={campaign.snapshot_id}")
+            return 0
+        selected = next((r for r in campaigns if r["name"] == a.name), None)
+        if selected is None:
+            raise ValueError("Campaign not found")
+        campaign = hydrate_campaign(selected)
+        if a.campaign_command == "open":
+            snapshot_payload = repo.get_payload("snapshots", campaign.snapshot_id)
+            if snapshot_payload is None:
+                raise ValueError("Campaign snapshot not found")
+            snapshot = hydrate_snapshot(snapshot_payload)
+            campaign, items = open_campaign(campaign, snapshot)
+            repo.upsert("campaigns", campaign)
+            for item in items:
+                repo.upsert("review_items", item)
+            print(f"opened campaign={campaign.name} items={len(items)}")
+            return 0
+        if a.campaign_command == "close":
+            items = [hydrate_review_item(r) for r in repo.list_payloads("review_items") if r["campaign_id"] == campaign.id]
+            ids = {item.id for item in items}
+            decisions = [hydrate_decision(r) for r in repo.list_payloads("decisions") if r["review_item_id"] in ids]
+            campaign = close_campaign(campaign, items, decisions)
+            repo.upsert("campaigns", campaign)
+            print(f"closed campaign={campaign.name}")
+            return 0
+        items = [hydrate_review_item(r) for r in repo.list_payloads("review_items") if r["campaign_id"] == campaign.id]
+        ids = {item.id for item in items}
+        decisions = [hydrate_decision(r) for r in repo.list_payloads("decisions") if r["review_item_id"] in ids]
         write_reports(a.output_dir, campaign, items, decisions)
         print(f"exported {a.output_dir}")
     return 0

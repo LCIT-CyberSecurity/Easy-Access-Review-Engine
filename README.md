@@ -103,11 +103,7 @@ The CLI is the user-facing orchestration layer for the EARE engine. It is there 
 The installed CLI interface is:
 
 ```bash
-eare config ...
-eare check ...
-eare collect ...
-eare sync ...
-eare import ...
+eare provider ...
 eare analyze ...
 eare golden ...
 eare campaign ...
@@ -134,6 +130,30 @@ Main command groups:
 
 `--dry-run` is for import and sync workflows. It runs the real engine against an isolated temporary database copy to explain what would change, while leaving the real EARE database untouched.
 
+## Interactive Menu
+
+Run eare without arguments in a terminal to open the human-friendly menu:
+
+Easy Access Review Engine
+
+1. Providers
+2. Analyze
+3. Golden Source
+4. Campaigns
+5. Exports
+6. Quit
+
+The menu calls the same command handlers as direct CLI usage. In CI, pipes, and other non-interactive contexts, eare without arguments prints help and exits instead of waiting for input.
+
+Provider workflows use the canonical namespace:
+
+eare provider list
+eare provider init corp-ad --type active_directory
+eare provider setup
+eare provider check --all
+eare provider sync corp-ad
+eare provider sync corp-ad --dry-run
+
 ## Quick Start
 
 The fastest useful path is: connect EARE to an IDP with a read-only account, run a remote synchronization, inspect findings, and optionally create a Golden Source baseline.
@@ -156,20 +176,20 @@ Use a dedicated read-only account. Do not reuse an admin or remediation account.
 Active Directory remote read-only example:
 
 ```bash
-eare config init corp-ad --type active_directory
-eare config set corp-ad connection.server dc01.corp.local
-eare config check corp-ad
+eare provider init corp-ad --type active_directory
+eare provider set corp-ad connection.server dc01.corp.local
+eare provider check corp-ad
 ```
 
 OpenLDAP remote read-only example:
 
 ```bash
-eare config init ldap-prod --type openldap
-eare config set ldap-prod connection.uri ldaps://ldap.example.com:636
-eare config set ldap-prod connection.base_dn dc=example,dc=com
-eare config set ldap-prod connection.bind_dn cn=eare-readonly,ou=service-accounts,dc=example,dc=com
+eare provider init ldap-prod --type openldap
+eare provider set ldap-prod connection.uri ldaps://ldap.example.com:636
+eare provider set ldap-prod connection.base_dn dc=example,dc=com
+eare provider set ldap-prod connection.bind_dn cn=eare-readonly,ou=service-accounts,dc=example,dc=com
 export LDAP_PASSWORD_FILE=/run/secrets/eare-ldap-readonly-password
-eare config check ldap-prod
+eare provider check ldap-prod
 ```
 
 The password value stays outside the command line and outside the repository; only the secret file path is referenced. Secrets belong in environment variables, `.env`, or secret-mounted files, never in connector YAML, reports, or SQLite.
@@ -177,9 +197,9 @@ The password value stays outside the command line and outside the repository; on
 ### 3. Run the first remote sync
 
 ```bash
-eare sync corp-ad
+eare provider sync corp-ad
 # or
-eare sync ldap-prod
+eare provider sync ldap-prod
 ```
 
 `sync` performs the read-only collection, normalizes the result, imports it into EARE, and creates the review snapshot. The IDP is never modified.
@@ -187,7 +207,7 @@ eare sync ldap-prod
 To preview the impact without changing the EARE database:
 
 ```bash
-eare sync corp-ad --dry-run
+eare provider sync corp-ad --dry-run
 ```
 
 ### 4. Inspect results immediately

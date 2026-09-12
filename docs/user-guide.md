@@ -86,11 +86,7 @@ access-review
 Available command groups:
 
 ```bash
-eare config ...
-eare check ...
-eare collect ...
-eare sync ...
-eare import ...
+eare provider ...
 eare analyze ...
 eare golden ...
 eare campaign ...
@@ -107,6 +103,30 @@ access-review identities-list
 access-review access-effective <identity>
 access-review campaign-export <output-dir>
 ```
+
+## Interactive Menu
+
+Run eare without arguments in a terminal to open the human-friendly menu:
+
+Easy Access Review Engine
+
+1. Providers
+2. Analyze
+3. Golden Source
+4. Campaigns
+5. Exports
+6. Quit
+
+The menu calls the same command handlers as direct CLI usage. In CI, pipes, and other non-interactive contexts, eare without arguments prints help and exits instead of waiting for input.
+
+Provider workflows use the canonical namespace:
+
+eare provider list
+eare provider init corp-ad --type active_directory
+eare provider setup
+eare provider check --all
+eare provider sync corp-ad
+eare provider sync corp-ad --dry-run
 
 ## 5. Configuration, Secrets, and State
 
@@ -136,8 +156,8 @@ The CLI commands are available shortcuts around the same engine, not a second im
 `check` is diagnostic. It validates configuration and, when supported, asks the existing collector to verify the provider. It must not modify SQLite or the provider.
 
 ```bash
-eare check corp-ad
-eare check ldap-prod
+eare provider check corp-ad
+eare provider check ldap-prod
 ```
 
 Running `check` is useful, but it is not required before `sync`.
@@ -147,8 +167,8 @@ Running `check` is useful, but it is not required before `sync`.
 `collect` uses direct read-only IDP access through the existing exporter and writes an artifact. It does not import into SQLite. Use it when collection and import are separated by process, approval, or change-control requirements.
 
 ```bash
-eare collect corp-ad --output /tmp/corp-ad.zip
-eare collect ldap-prod --output /tmp/ldap-prod.zip
+eare provider collect corp-ad --output /tmp/corp-ad.zip
+eare provider collect ldap-prod --output /tmp/ldap-prod.zip
 ```
 
 ### import
@@ -156,8 +176,8 @@ eare collect ldap-prod --output /tmp/ldap-prod.zip
 `import` loads an existing artifact into EARE by calling the application import engine. Use it when the evidence already exists as a ZIP, LDIF, CSV-derived artifact, or another supported extraction.
 
 ```bash
-eare import corp-ad-export.zip
-eare import directory.ldif --provider ldap-prod
+eare provider import corp-ad-export.zip
+eare provider import directory.ldif --provider ldap-prod
 ```
 
 The import path reuses `import_file_to_repository(...)`; the CLI must not reimplement reconciliation.
@@ -167,9 +187,9 @@ The import path reuses `import_file_to_repository(...)`; the CLI must not reimpl
 `sync` is the main operator workflow for repeatable direct read-only IDP collection. It combines configuration, collection, and import:
 
 ```bash
-eare sync corp-ad
-eare sync ldap-prod
-eare sync --all
+eare provider sync corp-ad
+eare provider sync ldap-prod
+eare provider sync --all
 ```
 
 Multi-provider sync is sequential. If one provider fails, previous successful providers remain processed; there is no global multi-provider transaction.
@@ -193,9 +213,9 @@ The safe MVP strategy is to run the real engine against an isolated temporary SQ
 Examples:
 
 ```bash
-eare import corp-ad-export.zip --dry-run
-eare sync corp-ad --dry-run
-eare sync --all --dry-run
+eare provider import corp-ad-export.zip --dry-run
+eare provider sync corp-ad --dry-run
+eare provider sync --all --dry-run
 ```
 
 For scoped or unknown collections, dry-run must preserve the same safety rules as real imports: no false deletion, no false missing access, and no authoritative conclusion outside the observed scope.
@@ -211,7 +231,7 @@ eare analyze --identity alice
 eare analyze --access Finance
 ```
 
-If no snapshot exists, the CLI explains that no local analysis is available and suggest `eare sync <provider>` or `eare import <file>`.
+If no snapshot exists, the CLI explains that no local analysis is available and suggest `eare provider sync <provider>` or `eare provider import <file>`.
 
 ## 9. Active Directory Collection
 
