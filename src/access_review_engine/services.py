@@ -15,6 +15,7 @@ from access_review_engine.domain import (
     AuditEvent,
     Campaign,
     CampaignStatus,
+    canonical_permission_id,
     ComparisonState,
     Completeness,
     Decision,
@@ -534,7 +535,7 @@ def _observed_stable_key(
     access_native_id = str(raw_access_native) if raw_access_native else None
     if access_native_id is None and access and access.control_object:
         access_native_id = access.control_object.native_id
-    permission_id = access.permission.identifier if access and access.permission else "member"
+    permission_id = canonical_permission_id(access.permission if access else None)
     if not access_native_id and not identity.native_id:
         return None
     access_ref = (

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from access_review_engine.domain import (
     Access,
@@ -62,6 +63,7 @@ class Repository:
         self.path = str(path)
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
+        self._transaction_depth = 0
         self.init_schema()
 
     def init_schema(self) -> None:
@@ -110,6 +112,28 @@ class Repository:
         )
         self.conn.commit()
 
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        outermost = self._transaction_depth == 0
+        if outermost:
+            self.conn.execute("BEGIN")
+        self._transaction_depth += 1
+        try:
+            yield
+        except Exception:
+            if outermost:
+                self.conn.rollback()
+            raise
+        else:
+            if outermost:
+                self.conn.commit()
+        finally:
+            self._transaction_depth -= 1
+
+    def _commit_unless_in_transaction(self) -> None:
+        if self._transaction_depth == 0:
+            self.conn.commit()
+
     def close(self) -> None:
         self.conn.close()
 
@@ -128,7 +152,7 @@ class Repository:
             """,
             self._row(obj, payload),
         )
-        self.conn.commit()
+        self._commit_unless_in_transaction()
 
     def insert_append_only(self, table: str, obj: Any) -> None:
         payload = self._payload(obj)
@@ -136,7 +160,12 @@ class Repository:
             f"INSERT INTO {table} (id, payload, created_at, provider, name, version) VALUES (?, ?, ?, ?, ?, ?)",
             self._row(obj, payload),
         )
-        self.conn.commit()
+        self._commit_unless_in_transaction()
+
+    def delete_ids(self, table: str, object_ids: set[str]) -> None:
+        for object_id in object_ids:
+            self.conn.execute(f"DELETE FROM {table} WHERE id = ?", (object_id,))
+        self._commit_unless_in_transaction()
 
     def list_payloads(self, table: str) -> list[dict[str, Any]]:
         return [
@@ -181,15 +210,15 @@ class Repository:
         scoped_providers = providers or {assignment.provider for assignment in assignments}
         if not scoped_providers:
             return
-        with self.conn:
-            for provider in scoped_providers:
-                self.conn.execute("DELETE FROM access_assignments WHERE provider = ?", (provider,))
-            for assignment in assignments:
-                self.conn.execute(
-                    "INSERT INTO access_assignments (id, payload, created_at, provider, name, version) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    self._row(assignment, self._payload(assignment)),
-                )
+        for provider in scoped_providers:
+            self.conn.execute("DELETE FROM access_assignments WHERE provider = ?", (provider,))
+        for assignment in assignments:
+            self.conn.execute(
+                "INSERT INTO access_assignments (id, payload, created_at, provider, name, version) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                self._row(assignment, self._payload(assignment)),
+            )
+        self._commit_unless_in_transaction()
 
     def replace_access_relations(
         self, relations: list[AccessRelation], providers: set[str] | None = None
@@ -198,18 +227,18 @@ class Repository:
         if not scoped_providers:
             return
         seen: set[tuple[str, str, str, str, str, str]] = set()
-        with self.conn:
-            for provider in scoped_providers:
-                self.conn.execute("DELETE FROM access_relations WHERE provider = ?", (provider,))
-            for relation in relations:
-                if relation.key() in seen:
-                    continue
-                seen.add(relation.key())
-                self.conn.execute(
-                    "INSERT INTO access_relations (id, payload, created_at, provider, name, version) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    self._row(relation, self._payload(relation)),
-                )
+        for provider in scoped_providers:
+            self.conn.execute("DELETE FROM access_relations WHERE provider = ?", (provider,))
+        for relation in relations:
+            if relation.key() in seen:
+                continue
+            seen.add(relation.key())
+            self.conn.execute(
+                "INSERT INTO access_relations (id, payload, created_at, provider, name, version) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                self._row(relation, self._payload(relation)),
+            )
+        self._commit_unless_in_transaction()
 
     def _payload(self, obj: Any) -> str:
         if isinstance(obj, dict):
@@ -224,10 +253,6 @@ class Repository:
         name = data.get("name") or data.get("identifier") or data.get("golden_source_id")
         if isinstance(obj, Identity) and data.get("status") == IdentityStatus.DELETED:
             name = f"{name}#deleted:{data.get('native_id') or data['id']}"
-        if isinstance(obj, Access) and (data.get("control_object") or {}).get("native_id"):
-            native_id = data["control_object"]["native_id"]
-            permission = (data.get("permission") or {}).get("identifier", "")
-            name = f"{name}#native:{native_id}:{permission}"
         if isinstance(obj, GoldenSourceVersion):
             name = obj.golden_source_id
         if isinstance(obj, AccessAssignment):

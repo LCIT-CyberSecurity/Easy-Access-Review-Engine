@@ -89,73 +89,82 @@ def persist_import_result(
     if not authoritative:
         _retain_non_authoritative_unresolved(result)
 
-    repo.upsert("providers", result.provider)
-    repo.insert_append_only("imports", result.batch)
+    # The complete import, including its audit batch and snapshot, is one transaction.
+    with repo.transaction():
+        repo.upsert("providers", result.provider)
+        repo.insert_append_only("imports", result.batch)
 
-    existing_identities = _load_identities(repo, result.provider.name)
-    imported_identities = _dedupe_identities(result.identities)
-    merged_identities = reconcile_identities(
-        existing_identities,
-        imported_identities,
-        completeness=result.batch.completeness,
-        scope=result.batch.scope,
-        authoritative=authoritative,
-    )
-    for identity in sorted(merged_identities, key=lambda item: item.status != "deleted"):
-        repo.upsert("identities", identity)
-
-    accesses = _reconcile_accesses(_load_accesses(repo, result.provider.name), result.accesses)
-    for access in accesses:
-        repo.upsert("accesses", access)
-
-    access_relations = _reconcile_access_relations(
-        _load_access_relations(repo, result.provider.name),
-        result.access_relations,
-    )
-    if result.access_relations:
-        repo.replace_access_relations(access_relations, providers={result.provider.name})
-
-    snapshot_assignments = list(result.assignments)
-    if authoritative:
-        assignments = _reconcile_assignments(
-            _load_assignments(repo, result.provider.name),
-            result.assignments,
+        existing_identities = _load_identities(repo, result.provider.name)
+        imported_identities = _dedupe_identities(result.identities)
+        merged_identities = reconcile_identities(
+            existing_identities,
+            imported_identities,
+            completeness=result.batch.completeness,
+            scope=result.batch.scope,
+            authoritative=authoritative,
         )
-        repo.replace_assignments(assignments, providers={result.provider.name})
-        snapshot_assignments = assignments
+        for identity in sorted(merged_identities, key=lambda item: item.status != "deleted"):
+            repo.upsert("identities", identity)
 
-    resolved_authoritative = _resolve_unresolved_assignments(repo)
-    _resolve_non_authoritative_unresolved_observations(repo)
-    if authoritative and resolved_authoritative:
-        snapshot_assignments = _load_assignments(repo, result.provider.name)
+        existing_accesses = _load_accesses(repo, result.provider.name)
+        accesses = _reconcile_accesses(existing_accesses, result.accesses)
+        obsolete_access_ids = {
+            access.id for access in existing_accesses
+        } - {access.id for access in accesses}
+        repo.delete_ids("accesses", obsolete_access_ids)
+        for access in accesses:
+            repo.upsert("accesses", access)
 
-    authentication_posture = result.authentication_posture
-    if (
-        authentication_posture is None
-        or result.batch.completeness != Completeness.FULL
-        or authentication_posture.completeness != str(Completeness.FULL)
-    ):
-        for payload in reversed(repo.list_payloads("snapshots")):
-            previous = payload.get("authentication_posture")
-            if isinstance(previous, dict) and previous.get("provider") == result.provider.name:
-                authentication_posture = hydrate_authentication_posture(previous)
-                break
+        observed_relations = result.access_relations
+        if observed_relations is not None:
+            existing_relations = _load_access_relations(repo, result.provider.name)
+            if authoritative:
+                relations = _reconcile_access_relations(existing_relations, observed_relations)
+                repo.replace_access_relations(relations, providers={result.provider.name})
+            elif observed_relations:
+                relations = _merge_access_relations(existing_relations, observed_relations)
+                repo.replace_access_relations(relations, providers={result.provider.name})
 
-    snapshot = create_snapshot(
-        [result.provider],
-        _load_identities(repo),
-        [],
-        _load_accesses(repo),
-        snapshot_assignments,
-        [result.batch.id],
-        golden_version,
-        result.batch.scope,
-        _load_access_relations(repo),
-        authentication_posture=authentication_posture,
-    )
-    repo.insert_append_only("snapshots", snapshot)
+        snapshot_assignments = list(result.assignments)
+        if authoritative:
+            assignments = _reconcile_assignments(
+                _load_assignments(repo, result.provider.name),
+                result.assignments,
+            )
+            repo.replace_assignments(assignments, providers={result.provider.name})
+            snapshot_assignments = assignments
+
+        resolved_authoritative = _resolve_unresolved_assignments(repo)
+        _resolve_non_authoritative_unresolved_observations(repo)
+        if authoritative and resolved_authoritative:
+            snapshot_assignments = _load_assignments(repo, result.provider.name)
+
+        authentication_posture = result.authentication_posture
+        if (
+            authentication_posture is None
+            or result.batch.completeness != Completeness.FULL
+            or authentication_posture.completeness != str(Completeness.FULL)
+        ):
+            for payload in reversed(repo.list_payloads("snapshots")):
+                previous = payload.get("authentication_posture")
+                if isinstance(previous, dict) and previous.get("provider") == result.provider.name:
+                    authentication_posture = hydrate_authentication_posture(previous)
+                    break
+
+        snapshot = create_snapshot(
+            [result.provider],
+            _load_identities(repo),
+            [],
+            _load_accesses(repo),
+            snapshot_assignments,
+            [result.batch.id],
+            golden_version,
+            result.batch.scope,
+            _load_access_relations(repo),
+            authentication_posture=authentication_posture,
+        )
+        repo.insert_append_only("snapshots", snapshot)
     return snapshot
-
 
 def _is_authoritative_full(result: ImportResult) -> bool:
     scope = result.batch.scope or {}
@@ -382,52 +391,70 @@ def _enrich_access(existing: Access, incoming: Access) -> Access:
 
 def _reconcile_accesses(existing: Iterable[Access], imported: Iterable[Access]) -> list[Access]:
     existing_items = list(existing)
-    existing_by_name: dict[tuple[str, str], list[Access]] = {}
-    existing_by_native: dict[tuple[str, str, str | None], Access] = {}
+    existing_by_name: dict[tuple[str, str], Access] = {}
+    existing_by_native: dict[tuple[str, str], Access] = {}
     for access in existing_items:
-        existing_by_name.setdefault((access.provider, access.name), []).append(access)
+        key = (access.provider, access.name)
+        previous = existing_by_name.get(key)
+        if previous is not None:
+            _raise_access_collision(previous, access)
+        existing_by_name[key] = access
         native_id = _access_native_id(access)
-        permission = access.permission.identifier if access.permission else None
         if native_id is not None:
-            existing_by_native[(access.provider, native_id, permission)] = access
+            existing_by_native[(access.provider, native_id)] = access
+
     reconciled = list(existing_items)
-    seen: set[tuple[str, str, str | None]] = set()
+    seen: set[tuple[str, str]] = set()
     for access in imported:
         key = (access.provider, access.name)
-        candidates = existing_by_name.setdefault(key, [])
+        previous = existing_by_name.get(key)
         native_id = _access_native_id(access)
-        permission = access.permission.identifier if access.permission else None
-        previous = (
-            existing_by_native.get((access.provider, native_id, permission))
-            if native_id is not None
-            else None
-        )
-        if previous is None:
-            previous = next((item for item in candidates if _access_native_id(item) == native_id), None)
-        if previous is None and native_id is None:
-            previous = next((item for item in candidates if _access_native_id(item) is None), None)
-        if previous is None and len(candidates) == 1 and native_id is None:
-            previous = candidates[0]
+        if previous is None and native_id is not None:
+            previous = existing_by_native.get((access.provider, native_id))
         if previous is not None:
             if _access_definitions_conflict(previous, access):
                 _raise_access_collision(previous, access)
-            access.id = previous.id
-            if previous.name == access.name:
+            position = reconciled.index(previous)
+            previous_native_id = _access_native_id(previous)
+            old_key = (previous.provider, previous.name)
+            if previous_native_id is not None and native_id is not None and previous_native_id != native_id:
+                # Same logical name, new source object: keep the unique key and replace the source object.
+                reconciled[position] = access
+            elif old_key != key:
+                # Stable native identity with a renamed Access keeps its repository identity.
+                access.id = previous.id
+                reconciled[position] = access
+            else:
+                access.id = previous.id
                 _enrich_access(previous, access)
                 access = previous
-            else:
-                position = reconciled.index(previous)
-                reconciled[position] = access
-                previous_candidates = existing_by_name[(previous.provider, previous.name)]
-                previous_candidates[previous_candidates.index(previous)] = access
-        elif any(_access_definitions_conflict(item, access) for item in candidates if native_id is None):
-            _raise_access_collision(candidates[0], access)
-        dedupe_key = (*key, native_id)
-        if dedupe_key not in seen and access not in reconciled:
+            if old_key != key:
+                existing_by_name.pop(old_key, None)
+            existing_by_name[key] = access
+            if native_id is not None:
+                existing_by_native[(access.provider, native_id)] = access
+        else:
+            existing_by_name[key] = access
+            if native_id is not None:
+                existing_by_native[(access.provider, native_id)] = access
+        if key not in seen and access not in reconciled:
             reconciled.append(access)
-            candidates.append(access)
-            seen.add(dedupe_key)
+        seen.add(key)
     return reconciled
+
+def _merge_access_relations(
+    existing: Iterable[AccessRelation], imported: Iterable[AccessRelation]
+) -> list[AccessRelation]:
+    merged = list(existing)
+    existing_by_key = {relation.key(): relation for relation in merged}
+    for relation in imported:
+        previous = existing_by_key.get(relation.key())
+        if previous is not None:
+            relation.id = previous.id
+            continue
+        existing_by_key[relation.key()] = relation
+        merged.append(relation)
+    return merged
 
 
 def _reconcile_access_relations(

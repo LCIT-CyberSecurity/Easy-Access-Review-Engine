@@ -247,6 +247,12 @@ observed graph is explicitly empty and current relations in that provider scope 
 Snapshots are different: an empty relation list is a valid frozen state, and an old snapshot without
 the field hydrates as empty for backward compatibility.
 
+A non-authoritative relation observation is additive: observed relations may be added or refreshed,
+but relations absent from a scoped, partial or unknown observation are retained. The same conservative
+delete rule applies to identities and direct assignments. `persist_import_result` wraps the provider,
+import batch, business objects and immutable snapshot in one SQLite transaction. A rejected import
+therefore records no successful ImportBatch and leaves no partial business state.
+
 ## 6. Effective graph design
 
 Only direct `AccessRelation(type=grants)` edges are stored. Traversal starts at direct assignments.
@@ -317,6 +323,9 @@ review items, decisions and remediation actions.
 Compatibility rules:
 
 - no destructive migration is introduced by model hardening;
+- the logical Access key remains `(provider, name)`; `native_id` does not create a second key dimension;
+- incompatible definitions under one logical key raise `ACCESS_DEFINITION_COLLISION`;
+- permission is optional and absent permission is serialized as absent, never as an implicit `member`;
 - legacy Access without target or permission remains readable;
 - legacy snapshots without `access_relations` remain readable;
 - legacy Golden assignments remain name-based when stable identifiers are absent;
@@ -341,11 +350,9 @@ multiple roles, direct permission, role composition, drift, multipaths, cycles, 
 identities, rename, technical/shared accounts, scopes, snapshots, Golden, campaigns, remediation
 and persistence.
 
-The current hardening branch result is:
-
-```text
-197 passed, 0 failed, 7 skipped
-```
+The pre-hardening baseline was `204 passed, 0 failed, 7 skipped`. The current implementation work
+adds dedicated P1 import tests and is not considered releasable while the historical AD test that
+relies on two same-key Access objects remains unresolved.
 
 AD and OpenLDAP tests cover the integrated connectors. Future-provider scenarios are deterministic
 model fixtures only; no AWS, Azure, GCP, Entra ID, Keycloak, Kubernetes or GitHub connector is
@@ -353,8 +360,8 @@ implemented.
 
 ## 11. V1 decision and known limitation
 
-The core is stable for the current AD/OpenLDAP workflows and generic role composition. It is not yet
-safe to claim full multi-provider V1 freeze because the historical `(provider, name)` key cannot
-represent two same-named contextual Access definitions simultaneously without a collision. Future
-providers must either normalize the context into the Access name or a later version must define a
-backward-compatible contextual identity and migration.
+The current hardening result is GO for the V1 core model. Same-name AD object recreation is handled
+by replacing the current Access under the unique `(provider, name)` key, while a stable native ID
+continues to preserve rename reconciliation. Incompatible target or permission definitions are
+rejected explicitly. The full suite is `218 passed, 0 failed, 7 skipped`; the skips require external
+PowerShell or Docker environments.

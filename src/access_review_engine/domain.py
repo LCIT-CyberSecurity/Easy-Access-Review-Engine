@@ -356,6 +356,12 @@ class GoldenSource:
     created_at: str = field(default_factory=now_utc)
 
 
+def canonical_permission_id(permission: str | Permission | None) -> str:
+    if isinstance(permission, Permission):
+        return permission.identifier
+    return permission or ""
+
+
 @dataclass(frozen=True)
 class GoldenSourceAssignment:
     access_provider: str
@@ -378,7 +384,7 @@ class GoldenSourceAssignment:
         if not self.access_native_id and not self.identity_native_id:
             return None
         access_ref = (
-            f"native:{self.access_native_id}:{self.access_permission or ''}"
+            f"native:{self.access_native_id}:{canonical_permission_id(self.access_permission)}"
             if self.access_native_id
             else f"name:{self.access_name}"
         )

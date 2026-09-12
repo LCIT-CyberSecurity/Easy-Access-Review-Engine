@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import TextIOWrapper
 from pathlib import Path
@@ -60,7 +60,7 @@ class ImportResult:
     identities: list[Identity]
     accesses: list[Access]
     assignments: list[AccessAssignment]
-    access_relations: list[AccessRelation] = field(default_factory=list)
+    access_relations: list[AccessRelation] | None = None
     authentication_posture: AuthenticationPosture | None = None
 
 
