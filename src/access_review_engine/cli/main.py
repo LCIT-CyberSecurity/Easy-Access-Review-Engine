@@ -12,11 +12,11 @@ from access_review_engine.application import import_file_to_repository, load_cla
 from access_review_engine.cli.config_loader import ConfigError, connector_path, load_connector, secret_environment, template, validate_connector
 from access_review_engine.cli.runner import RunnerError, run_exporter
 from access_review_engine.cli.menu import run_global_menu
-from access_review_engine.domain import Campaign, CampaignStatus, Finding
+from access_review_engine.domain import Campaign, CampaignStatus, Finding, GoldenSourceAssignment
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif, import_openldap_zip
 from access_review_engine.reporting import write_reports
-from access_review_engine.services import calculate_effective_accesses, close_campaign, create_golden_source, golden_diff, open_campaign, promote_snapshot, remediation_from_decisions
+from access_review_engine.services import calculate_effective_accesses, close_campaign, create_golden_source, create_golden_version, golden_diff, open_campaign, promote_snapshot, remediation_from_decisions
 from access_review_engine.storage import (
     Repository, hydrate_access, hydrate_access_relation, hydrate_assignment,
     hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version,
@@ -73,7 +73,8 @@ def parser() -> argparse.ArgumentParser:
     g = sub.add_parser("golden"); gs = g.add_subparsers(dest="golden_command", required=True)
     gs.add_parser("list"); x = gs.add_parser("show"); x.add_argument("name"); x = gs.add_parser("diff"); x.add_argument("name")
     x = gs.add_parser("promote"); x.add_argument("name"); x.add_argument("--snapshot", default="latest")
-    x = gs.add_parser("edit"); x.add_argument("name")
+    x = gs.add_parser("edit"); x.add_argument("name"); x.add_argument("--csv")
+    x = gs.add_parser("create"); x.add_argument("name"); x.add_argument("--csv")
     c = sub.add_parser("campaign"); cs = c.add_subparsers(dest="campaign_command", required=True)
     cs.add_parser("list")
     x = cs.add_parser("create"); x.add_argument("name"); x.add_argument("--snapshot", default="latest")
@@ -183,6 +184,24 @@ def provider_setup_command() -> int:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     print(f"created {path}")
     return 0
+
+def read_golden_csv(path: str | Path) -> list[GoldenSourceAssignment]:
+    required = {"access_provider", "access_name", "identity_provider", "identity_identifier"}
+    assignments: list[GoldenSourceAssignment] = []
+    with Path(path).open(newline="", encoding="utf-8-sig") as handle:
+        for row in csv.DictReader(handle):
+            if not required.issubset(row):
+                raise ValueError("Golden CSV requires access_provider, access_name, identity_provider, identity_identifier")
+            assignments.append(GoldenSourceAssignment(
+                access_provider=row["access_provider"],
+                access_name=row["access_name"],
+                identity_provider=row["identity_provider"],
+                identity_identifier=row["identity_identifier"],
+                access_native_id=row.get("access_native_id") or None,
+                access_permission=row.get("access_permission") or None,
+                identity_native_id=row.get("identity_native_id") or None,
+            ))
+    return assignments
 
 def edit_golden_source(repo: Repository, source: dict[str, Any]) -> int:
     import yaml
@@ -342,14 +361,32 @@ def golden_command(a: argparse.Namespace) -> int:
             for row in sources: print(f"{row['name']} active_version={row.get('active_version_id')}")
             return 0
         source = next((r for r in sources if r["name"] == a.name), None)
-        if a.golden_command == "edit" and source is None:
+        if a.golden_command in {"create", "edit"} and source is None:
             source_object = create_golden_source(a.name)
             repo.upsert("golden_sources", source_object)
             source = repo.find_by_name("golden_sources", a.name)
         if source is None: raise ValueError(f"Golden Source not found: {a.name}")
         if a.golden_command == "show": print(json.dumps(source, indent=2)); return 0
-        if a.golden_command == "edit": return edit_golden_source(repo, source)
         versions = [hydrate_golden_version(r) for r in repo.list_payloads("golden_source_versions") if r["golden_source_id"] == source["id"]]
+        if a.golden_command in {"create", "edit"} and getattr(a, "csv", None):
+            assignments = read_golden_csv(a.csv)
+            version = create_golden_version(
+                hydrate_golden_source(source), assignments,
+                "csv", versions, comment="Imported from CSV",
+            )
+            repo.insert_append_only("golden_source_versions", version)
+            source["active_version_id"] = version.id
+            repo.upsert("golden_sources", source)
+            print(f"created Golden Source version={version.version} assignments={len(assignments)}")
+            return 0
+        if a.golden_command == "create":
+            version = create_golden_version(hydrate_golden_source(source), [], "from_scratch", versions)
+            repo.insert_append_only("golden_source_versions", version)
+            source["active_version_id"] = version.id
+            repo.upsert("golden_sources", source)
+            print(f"created Golden Source version={version.version} assignments=0")
+            return 0
+        if a.golden_command == "edit": return edit_golden_source(repo, source)
         if a.golden_command == "diff":
             if len(versions) < 2: print("No previous Golden Source version available"); return 0
             old, new = sorted(versions, key=lambda x: x.version)[-2:]

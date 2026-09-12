@@ -310,3 +310,16 @@ eare export revocations --output reports/revocations.csv
 `
 
 The export is generated through the existing remediation service. EARE never applies revocations directly to an IDP.
+
+
+## Golden Source Creation
+
+A Golden Source can start empty for a from-scratch review or be created from a CSV reference file:
+
+`bash
+eare golden create baseline
+eare golden create baseline --csv expected-access.csv
+eare golden edit baseline --csv updated-access.csv
+`
+
+CSV files use the columns access_provider, access_name, identity_provider, and identity_identifier. Optional native identifier columns are supported for stable matching. Each CSV operation creates an immutable Golden Source version.

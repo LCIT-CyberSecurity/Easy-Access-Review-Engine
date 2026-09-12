@@ -8,6 +8,7 @@ import pytest
 
 from access_review_engine.cli.config_loader import ConfigError, load_connector, secret_environment, template, validate_connector
 from access_review_engine.cli.main import main, parser
+from access_review_engine.cli.menu import run_global_menu
 from access_review_engine.cli.runner import RunnerResult, build_command
 
 
@@ -117,3 +118,30 @@ def test_provider_check_all_is_sequential_and_continues(tmp_path: Path) -> None:
         assert main(["provider", "check", "--all"]) == 0
         assert exporter.call_count == 2
     os.chdir(old)
+
+
+def test_golden_source_can_start_from_csv(tmp_path: Path) -> None:
+    import os
+    from access_review_engine.storage import Repository
+    csv_path = tmp_path / "golden.csv"
+    csv_path.write_text(
+        "access_provider,access_name,identity_provider,identity_identifier\n"
+        "corp-ad,Finance:member,corp-ad,alice\n",
+        encoding="utf-8",
+    )
+    old = Path.cwd()
+    os.chdir(tmp_path)
+    assert main(["golden", "create", "baseline", "--csv", str(csv_path)]) == 0
+    repo = Repository(tmp_path / "access-review.db")
+    try:
+        versions = repo.list_payloads("golden_source_versions")
+        assert len(versions) == 1
+        assert len(versions[0]["assignments"]) == 1
+    finally:
+        repo.close()
+        os.chdir(old)
+
+
+def test_global_menu_quit_is_non_business_and_returns_zero() -> None:
+    with patch("builtins.input", side_effect=["6"]):
+        assert run_global_menu() == 0
