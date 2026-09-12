@@ -8,7 +8,7 @@ import pytest
 
 from access_review_engine.cli.config_loader import ConfigError, load_connector, secret_environment, template, validate_connector
 from access_review_engine.cli.main import main, parser
-from access_review_engine.cli.runner import build_command
+from access_review_engine.cli.runner import RunnerResult, build_command
 
 
 def test_connector_validation_and_secret_indirection() -> None:
@@ -84,3 +84,36 @@ def test_provider_namespace_and_compatibility_commands(tmp_path: Path) -> None:
 def test_noninteractive_no_argument_is_help_and_campaign_commands_parse() -> None:
     assert parser().parse_args(["campaign", "create", "q1"]).campaign_command == "create"
     assert parser().parse_args(["campaign", "close", "q1"]).campaign_command == "close"
+
+
+def test_import_dry_run_does_not_create_real_database(tmp_path: Path) -> None:
+    from ad_test_helpers import zip_fixture
+    old = Path.cwd()
+    import os
+    os.chdir(Path(__file__).parent.parent)
+    archive = zip_fixture(tmp_path, "standard")
+    os.chdir(tmp_path)
+    db = tmp_path / "review.db"
+    assert main(["--db", str(db), "provider", "import", str(archive), "--dry-run"]) == 0
+    assert not db.exists()
+    os.chdir(old)
+
+
+def test_provider_check_all_is_sequential_and_continues(tmp_path: Path) -> None:
+    old = Path.cwd()
+    import os
+    os.chdir(tmp_path)
+    config_dir = tmp_path / "config" / "connectors"
+    config_dir.mkdir(parents=True)
+    for name in ("one", "two"):
+        (config_dir / f"{name}.yaml").write_text(
+            f"provider: {name}\ntype: active_directory\nconnection:\n  server: dc-{name}\n",
+            encoding="utf-8",
+        )
+    with patch(
+        "access_review_engine.cli.main.run_exporter",
+        side_effect=lambda config, output: RunnerResult([], Path(output), 0, "", ""),
+    ) as exporter:
+        assert main(["provider", "check", "--all"]) == 0
+        assert exporter.call_count == 2
+    os.chdir(old)

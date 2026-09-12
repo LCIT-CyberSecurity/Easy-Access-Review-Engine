@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import csv
 import json
 import shutil
 import sqlite3
@@ -15,7 +16,7 @@ from access_review_engine.domain import Campaign, CampaignStatus, Finding
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif, import_openldap_zip
 from access_review_engine.reporting import write_reports
-from access_review_engine.services import calculate_effective_accesses, close_campaign, create_golden_source, golden_diff, open_campaign, promote_snapshot
+from access_review_engine.services import calculate_effective_accesses, close_campaign, create_golden_source, golden_diff, open_campaign, promote_snapshot, remediation_from_decisions
 from access_review_engine.storage import (
     Repository, hydrate_access, hydrate_access_relation, hydrate_assignment,
     hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version,
@@ -80,7 +81,7 @@ def parser() -> argparse.ArgumentParser:
     x = cs.add_parser("status"); x.add_argument("name", nargs="?")
     x = cs.add_parser("close"); x.add_argument("name")
     x = cs.add_parser("export"); x.add_argument("output_dir")
-    e = sub.add_parser("export"); es = e.add_subparsers(dest="export_command", required=True); x = es.add_parser("report"); x.add_argument("--output", required=True); es.add_parser("revocations")
+    e = sub.add_parser("export"); es = e.add_subparsers(dest="export_command", required=True); x = es.add_parser("report"); x.add_argument("--output", required=True); x = es.add_parser("revocations"); x.add_argument("--output", default="revocations.csv")
     return p
 
 def main(argv: list[str] | None = None) -> int:
@@ -243,10 +244,7 @@ def import_command(a: argparse.Namespace) -> int:
         else: raise ValueError("Unsupported validation file type")
         print("valid"); return 0
     if a.dry_run:
-        with tempfile.TemporaryDirectory() as d:
-            target = Path(d) / "dry-run.db"; backup_if_present(a.db, target)
-            with repository(target) as repo: snapshot = import_file_to_repository(repo, a.file, provider_name=a.provider, classification_rules=load_classification_rules(a.classification_rules))
-            print(f"DRY RUN provider={snapshot.providers[0].name if snapshot.providers else a.provider} snapshot={snapshot.id} persistence=NONE")
+        dry_import(Path(a.file), a, a.provider)
     else:
         with repository(a.db) as repo: snapshot = import_file_to_repository(repo, a.file, provider_name=a.provider, classification_rules=load_classification_rules(a.classification_rules))
         print(f"imported provider={snapshot.providers[0].name if snapshot.providers else a.provider} snapshot={snapshot.id}")
@@ -259,16 +257,38 @@ def import_real(path: Path, a: argparse.Namespace, provider: str) -> None:
 
 def dry_import(path: Path, a: argparse.Namespace, provider: str) -> None:
     target = Path(tempfile.mkdtemp()) / "dry-run.db"
+    before = table_counts(a.db)
     try:
         backup_if_present(a.db, target)
-        with repository(target) as repo: snapshot = import_file_to_repository(repo, path, provider_name=provider)
-        counts = {"identities": len(snapshot.identities), "accesses": len(snapshot.accesses), "assignments": len(snapshot.access_assignments), "relations": len(snapshot.access_relations)}
+        with repository(target) as repo:
+            snapshot = import_file_to_repository(repo, path, provider_name=provider)
+        after = table_counts(target)
+        changed = {table: {"before": before[table], "after": after[table]} for table in before if before[table] != after[table]}
+        states: dict[str, int] = {}
+        for row in snapshot.comparison_states:
+            state = str(row.get("classification", "unknown"))
+            states[state] = states.get(state, 0) + 1
         incomplete = any(Finding.COLLECTION_INCOMPLETE in row.get("findings", []) for row in snapshot.comparison_states)
-        print(f"DRY RUN {provider}: {json.dumps(counts, sort_keys=True)}")
+        print(f"EARE DRY RUN {provider}")
+        print(f"Changes: {json.dumps(changed, sort_keys=True)}")
+        print(f"Comparison: {json.dumps(states, sort_keys=True)}")
         print(f"Collection incomplete: {'YES' if incomplete else 'NO'}")
         print("Persistence: NONE (--dry-run)")
     finally:
         shutil.rmtree(target.parent, ignore_errors=True)
+
+def table_counts(path: str | Path) -> dict[str, int]:
+    from access_review_engine.storage import TABLES
+    counts = {table: 0 for table in TABLES}
+    if not Path(path).exists():
+        return counts
+    connection = sqlite3.connect(path)
+    try:
+        for table in counts:
+            counts[table] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    finally:
+        connection.close()
+    return counts
 
 class repository:
     def __init__(self, path: str | Path): self.path = path; self.repo: Repository | None = None
@@ -401,7 +421,25 @@ def campaign_command(a: argparse.Namespace) -> int:
 
 def export_command(a: argparse.Namespace) -> int:
     if a.export_command == "revocations":
-        print("No provisioning is performed; export campaign decisions for remediation.")
+        with repository(a.db) as repo:
+            campaigns = repo.list_payloads("campaigns")
+            if not campaigns:
+                raise ValueError("No campaign found")
+            campaign = hydrate_campaign(campaigns[-1])
+            items = [hydrate_review_item(r) for r in repo.list_payloads("review_items") if r["campaign_id"] == campaign.id]
+            item_ids = {item.id for item in items}
+            decisions = [hydrate_decision(r) for r in repo.list_payloads("decisions") if r["review_item_id"] in item_ids]
+            actions = remediation_from_decisions(items, decisions)
+        output = Path(a.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["action", "review_item_id", "identity_provider", "identity_identifier", "access_provider", "access_name"])
+            writer.writeheader()
+            by_id = {item.id: item for item in items}
+            for action in actions:
+                item = by_id[action.review_item_id]
+                writer.writerow({"action": action.action, "review_item_id": item.id, "identity_provider": item.identity_provider, "identity_identifier": item.identity_identifier, "access_provider": item.access_provider, "access_name": item.access_name})
+        print(f"exported {output} actions={len(actions)}")
         return 0
     return campaign_command(argparse.Namespace(db=a.db, campaign_command="export", output_dir=a.output))
 

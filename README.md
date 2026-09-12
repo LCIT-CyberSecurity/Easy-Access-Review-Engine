@@ -309,3 +309,14 @@ The V1 scope intentionally excludes:
 - complex workflow automation.
 
 That restraint is deliberate: it keeps the model reliable, auditable, and extensible.
+
+
+## Remediation Exports
+
+After decisions have been recorded, export review-driven remediation actions without changing the provider:
+
+`bash
+eare export revocations --output reports/revocations.csv
+`
+
+The export is generated through the existing remediation service. EARE never applies revocations directly to an IDP.

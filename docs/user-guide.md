@@ -299,3 +299,14 @@ Never put secrets in connector YAML, exports, snapshots, reports, or diagnostics
 Collection errors should be treated as incomplete evidence, not proof that access is absent.
 
 EARE improves review reliability by preserving provenance and using conservative behavior for incomplete data.
+
+
+## Remediation Exports
+
+After decisions have been recorded, export review-driven remediation actions without changing the provider:
+
+`bash
+eare export revocations --output reports/revocations.csv
+`
+
+The export is generated through the existing remediation service. EARE never applies revocations directly to an IDP.
