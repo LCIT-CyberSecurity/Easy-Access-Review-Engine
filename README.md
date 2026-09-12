@@ -136,7 +136,7 @@ Main command groups:
 
 ## Quick Start
 
-The fastest useful path is: connect EARE to an IDP with a read-only account, collect evidence remotely, import the generated artifact, inspect findings, and optionally create a Golden Source baseline.
+The fastest useful path is: connect EARE to an IDP with a read-only account, run a remote synchronization, inspect findings, and optionally create a Golden Source baseline.
 
 ### 1. Install the CLI
 
@@ -144,7 +144,7 @@ The fastest useful path is: connect EARE to an IDP with a read-only account, col
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e ".[app]"
-access-review --help
+eare --help
 ```
 
 By default EARE stores its local state in `access-review.db`. To use another database file, pass `--db` before the command.
@@ -156,40 +156,51 @@ Use a dedicated read-only account. Do not reuse an admin or remediation account.
 Active Directory remote read-only example:
 
 ```bash
-pwsh ./exporters/active-directory/export-active-directory.ps1 \
-  -ProviderName corp-ad \
-  -Output corp-ad-export.zip \
-  -Server dc01.corp.local
-
-access-review import corp-ad-export.zip
+eare config init corp-ad --type active_directory
+eare config set corp-ad connection.server dc01.corp.local
+eare config check corp-ad
 ```
 
 OpenLDAP remote read-only example:
 
 ```bash
-export LDAP_URI=ldaps://ldap.example.com:636
-export BASE_DN=dc=example,dc=com
-export PROVIDER_NAME=ldap-prod
-export BIND_DN=cn=eare-readonly,ou=service-accounts,dc=example,dc=com
+eare config init ldap-prod --type openldap
+eare config set ldap-prod connection.uri ldaps://ldap.example.com:636
+eare config set ldap-prod connection.base_dn dc=example,dc=com
+eare config set ldap-prod connection.bind_dn cn=eare-readonly,ou=service-accounts,dc=example,dc=com
 export LDAP_PASSWORD_FILE=/run/secrets/eare-ldap-readonly-password
-
-./exporters/openldap/export-openldap.sh
-access-review import ldap-prod.zip --provider ldap-prod
+eare config check ldap-prod
 ```
 
 The password value stays outside the command line and outside the repository; only the secret file path is referenced. Secrets belong in environment variables, `.env`, or secret-mounted files, never in connector YAML, reports, or SQLite.
 
-### 3. Inspect results immediately
+### 3. Run the first remote sync
 
 ```bash
-access-review findings-list
-access-review identities-list --provider corp-ad
-access-review access-effective alice --provider corp-ad
+eare sync corp-ad
+# or
+eare sync ldap-prod
 ```
 
-These commands help you move quickly from raw directory data to reviewable evidence: identities, observed access, findings, and effective access paths.
+`sync` performs the read-only collection, normalizes the result, imports it into EARE, and creates the review snapshot. The IDP is never modified.
 
-### 4. Optional: create a Golden Source baseline
+To preview the impact without changing the EARE database:
+
+```bash
+eare sync corp-ad --dry-run
+```
+
+### 4. Inspect results immediately
+
+```bash
+eare analyze --provider corp-ad
+eare analyze --identity alice
+eare analyze --access Finance
+```
+
+These commands help you move quickly from IDP evidence to reviewable results: identities, observed access, findings, and effective access paths.
+
+### 5. Optional: create a Golden Source baseline
 
 A Golden Source is optional, but it is what turns EARE from inventory into expected-vs-observed review.
 
@@ -197,29 +208,36 @@ You can build it from:
 
 - an existing access reference or application configuration;
 - a CSV maintained by IAM, application owners, or auditors;
-- a from-scratch baseline created by importing reality, reviewing it, then promoting the validated snapshot or campaign.
+- a from-scratch baseline created by collecting reality, reviewing it, then promoting the validated snapshot or campaign.
 
 Recommended first rollout:
 
 ```text
-collect current IDP evidence with read-only access
+sync current IDP evidence with read-only access
 review findings with owners
 approve the expected access
 promote the reviewed baseline into Golden Source v1
-run the next collection against that Golden Source
+run the next sync against that Golden Source
+```
+
+Typical CLI flow:
+
+```bash
+eare golden promote baseline --snapshot latest
+eare golden diff baseline
 ```
 
 The Golden Source workflow is described in [Golden Source](docs/golden-source.md). If you start without a Golden Source, EARE still saves time by producing inventory, findings, effective access, and reports; comparison states become more powerful once the baseline exists.
 
-### 5. Export a report
+### 6. Export a report
 
 When a campaign exists, export the review evidence:
 
 ```bash
-access-review campaign-export reports/
+eare export report --output reports/
 ```
 
-`reports/campaign-report.html` is standalone and opens without a backend.
+The generated HTML report is standalone and opens without a backend.
 
 ## Documentation
 
