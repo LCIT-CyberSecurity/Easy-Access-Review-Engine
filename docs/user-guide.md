@@ -187,7 +187,128 @@ Emma -> CRM-Sales -> contacts:read
 
 L'acces effectif explique pourquoi le droit est present; il ne remplace pas l'attribution directe.
 
-## 5. Parcours habituel
+## 5. Parametrage utilisateur
+
+### Parametres de la commande EARE
+
+La base SQLite est configurable avec `--db`. Le parametre global se place avant la sous-commande:
+
+```bash
+access-review --db data/review.db import corp-ad-export.zip
+access-review --db data/review.db findings-list
+access-review --db data/review.db access-effective "Alice Martin" --provider corp-ad
+```
+
+Pour un import, les parametres disponibles sont:
+
+| Parametre | Utilite | Exemple |
+| --- | --- | --- |
+| `--provider` | nom du Provider pour un fichier LDIF OpenLDAP | `--provider internal-ldap` |
+| `--classification-rules` | fichier JSON de classification optionnelle des comptes AD | `--classification-rules rules.json` |
+| `--db` | chemin de la base SQLite | `--db data/eare.db` |
+
+Le Provider est lu dans le manifeste d'un export ZIP. Pour un LDIF, il est fourni par
+`--provider` et vaut `openldap` par defaut. Le fichier SQLite est cree s'il n'existe pas; choisir un
+chemin stable permet de conserver les snapshots, la Golden Source et les campagnes entre deux
+imports.
+
+Valider un fichier sans l'importer dans SQLite:
+
+```bash
+access-review validate corp-ad-export.zip
+access-review validate directory.ldif
+```
+
+Cette commande verifie le format et les protections de l'archive. Elle ne produit ni snapshot ni
+modification de la base.
+
+### Classification optionnelle des comptes AD
+
+Par defaut, un utilisateur AD est conserve comme `user_account`. Pour reconnaitre des comptes de
+service ou partages selon des regles deterministes, fournir un fichier JSON:
+
+```json
+{
+  "identity_classification": {
+    "technical_account": {
+      "samaccountname_prefixes": ["svc_", "svc-"],
+      "dn_contains": ["OU=Service Accounts"],
+      "has_service_principal_name": true
+    },
+    "shared_account": {
+      "samaccountname_prefixes": ["shared_", "generic_"]
+    }
+  }
+}
+```
+
+Puis:
+
+```bash
+access-review import corp-ad-export.zip --classification-rules rules.json
+```
+
+Ces regles modifient la classification de l'Identity, pas son Access ni ses permissions. Les
+comptes geres AD (MSA/gMSA) et les ordinateurs sont deja traites comme comptes techniques par le
+collecteur.
+
+### Parametres des collecteurs
+
+Les parametres de collecte sont appliques avant l'import, sur la machine qui interroge la source.
+
+Pour Active Directory:
+
+```powershell
+.\export-active-directory.ps1 `
+  -ProviderName corp-ad `
+  -Output corp-ad-export.zip `
+  -Server dc01.corp.local `
+  -OperationTimeoutSeconds 300
+```
+
+`-Server` est optionnel et permet de cibler un controleur de domaine. Le timeout par operation vaut
+300 secondes par defaut. `-AllowPartial` autorise la production d'un export diagnostique incomplet;
+il ne le transforme pas en collecte `FULL` et ne doit pas etre utilise pour conclure a une
+suppression.
+
+Pour OpenLDAP, les variables de l'environnement du collecteur configurent la connexion, la securite
+et le perimetre:
+
+```dotenv
+LDAP_URI=ldaps://ldap.example.test
+BASE_DN=dc=example,dc=test
+PROVIDER_NAME=internal-ldap
+PAGE_SIZE=500
+CONNECTION_TIMEOUT_SECONDS=10
+SEARCH_TIMEOUT_SECONDS=60
+SEARCH_SCOPE=sub
+LDAP_FILTER=(objectClass=*)
+```
+
+`START_TLS=1` est reserve a une URI `ldap://`. Un bind authentifie exige LDAPS ou StartTLS; la
+verification TLS reste active. `ALLOW_PARTIAL=1` conserve un export apres erreur mais sa completude
+devient prudente (`UNKNOWN`). Les secrets doivent rester dans un fichier local non versionne, par
+exemple `LDAP_PASSWORD_FILE`; ne jamais les mettre dans le manifeste, une commande ou un rapport.
+
+### Completude et perimetre
+
+Le manifeste ou le collecteur peut qualifier une collecte:
+
+| Etat | Effet dans EARE |
+| --- | --- |
+| `FULL` | l'absence observee peut remplacer l'etat autoritatif dans le perimetre collecte |
+| `SCOPED` ou `PARTIAL` | seuls les objets observes dans le perimetre sont mis a jour |
+| `UNKNOWN` | les informations deja connues sont conservees; aucune suppression implicite |
+
+Pour les relations, `None` signifie que le collecteur n'a pas fourni cette information. `[]` signifie
+que le graphe observe est explicitement vide, mais sa suppression n'est appliquee que par une collecte
+`FULL` et autoritative dans le perimetre concerne. Une relation absente d'une collecte partielle n'est
+donc pas une relation supprimee.
+
+Le meme principe protege les identites, Access et assignments: `SCOPED`, `PARTIAL` ou `UNKNOWN` ne
+doivent jamais effacer ce qui se trouve hors perimetre ou ce qui n'a pas pu etre observe.
+
+## 6. Parcours habituel
 
 ```text
 Collecter -> Importer -> Observer -> Comparer -> Revoir -> Decider -> Exporter
@@ -232,7 +353,7 @@ Golden attend: Emma -> CRM-Sales
 Elle ne liste pas obligatoirement tous les droits produits par le role. EARE calcule les acces
 effectifs a partir de la composition observee.
 
-## 6. Comprendre les resultats
+## 7. Comprendre les resultats
 
 ```text
 expected_and_observed  acces attendu et observe
@@ -248,7 +369,7 @@ dans la reference selectionnee et doit etre examine.
 `missing` n'est fiable que lorsqu'une collecte complete et authoritative prouve l'absence. Une
 collecte limitee ou inconnue produit un resultat prudent.
 
-## 7. Golden Source
+## 8. Golden Source
 
 La Golden Source est la reference des attributions attendues. Ses versions sont historiques et ne
 sont pas modifiees retroactivement.
@@ -268,7 +389,7 @@ Role:    CRM-Sales grants contacts:read
 Si `contacts:write` est ajoute au role, EARE peut signaler un changement d'acces effectif meme si
 l'attribution directe d'Emma n'a pas change.
 
-## 8. Campagnes de revue
+## 9. Campagnes de revue
 
 Une campagne est ouverte a partir d'un snapshot. Elle contient les elements a examiner par les
 reviewers:
@@ -292,7 +413,7 @@ Decisions disponibles:
 Les permissions `read` et `write` restent distinctes afin de permettre une decision ou une
 remediation partielle.
 
-## 9. Rapports et remediation
+## 10. Rapports et remediation
 
 EARE peut produire des rapports HTML, CSV et JSON ainsi que des exports de remediation.
 
@@ -312,7 +433,7 @@ Les rapports montrent notamment:
 Une recommandation de remediation ne signifie pas qu'EARE execute automatiquement une revocation
 sur le systeme source. L'export doit etre controle et applique selon les procedures de l'organisation.
 
-## 10. Active Directory et OpenLDAP
+## 11. Active Directory et OpenLDAP
 
 ### Active Directory
 
@@ -325,7 +446,7 @@ desactives et certaines observations d'authentification.
 Le support actuel couvre notamment `entryUUID`, les renommages, `member`, `uniqueMember`, `memberUid`,
 les membres non resolus, la pagination, les collectes partielles et les modes TLS/StartTLS/LDAPS.
 
-## 11. Limites importantes
+## 12. Limites importantes
 
 EARE ne remplace pas le moteur d'autorisation natif. Il ne calcule pas automatiquement:
 
@@ -338,7 +459,7 @@ EARE ne remplace pas le moteur d'autorisation natif. Il ne calcule pas automatiq
 Les technologies AWS, Azure, GCP, Entra ID, Keycloak, Kubernetes et GitHub sont actuellement des
 cas de test du modele, pas des connecteurs integres.
 
-## 12. Securite et donnees sensibles
+## 13. Securite et donnees sensibles
 
 Les mots de passe, tokens, cles privees, API keys, secrets clients et hashes ne doivent pas etre
 mis dans les exports de collecte, les snapshots, les rapports ou les diagnostics. Les erreurs de
