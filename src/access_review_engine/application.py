@@ -96,6 +96,7 @@ def persist_import_result(
 
         existing_identities = _load_identities(repo, result.provider.name)
         imported_identities = _dedupe_identities(result.identities)
+        identity_renames = _detect_identity_renames(existing_identities, imported_identities)
         merged_identities = reconcile_identities(
             existing_identities,
             imported_identities,
@@ -107,6 +108,7 @@ def persist_import_result(
             repo.upsert("identities", identity)
 
         existing_accesses = _load_accesses(repo, result.provider.name)
+        access_renames = _detect_access_renames(existing_accesses, result.accesses)
         accesses = _reconcile_accesses(existing_accesses, result.accesses)
         obsolete_access_ids = {
             access.id for access in existing_accesses
@@ -134,9 +136,17 @@ def persist_import_result(
             repo.replace_assignments(assignments, providers={result.provider.name})
             snapshot_assignments = assignments
 
+        references_renamed = _apply_current_reference_renames(
+            repo,
+            access_renames,
+            identity_renames,
+        )
+
         resolved_authoritative = _resolve_unresolved_assignments(repo)
         _resolve_non_authoritative_unresolved_observations(repo)
         if authoritative and resolved_authoritative:
+            snapshot_assignments = _load_assignments(repo, result.provider.name)
+        elif not authoritative and references_renamed:
             snapshot_assignments = _load_assignments(repo, result.provider.name)
 
         authentication_posture = result.authentication_posture
@@ -151,6 +161,7 @@ def persist_import_result(
                     authentication_posture = hydrate_authentication_posture(previous)
                     break
 
+        comparison_scope = None if references_renamed and not authoritative else result.batch.scope
         snapshot = create_snapshot(
             [result.provider],
             _load_identities(repo),
@@ -159,7 +170,7 @@ def persist_import_result(
             snapshot_assignments,
             [result.batch.id],
             golden_version,
-            result.batch.scope,
+            comparison_scope,
             _load_access_relations(repo),
             authentication_posture=authentication_posture,
         )
@@ -441,6 +452,147 @@ def _reconcile_accesses(existing: Iterable[Access], imported: Iterable[Access]) 
             reconciled.append(access)
         seen.add(key)
     return reconciled
+
+
+def _detect_identity_renames(
+    existing: Iterable[Identity], imported: Iterable[Identity]
+) -> dict[tuple[str, str], tuple[str, str]]:
+    existing_by_native = _unique_by_native_identity_ref(existing)
+    imported_by_native = _unique_by_native_identity_ref(imported)
+    renames: dict[tuple[str, str], tuple[str, str]] = {}
+    for native_key, old_ref in existing_by_native.items():
+        new_ref = imported_by_native.get(native_key)
+        if new_ref is not None and old_ref != new_ref:
+            renames[old_ref] = new_ref
+    return renames
+
+
+def _unique_by_native_identity_ref(
+    identities: Iterable[Identity],
+) -> dict[tuple[str, str], tuple[str, str]]:
+    found: dict[tuple[str, str], tuple[str, str] | None] = {}
+    for identity in identities:
+        if not identity.native_id or identity.status == "deleted":
+            continue
+        native_key = (identity.provider, identity.native_id)
+        ref = (identity.provider, identity.identifier)
+        if native_key in found:
+            found[native_key] = None
+        else:
+            found[native_key] = ref
+    return {native_key: ref for native_key, ref in found.items() if ref is not None}
+
+
+def _detect_access_renames(
+    existing: Iterable[Access], imported: Iterable[Access]
+) -> dict[tuple[str, str], tuple[str, str]]:
+    existing_by_native = _unique_by_native_access_ref(existing)
+    imported_by_native = _unique_by_native_access_ref(imported)
+    renames: dict[tuple[str, str], tuple[str, str]] = {}
+    for native_key, old_ref in existing_by_native.items():
+        new_ref = imported_by_native.get(native_key)
+        if new_ref is not None and old_ref != new_ref:
+            renames[old_ref] = new_ref
+    return renames
+
+
+def _unique_by_native_access_ref(
+    accesses: Iterable[Access],
+) -> dict[tuple[str, str], tuple[str, str]]:
+    found: dict[tuple[str, str], tuple[str, str] | None] = {}
+    for access in accesses:
+        native_id = _access_native_id(access)
+        if native_id is None:
+            continue
+        native_key = (access.provider, native_id)
+        ref = (access.provider, access.name)
+        if native_key in found:
+            found[native_key] = None
+        else:
+            found[native_key] = ref
+    return {native_key: ref for native_key, ref in found.items() if ref is not None}
+
+
+def _apply_current_reference_renames(
+    repo: Repository,
+    access_renames: dict[tuple[str, str], tuple[str, str]],
+    identity_renames: dict[tuple[str, str], tuple[str, str]],
+) -> bool:
+    changed_assignments = _rename_assignment_references(repo, access_renames, identity_renames)
+    changed_relations = _rename_relation_references(repo, access_renames)
+    return changed_assignments or changed_relations
+
+
+def _rename_assignment_references(
+    repo: Repository,
+    access_renames: dict[tuple[str, str], tuple[str, str]],
+    identity_renames: dict[tuple[str, str], tuple[str, str]],
+) -> bool:
+    if not access_renames and not identity_renames:
+        return False
+    assignments = _load_assignments(repo)
+    changed_providers: set[str] = set()
+    for assignment in assignments:
+        original_provider = assignment.provider
+        access_ref = (assignment.provider, assignment.access_name)
+        if access_ref in access_renames:
+            assignment.provider, assignment.access_name = access_renames[access_ref]
+        identity_ref = (assignment.identity_provider, assignment.identity_identifier)
+        if identity_ref in identity_renames:
+            assignment.identity_provider, assignment.identity_identifier = identity_renames[
+                identity_ref
+            ]
+        if (
+            original_provider != assignment.provider
+            or access_ref != (assignment.provider, assignment.access_name)
+            or identity_ref != (assignment.identity_provider, assignment.identity_identifier)
+        ):
+            changed_providers.update({original_provider, assignment.provider})
+    if not changed_providers:
+        return False
+    scoped = [assignment for assignment in assignments if assignment.provider in changed_providers]
+    repo.replace_assignments(_dedupe_assignments(scoped), providers=changed_providers)
+    return True
+
+
+def _dedupe_assignments(assignments: Iterable[AccessAssignment]) -> list[AccessAssignment]:
+    deduped: dict[tuple[str, str, str, str, str], AccessAssignment] = {}
+    for assignment in assignments:
+        key = assignment.comparison_key() + (assignment.origin_fingerprint,)
+        deduped.setdefault(key, assignment)
+    return list(deduped.values())
+
+
+def _rename_relation_references(
+    repo: Repository,
+    access_renames: dict[tuple[str, str], tuple[str, str]],
+) -> bool:
+    if not access_renames:
+        return False
+    relations = _load_access_relations(repo)
+    changed_parent_providers: set[str] = set()
+    for relation in relations:
+        original_parent_provider = relation.parent_provider
+        parent_ref = (relation.parent_provider, relation.parent_access_name)
+        if parent_ref in access_renames:
+            relation.parent_provider, relation.parent_access_name = access_renames[parent_ref]
+        child_ref = (relation.child_provider, relation.child_access_name)
+        if child_ref in access_renames:
+            relation.child_provider, relation.child_access_name = access_renames[child_ref]
+        if (
+            original_parent_provider != relation.parent_provider
+            or parent_ref != (relation.parent_provider, relation.parent_access_name)
+            or child_ref != (relation.child_provider, relation.child_access_name)
+        ):
+            changed_parent_providers.update({original_parent_provider, relation.parent_provider})
+    if not changed_parent_providers:
+        return False
+    scoped = [
+        relation for relation in relations if relation.parent_provider in changed_parent_providers
+    ]
+    repo.replace_access_relations(scoped, providers=changed_parent_providers)
+    return True
+
 
 def _merge_access_relations(
     existing: Iterable[AccessRelation], imported: Iterable[AccessRelation]

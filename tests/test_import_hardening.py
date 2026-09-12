@@ -8,6 +8,7 @@ from access_review_engine.domain import (
     AccessAssignment,
     AccessRelation,
     AccessRelationType,
+    ComparisonState,
     ControlObject,
     GoldenSourceAssignment,
     Identity,
@@ -34,7 +35,13 @@ def _provider() -> Provider:
 
 
 def _identity(identifier: str = "alice", native_id: str | None = "I-1") -> Identity:
-    return Identity("fixture", identifier, IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE, native_id=native_id)
+    return Identity(
+        "fixture",
+        identifier,
+        IdentityType.USER_ACCOUNT,
+        IdentityStatus.ACTIVE,
+        native_id=native_id,
+    )
 
 
 def _access(name: str, native_id: str | None = None, permission: str | None = None) -> Access:
@@ -53,8 +60,14 @@ def _relation(parent: str, child: str) -> AccessRelation:
     )
 
 
-def _assignment(access_name: str = "A") -> AccessAssignment:
-    return AccessAssignment("fixture", access_name, "fixture", "alice", Origin("direct", True, False, "test"))
+def _assignment(access_name: str = "A", identity: str = "alice") -> AccessAssignment:
+    return AccessAssignment(
+        "fixture",
+        access_name,
+        "fixture",
+        identity,
+        Origin("direct", True, False, "test"),
+    )
 
 
 def _result(
@@ -254,3 +267,248 @@ def test_ct13_legacy_snapshot_without_relations_is_readable() -> None:
 def test_ct14_legacy_import_without_relations_is_conservative() -> None:
     result = _result([], None)
     assert result.access_relations is None
+
+
+def _assignment_refs(repo: Repository) -> set[tuple[str, str, str, str]]:
+    return {
+        (
+            row["provider"],
+            row["access_name"],
+            row["identity_provider"],
+            row["identity_identifier"],
+        )
+        for row in repo.list_payloads("access_assignments")
+    }
+
+
+def _assert_current_references_resolve(repo: Repository) -> None:
+    accesses = {(row["provider"], row["name"]) for row in repo.list_payloads("accesses")}
+    identities = {
+        (row["provider"], row["identifier"])
+        for row in repo.list_payloads("identities")
+        if row["status"] != IdentityStatus.DELETED
+    }
+    for assignment in repo.list_payloads("access_assignments"):
+        assert (assignment["provider"], assignment["access_name"]) in accesses
+        if not assignment["origin"]["raw"].get("unresolved"):
+            assert (
+                assignment["identity_provider"],
+                assignment["identity_identifier"],
+            ) in identities
+    for relation in repo.list_payloads("access_relations"):
+        assert (relation["parent_provider"], relation["parent_access_name"]) in accesses
+        assert (relation["child_provider"], relation["child_access_name"]) in accesses
+
+
+def test_ct15_access_rename_scoped_preserves_assignments(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct15.db")
+    try:
+        persist_import_result(
+            repo,
+            _result(
+                [_access("Finance:member", native_id="SID-G1")],
+                None,
+                identities=[_identity("alice", "SID-A"), _identity("bob", "SID-B")],
+                assignments=[
+                    _assignment("Finance:member", "alice"),
+                    _assignment("Finance:member", "bob"),
+                ],
+            ),
+        )
+        scoped = _result(
+            [_access("Finance-Renamed:member", native_id="SID-G1")],
+            None,
+            completeness="scoped",
+            identities=[_identity("alice", "SID-A"), _identity("bob", "SID-B")],
+            assignments=[],
+        )
+        snapshot = persist_import_result(repo, scoped)
+        assert _assignment_refs(repo) == {
+            ("fixture", "Finance-Renamed:member", "fixture", "alice"),
+            ("fixture", "Finance-Renamed:member", "fixture", "bob"),
+        }
+        assert {(row.provider, row.access_name) for row in snapshot.access_assignments} == {
+            ("fixture", "Finance-Renamed:member")
+        }
+        _assert_current_references_resolve(repo)
+    finally:
+        repo.close()
+
+
+def test_ct16_access_rename_unknown_preserves_assignments(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct16.db")
+    try:
+        persist_import_result(
+            repo,
+            _result(
+                [_access("Finance:member", native_id="SID-G1")],
+                None,
+                identities=[_identity("alice", "SID-A"), _identity("bob", "SID-B")],
+                assignments=[
+                    _assignment("Finance:member", "alice"),
+                    _assignment("Finance:member", "bob"),
+                ],
+            ),
+        )
+        unknown = _result(
+            [_access("Finance-Renamed:member", native_id="SID-G1")],
+            None,
+            completeness="unknown",
+            identities=[_identity("alice", "SID-A"), _identity("bob", "SID-B")],
+            assignments=[],
+        )
+        persist_import_result(repo, unknown)
+        assert _assignment_refs(repo) == {
+            ("fixture", "Finance-Renamed:member", "fixture", "alice"),
+            ("fixture", "Finance-Renamed:member", "fixture", "bob"),
+        }
+        _assert_current_references_resolve(repo)
+    finally:
+        repo.close()
+
+
+def test_ct17_identity_rename_scoped_preserves_assignments(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct17.db")
+    try:
+        persist_import_result(
+            repo,
+            _result(
+                [_access("Finance:member", native_id="SID-G1")],
+                None,
+                identities=[_identity("user.old", "SID-U1")],
+                assignments=[_assignment("Finance:member", "user.old")],
+            ),
+        )
+        scoped = _result(
+            [_access("Finance:member", native_id="SID-G1")],
+            None,
+            completeness="scoped",
+            identities=[_identity("user.new", "SID-U1")],
+            assignments=[],
+        )
+        persist_import_result(repo, scoped)
+        assert _assignment_refs(repo) == {
+            ("fixture", "Finance:member", "fixture", "user.new")
+        }
+        _assert_current_references_resolve(repo)
+    finally:
+        repo.close()
+
+
+def test_ct18_access_relation_parent_rename(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct18.db")
+    try:
+        persist_import_result(
+            repo,
+            _result(
+                [_access("A", "SID-A"), _access("B", "SID-B")],
+                [_relation("A", "B")],
+            ),
+        )
+        scoped = _result(
+            [_access("A-Renamed", "SID-A"), _access("B", "SID-B")],
+            None,
+            completeness="scoped",
+        )
+        persist_import_result(repo, scoped)
+        assert _relation_keys(repo) == {("A-Renamed", "B")}
+        _assert_current_references_resolve(repo)
+    finally:
+        repo.close()
+
+
+def test_ct19_access_relation_child_rename(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct19.db")
+    try:
+        persist_import_result(
+            repo,
+            _result(
+                [_access("X", "SID-X"), _access("A", "SID-A")],
+                [_relation("X", "A")],
+            ),
+        )
+        scoped = _result(
+            [_access("X", "SID-X"), _access("A-Renamed", "SID-A")],
+            None,
+            completeness="scoped",
+        )
+        persist_import_result(repo, scoped)
+        assert _relation_keys(repo) == {("X", "A-Renamed")}
+        _assert_current_references_resolve(repo)
+    finally:
+        repo.close()
+
+
+def test_ct20_no_rename_when_native_id_changes(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct20.db")
+    try:
+        persist_import_result(
+            repo,
+            _result(
+                [_access("Finance", native_id="SID-OLD")],
+                None,
+                assignments=[_assignment("Finance")],
+            ),
+        )
+        scoped = _result(
+            [_access("Finance-Renamed", native_id="SID-NEW")],
+            None,
+            completeness="scoped",
+            assignments=[],
+        )
+        snapshot = persist_import_result(repo, scoped)
+        assert _assignment_refs(repo) == {("fixture", "Finance", "fixture", "alice")}
+        assert snapshot.access_assignments == []
+    finally:
+        repo.close()
+
+
+def test_ct21_historical_snapshot_immutable_after_scoped_rename(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct21.db")
+    try:
+        first = persist_import_result(
+            repo,
+            _result(
+                [_access("Finance", native_id="SID-G1")],
+                None,
+                assignments=[_assignment("Finance")],
+            ),
+        )
+        scoped = _result(
+            [_access("Finance-Renamed", native_id="SID-G1")],
+            None,
+            completeness="scoped",
+            assignments=[],
+        )
+        second = persist_import_result(repo, scoped)
+        stored_first = hydrate_snapshot(repo.get_payload("snapshots", first.id))
+        assert first.access_assignments[0].access_name == "Finance"
+        assert stored_first.access_assignments[0].access_name == "Finance"
+        assert second.access_assignments[0].access_name == "Finance-Renamed"
+    finally:
+        repo.close()
+
+
+def test_ct22_golden_stable_access_rename_after_scoped_import(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct22.db")
+    try:
+        first = persist_import_result(
+            repo,
+            _result(
+                [_access("Finance", native_id="SID-G1")],
+                None,
+                assignments=[_assignment("Finance")],
+            ),
+        )
+        golden = promote_snapshot(create_golden_source("baseline"), first)
+        scoped = _result(
+            [_access("Finance-Renamed", native_id="SID-G1")],
+            None,
+            completeness="scoped",
+            assignments=[],
+        )
+        snapshot = persist_import_result(repo, scoped, golden_version=golden)
+        classifications = {row["classification"] for row in snapshot.comparison_states}
+        assert classifications == {ComparisonState.EXPECTED_AND_OBSERVED}
+    finally:
+        repo.close()
