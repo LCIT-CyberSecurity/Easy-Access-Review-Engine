@@ -136,37 +136,53 @@ Main command groups:
 
 ## Quick Start
 
-Install EARE locally and run the repository test wrapper:
+Install EARE locally and open the CLI help:
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -e ".[app,dev]"
-python3 pytest.py
+pip install -e ".[app]"
+access-review --help
 ```
 
-Use `python3 pytest.py` from the repository root. The project wrapper sets the expected local test configuration; do not replace it with a bare `pytest` command unless you have configured the same paths and environment yourself.
+Then choose the operating mode that matches your organization.
 
-Then choose the operating mode that matches your organization:
+### Option 1: start from an existing export
 
-- for an existing export, import the artifact directly;
-- for repeatable read-only collection, configure the provider connection, run `check`, then use `collect` or `sync`;
-- for secrets, update environment variables or `.env`; do not put passwords in connector YAML or SQLite.
-
-Import an Active Directory export:
+Validate the artifact, import it, and list the first findings:
 
 ```bash
+access-review validate corp-ad-export.zip
 access-review import corp-ad-export.zip
+access-review findings-list
+access-review identities-list --provider corp-ad
+```
+
+For OpenLDAP LDIF evidence:
+
+```bash
+access-review validate directory.ldif
+access-review import directory.ldif --provider ldap-prod
 access-review findings-list
 ```
 
-Import an OpenLDAP LDIF:
+### Option 2: use direct read-only IDP access
+
+Run the provided acquisition collector from a host that can query the IDP with a read-only account, then import the generated artifact:
 
 ```bash
-access-review import directory.ldif --provider internal-ldap
+# Active Directory example: produces corp-ad-export.zip
+pwsh ./exporters/active-directory/export-active-directory.ps1 -ProviderName corp-ad -Output corp-ad-export.zip
+access-review import corp-ad-export.zip
+
+# OpenLDAP example: produces ldap-prod.zip according to exporter configuration
+./exporters/openldap/export-openldap.sh
+access-review import ldap-prod.zip --provider ldap-prod
 ```
 
-Export a campaign report:
+Secrets belong in environment variables or `.env`, never in connector YAML, reports, or SQLite.
+
+Export a campaign report when a campaign exists:
 
 ```bash
 access-review campaign-export reports/
