@@ -363,5 +363,5 @@ implemented.
 The current hardening result is GO for the V1 core model. Same-name AD object recreation is handled
 by replacing the current Access under the unique `(provider, name)` key, while a stable native ID
 continues to preserve rename reconciliation. Incompatible target or permission definitions are
-rejected explicitly. The full suite is `218 passed, 0 failed, 7 skipped`; the skips require external
+rejected explicitly. The full suite is `229 passed, 0 failed, 7 skipped`; the skips require external
 PowerShell or Docker environments.

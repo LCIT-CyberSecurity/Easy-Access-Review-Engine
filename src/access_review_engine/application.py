@@ -96,6 +96,7 @@ def persist_import_result(
 
         existing_identities = _load_identities(repo, result.provider.name)
         imported_identities = _dedupe_identities(result.identities)
+        _reject_identity_rename_collisions(existing_identities, imported_identities)
         identity_renames = _detect_identity_renames(existing_identities, imported_identities)
         merged_identities = reconcile_identities(
             existing_identities,
@@ -108,6 +109,7 @@ def persist_import_result(
             repo.upsert("identities", identity)
 
         existing_accesses = _load_accesses(repo, result.provider.name)
+        _reject_access_rename_collisions(existing_accesses, result.accesses)
         access_renames = _detect_access_renames(existing_accesses, result.accesses)
         accesses = _reconcile_accesses(existing_accesses, result.accesses)
         obsolete_access_ids = {
@@ -161,7 +163,6 @@ def persist_import_result(
                     authentication_posture = hydrate_authentication_posture(previous)
                     break
 
-        comparison_scope = None if references_renamed and not authoritative else result.batch.scope
         snapshot = create_snapshot(
             [result.provider],
             _load_identities(repo),
@@ -170,7 +171,7 @@ def persist_import_result(
             snapshot_assignments,
             [result.batch.id],
             golden_version,
-            comparison_scope,
+            result.batch.scope,
             _load_access_relations(repo),
             authentication_posture=authentication_posture,
         )
@@ -454,6 +455,35 @@ def _reconcile_accesses(existing: Iterable[Access], imported: Iterable[Access]) 
     return reconciled
 
 
+def _reject_identity_rename_collisions(
+    existing: Iterable[Identity], imported: Iterable[Identity]
+) -> None:
+    existing_by_ref = {
+        (identity.provider, identity.identifier): identity
+        for identity in existing
+        if identity.status != "deleted"
+    }
+    existing_by_native = {
+        (identity.provider, identity.native_id): identity
+        for identity in existing_by_ref.values()
+        if identity.native_id is not None
+    }
+    for identity in imported:
+        if identity.native_id is None:
+            continue
+        previous = existing_by_native.get((identity.provider, identity.native_id))
+        target = existing_by_ref.get((identity.provider, identity.identifier))
+        if previous is None or target is None or previous.id == target.id:
+            continue
+        if target.native_id != identity.native_id:
+            raise ValueError(
+                "IDENTITY_RENAME_COLLISION: "
+                f"provider={identity.provider!r} identifier={identity.identifier!r} "
+                f"existing_native_id={target.native_id!r} "
+                f"incoming_native_id={identity.native_id!r}"
+            )
+
+
 def _detect_identity_renames(
     existing: Iterable[Identity], imported: Iterable[Identity]
 ) -> dict[tuple[str, str], tuple[str, str]]:
@@ -481,6 +511,32 @@ def _unique_by_native_identity_ref(
         else:
             found[native_key] = ref
     return {native_key: ref for native_key, ref in found.items() if ref is not None}
+
+
+def _reject_access_rename_collisions(
+    existing: Iterable[Access], imported: Iterable[Access]
+) -> None:
+    existing_by_ref = {(access.provider, access.name): access for access in existing}
+    existing_by_native = {
+        (access.provider, native_id): access
+        for access in existing_by_ref.values()
+        if (native_id := _access_native_id(access)) is not None
+    }
+    for access in imported:
+        native_id = _access_native_id(access)
+        if native_id is None:
+            continue
+        previous = existing_by_native.get((access.provider, native_id))
+        target = existing_by_ref.get((access.provider, access.name))
+        if previous is None or target is None or previous.id == target.id:
+            continue
+        if _access_native_id(target) != native_id:
+            raise ValueError(
+                "ACCESS_RENAME_COLLISION: "
+                f"provider={access.provider!r} name={access.name!r} "
+                f"existing_native_id={_access_native_id(target)!r} "
+                f"incoming_native_id={native_id!r}"
+            )
 
 
 def _detect_access_renames(

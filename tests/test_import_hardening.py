@@ -10,6 +10,7 @@ from access_review_engine.domain import (
     AccessRelationType,
     ComparisonState,
     ControlObject,
+    Finding,
     GoldenSourceAssignment,
     Identity,
     IdentityStatus,
@@ -509,6 +510,121 @@ def test_ct22_golden_stable_access_rename_after_scoped_import(tmp_path) -> None:
         )
         snapshot = persist_import_result(repo, scoped, golden_version=golden)
         classifications = {row["classification"] for row in snapshot.comparison_states}
-        assert classifications == {ComparisonState.EXPECTED_AND_OBSERVED}
+        findings = {finding for row in snapshot.comparison_states for finding in row["findings"]}
+        assert classifications == {ComparisonState.UNKNOWN_DUE_TO_SCOPE}
+        assert Finding.COLLECTION_INCOMPLETE in findings
+    finally:
+        repo.close()
+
+
+def test_ct23_scoped_rename_does_not_become_authoritative(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct23.db")
+    try:
+        first = persist_import_result(
+            repo,
+            _result(
+                [_access("Finance", "SID-G1"), _access("OtherAccess", "SID-G2")],
+                None,
+                identities=[_identity("alice", "SID-A"), _identity("bob", "SID-B")],
+                assignments=[
+                    _assignment("Finance", "alice"),
+                    _assignment("OtherAccess", "bob"),
+                ],
+            ),
+        )
+        golden = promote_snapshot(create_golden_source("baseline"), first)
+        scoped = _result(
+            [_access("Finance-Renamed", "SID-G1")],
+            None,
+            completeness="scoped",
+            identities=[_identity("alice", "SID-A")],
+            assignments=[],
+        )
+        snapshot = persist_import_result(repo, scoped, golden_version=golden)
+        assert _assignment_refs(repo) == {
+            ("fixture", "Finance-Renamed", "fixture", "alice"),
+            ("fixture", "OtherAccess", "fixture", "bob"),
+        }
+        classifications = {row["classification"] for row in snapshot.comparison_states}
+        findings = {finding for row in snapshot.comparison_states for finding in row["findings"]}
+        assert ComparisonState.MISSING not in classifications
+        assert classifications == {ComparisonState.UNKNOWN_DUE_TO_SCOPE}
+        assert Finding.COLLECTION_INCOMPLETE in findings
+    finally:
+        repo.close()
+
+
+def test_ct24_access_rename_target_name_collision_rolls_back(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct24.db")
+    try:
+        persist_import_result(
+            repo,
+            _result(
+                [_access("A", "SID-1"), _access("B", "SID-2")],
+                [_relation("A", "B")],
+                assignments=[_assignment("A")],
+            ),
+        )
+        snapshot_count = len(repo.list_payloads("snapshots"))
+        try:
+            persist_import_result(
+                repo,
+                _result([_access("B", "SID-1")], None, completeness="scoped"),
+            )
+        except ValueError as exc:
+            assert "ACCESS_RENAME_COLLISION" in str(exc)
+        else:
+            raise AssertionError("expected ACCESS_RENAME_COLLISION")
+        accesses = {
+            row["name"]: row["control_object"]["native_id"]
+            for row in repo.list_payloads("accesses")
+        }
+        assert accesses == {"A": "SID-1", "B": "SID-2"}
+        assert _assignment_refs(repo) == {("fixture", "A", "fixture", "alice")}
+        assert _relation_keys(repo) == {("A", "B")}
+        assert len(repo.list_payloads("snapshots")) == snapshot_count
+    finally:
+        repo.close()
+
+
+def test_ct25_identity_rename_target_identifier_collision_rolls_back(tmp_path) -> None:
+    repo = Repository(tmp_path / "ct25.db")
+    try:
+        persist_import_result(
+            repo,
+            _result(
+                [_access("Finance", "SID-G1")],
+                None,
+                identities=[
+                    _identity("user.old", "SID-U1"),
+                    _identity("user.existing", "SID-U2"),
+                ],
+                assignments=[_assignment("Finance", "user.old")],
+            ),
+        )
+        snapshot_count = len(repo.list_payloads("snapshots"))
+        try:
+            persist_import_result(
+                repo,
+                _result(
+                    [_access("Finance", "SID-G1")],
+                    None,
+                    completeness="scoped",
+                    identities=[_identity("user.existing", "SID-U1")],
+                    assignments=[],
+                ),
+            )
+        except ValueError as exc:
+            assert "IDENTITY_RENAME_COLLISION" in str(exc)
+        else:
+            raise AssertionError("expected IDENTITY_RENAME_COLLISION")
+        identities = {
+            row["identifier"]: row["native_id"]
+            for row in repo.list_payloads("identities")
+            if row["status"] != IdentityStatus.DELETED
+        }
+        assert identities == {"user.old": "SID-U1", "user.existing": "SID-U2"}
+        assert _assignment_refs(repo) == {("fixture", "Finance", "fixture", "user.old")}
+        assert len(repo.list_payloads("snapshots")) == snapshot_count
     finally:
         repo.close()
