@@ -136,7 +136,9 @@ Main command groups:
 
 ## Quick Start
 
-Install EARE locally and open the CLI help:
+The fastest useful path is: install EARE, choose where evidence comes from, import it, inspect the first findings, and optionally create a Golden Source baseline.
+
+### 1. Install the CLI
 
 ```bash
 python3 -m venv .venv
@@ -145,44 +147,84 @@ pip install -e ".[app]"
 access-review --help
 ```
 
-Then choose the operating mode that matches your organization.
+By default EARE stores its local state in `access-review.db`. To use another database file, pass `--db` before the command:
 
-### Option 1: start from an existing export
+```bash
+access-review --db eare-prod.db import corp-ad-export.zip
+```
 
-Validate the artifact, import it, and list the first findings:
+### 2. Choose the evidence source
+
+Use an existing export when another process already extracts the data:
 
 ```bash
 access-review validate corp-ad-export.zip
 access-review import corp-ad-export.zip
-access-review findings-list
-access-review identities-list --provider corp-ad
 ```
 
-For OpenLDAP LDIF evidence:
+Or use direct read-only IDP access to produce an importable artifact.
+
+Active Directory example:
 
 ```bash
-access-review validate directory.ldif
-access-review import directory.ldif --provider ldap-prod
-access-review findings-list
-```
+pwsh ./exporters/active-directory/export-active-directory.ps1 \
+  -ProviderName corp-ad \
+  -Output corp-ad-export.zip \
+  -Server dc01.corp.local
 
-### Option 2: use direct read-only IDP access
-
-Run the provided acquisition collector from a host that can query the IDP with a read-only account, then import the generated artifact:
-
-```bash
-# Active Directory example: produces corp-ad-export.zip
-pwsh ./exporters/active-directory/export-active-directory.ps1 -ProviderName corp-ad -Output corp-ad-export.zip
 access-review import corp-ad-export.zip
+```
 
-# OpenLDAP example: produces ldap-prod.zip according to exporter configuration
+OpenLDAP remote read-only example:
+
+```bash
+export LDAP_URI=ldaps://ldap.example.com:636
+export BASE_DN=dc=example,dc=com
+export PROVIDER_NAME=ldap-prod
+export BIND_DN=cn=eare-readonly,ou=service-accounts,dc=example,dc=com
+export LDAP_PASSWORD_FILE=/run/secrets/eare-ldap-readonly-password
+
 ./exporters/openldap/export-openldap.sh
 access-review import ldap-prod.zip --provider ldap-prod
 ```
 
-Secrets belong in environment variables or `.env`, never in connector YAML, reports, or SQLite.
+In this example EARE connects remotely to the IDP with a dedicated read-only bind account. The password value stays outside the command line and outside the repository; only the file path is referenced. Secrets belong in environment variables, `.env`, or secret-mounted files, never in connector YAML, reports, or SQLite.
 
-Export a campaign report when a campaign exists:
+### 3. Inspect results immediately
+
+```bash
+access-review findings-list
+access-review identities-list --provider corp-ad
+access-review access-effective alice --provider corp-ad
+```
+
+These commands help you move quickly from raw directory data to reviewable evidence: identities, observed access, findings, and effective access paths.
+
+### 4. Optional: create a Golden Source baseline
+
+A Golden Source is optional, but it is what turns EARE from inventory into expected-vs-observed review.
+
+You can build it from:
+
+- an existing access reference or application configuration;
+- a CSV maintained by IAM, application owners, or auditors;
+- a from-scratch baseline created by importing reality, reviewing it, then promoting the validated snapshot or campaign.
+
+Recommended first rollout:
+
+```text
+import current evidence
+review findings with owners
+approve the expected access
+promote the reviewed baseline into Golden Source v1
+run the next import against that Golden Source
+```
+
+The Golden Source workflow is described in [Golden Source](docs/golden-source.md). If you start without a Golden Source, EARE still saves time by producing inventory, findings, effective access, and reports; comparison states become more powerful once the baseline exists.
+
+### 5. Export a report
+
+When a campaign exists, export the review evidence:
 
 ```bash
 access-review campaign-export reports/
