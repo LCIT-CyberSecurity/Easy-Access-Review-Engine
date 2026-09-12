@@ -26,6 +26,7 @@ def build_command(config: dict[str, object], output: Path, root: str | Path = ".
     if kind == "active_directory":
         command = ["pwsh", str(base / "exporters/active-directory/export-active-directory.ps1"), "-ProviderName", str(config["provider"]), "-Output", str(output), "-Server", str(connection["server"]), "-OperationTimeoutSeconds", str(collection.get("timeout", 300))]
         if collection.get("allow_partial"): command.append("-AllowPartial")
+        if config.get("_check_only"): command.append("-CheckOnly")
         return command, os.environ.copy()
     if kind == "openldap":
         env = os.environ.copy()
@@ -35,6 +36,7 @@ def build_command(config: dict[str, object], output: Path, root: str | Path = ".
         for key, variable in names.items():
             if key in collection: env[variable] = str(collection[key])
         if collection.get("allow_partial"): env["ALLOW_PARTIAL"] = "1"
+        if config.get("_check_only"): env["CHECK_ONLY"] = "1"
         return ["bash", str(base / "exporters/openldap/export-openldap.sh"), str(output)], env
     raise ValueError(f"Unsupported connector type: {kind}")
 

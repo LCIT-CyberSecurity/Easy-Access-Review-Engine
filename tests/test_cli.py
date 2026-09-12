@@ -56,6 +56,20 @@ def test_exporter_commands_use_existing_collectors_without_secret_arguments(tmp_
     assert env["BASE_DN"] == "dc=example,dc=com"
 
 
+def test_exporter_check_only_flags_are_native(tmp_path: Path) -> None:
+    ad = template("corp-ad", "active_directory")
+    ad["connection"]["server"] = "dc01"
+    ad["_check_only"] = True
+    ad_command, _ = build_command(ad, tmp_path / "check.zip", tmp_path)
+    assert "-CheckOnly" in ad_command
+
+    ldap = template("ldap-prod", "openldap")
+    ldap["connection"]["base_dn"] = "dc=example,dc=com"
+    ldap["_check_only"] = True
+    _, ldap_env = build_command(ldap, tmp_path / "check.zip", tmp_path)
+    assert ldap_env["CHECK_ONLY"] == "1"
+
+
 def test_config_check_does_not_create_database(tmp_path: Path) -> None:
     import os
     old = Path.cwd()

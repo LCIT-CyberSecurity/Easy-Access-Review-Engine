@@ -23,6 +23,7 @@ PAGE_SIZE="${PAGE_SIZE:-1000}"
 CONNECTION_TIMEOUT_SECONDS="${CONNECTION_TIMEOUT_SECONDS:-10}"
 SEARCH_TIMEOUT_SECONDS="${SEARCH_TIMEOUT_SECONDS:-120}"
 COMMAND_TIMEOUT_SECONDS="${COMMAND_TIMEOUT_SECONDS:-180}"
+CHECK_ONLY="${CHECK_ONLY:-0}"
 OUTPUT="${1:-openldap-export.zip}"
 if [[ "$OUTPUT" != /* ]]; then
   OUTPUT="$PWD/$OUTPUT"
@@ -153,6 +154,20 @@ if command -v timeout >/dev/null 2>&1; then
   runner=(timeout --kill-after=5s "${COMMAND_TIMEOUT_SECONDS}s")
 fi
 
+if [[ "${CHECK_ONLY}" == "1" ]]; then
+  check_cmd=(ldapsearch -LLL -H "${LDAP_URI}" -b "${BASE_DN}" -s base -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "${SEARCH_TIMEOUT_SECONDS}")
+  if [[ "${START_TLS}" == "1" ]]; then check_cmd+=(-ZZ); fi
+  if [[ -n "${BIND_DN}" ]]; then check_cmd+=(-x -D "${BIND_DN}" -y "${password_file}"); fi
+  check_cmd+=("(objectClass=*)" dn)
+  set +e
+  "${runner[@]}" "${check_cmd[@]}" >/dev/null 2>"${tmp}/ldapsearch.stderr"
+  check_rc=$?
+  set -e
+  redact_file "${tmp}/ldapsearch.stderr"
+  if [[ "${check_rc}" -ne 0 ]]; then cat "${tmp}/ldapsearch.stderr" >&2; exit "${check_rc}"; fi
+  echo "OpenLDAP check succeeded"
+  exit 0
+fi
 set +e
 "${runner[@]}" "${cmd[@]}" > "$tmp/directory.ldif" 2> "$tmp/ldapsearch.stderr"
 ldap_rc=$?

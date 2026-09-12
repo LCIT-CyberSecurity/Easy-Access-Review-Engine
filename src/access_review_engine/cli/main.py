@@ -240,6 +240,7 @@ def connector_command(a: argparse.Namespace) -> int:
             secrets = secret_environment(data)
             if secrets.get("password_file"): data.setdefault("credentials", {})["password_file"] = secrets["password_file"]
             if a.command == "check":
+                data["_check_only"] = True
                 with tempfile.TemporaryDirectory() as d:
                     result = run_exporter(data, Path(d) / "check.zip")
                 if result.returncode: raise RunnerError(result.stderr.strip() or "collector check failed")
