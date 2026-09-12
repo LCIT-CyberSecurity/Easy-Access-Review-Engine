@@ -7,6 +7,8 @@ from zipfile import BadZipFile, ZipFile
 from access_review_engine.domain import (
     Access,
     AccessAssignment,
+    AuthenticationPosture,
+    AuthenticationStatus,
     AssignmentType,
     Completeness,
     ControlObject,
@@ -45,11 +47,14 @@ USED_LDIF_ATTRIBUTES = {
     "uniquemember",
     "memberuid",
     "changetype",
+    "pwdminlength", "pwdinhistory", "pwdminage", "pwdmaxage", "pwdmaxfailure",
+    "pwdfailurecountinterval", "pwdlockout", "pwdlockoutduration", "pwdmustchange",
+    "pwdallowuserchange", "pwdsafemodify", "pwdpolicysubentry",
 }
 TEXT_LDIF_ATTRIBUTES = USED_LDIF_ATTRIBUTES
 DEFAULT_OPENLDAP_FILTER = (
     "(|(objectClass=inetOrgPerson)(objectClass=posixAccount)"
-    "(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup))"
+    "(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup)(objectClass=pwdPolicy))"
 )
 
 
@@ -240,12 +245,14 @@ def _import_openldap_entries(
         scope["completeness"] = completeness
         scope["unresolved_memberships_in_scope"] = unresolved_in_scope
 
+    authentication_posture = _authentication_posture(provider.name, entries)
     checksum_payload = {
         "entries": entries,
         "manifest": manifest,
         "collection_errors": collection_errors,
         "trusted_export": trusted_export,
         "dn_count": len(by_dn),
+        "authentication_posture": authentication_posture,
     }
     batch = ImportBatch(
         provider=provider.name,
@@ -258,7 +265,9 @@ def _import_openldap_entries(
     from access_review_engine.domain import now_utc
 
     batch.completed_at = now_utc()
-    return ImportResult(batch, provider, identities, accesses, assignments)
+    return ImportResult(
+        batch, provider, identities, accesses, assignments, authentication_posture=authentication_posture
+    )
 
 
 def _user_identity(provider: str, entry: dict[str, list[str]]) -> Identity:
@@ -276,7 +285,61 @@ def _user_identity(provider: str, entry: dict[str, list[str]]) -> Identity:
         display_name=_first(entry, "cn") or uid,
         email=_first(entry, "mail"),
         description=_first(entry, "description"),
-        metadata={"dn": dn, "uid": uid, "entry_uuid": entry_uuid},
+        metadata={
+            "dn": dn,
+            "uid": uid,
+            "entry_uuid": entry_uuid,
+            "password_policy_dn": _first(entry, "pwdpolicysubentry"),
+        },
+    )
+
+
+def _authentication_posture(provider: str, entries: list[dict[str, list[str]]]) -> AuthenticationPosture:
+    policies: list[dict[str, object]] = []
+    for entry in entries:
+        classes = {value.lower() for value in entry.get("objectclass", [])}
+        if "pwdpolicy" not in classes and not any(key.startswith("pwd") for key in entry):
+            continue
+        controls = {}
+        mapping = {
+            "pwdminlength": "minimum_length", "pwdinhistory": "history", "pwdminage": "minimum_age_seconds",
+            "pwdmaxage": "maximum_age_seconds", "pwdmaxfailure": "lockout_threshold",
+            "pwdfailurecountinterval": "lockout_observation_window_seconds",
+            "pwdlockoutduration": "lockout_duration_seconds",
+        }
+        for source, target in mapping.items():
+            value = _first(entry, source)
+            if value is not None:
+                try:
+                    controls[target] = int(value)
+                except ValueError:
+                    controls[target] = value
+        for source, target in (("pwdlockout", "lockout_enabled"), ("pwdmustchange", "must_change"), ("pwdallowuserchange", "allow_user_change"), ("pwdsafemodify", "safe_modify")):
+            value = _first(entry, source)
+            if value is not None:
+                controls[target] = value.lower() in {"true", "yes", "on", "1"}
+        if controls:
+            policies.append({"dn": _first(entry, "dn"), "controls": controls})
+    if not policies:
+        return AuthenticationPosture(
+            provider=provider,
+            controls={
+                "password_policy": {"status": AuthenticationStatus.NOT_COLLECTED},
+                "mfa": {"status": AuthenticationStatus.NOT_SUPPORTED},
+                "federation": {"status": AuthenticationStatus.NOT_SUPPORTED},
+                "tokens": {"status": AuthenticationStatus.NOT_SUPPORTED},
+            },
+            source="openldap_ppolicy",
+            completeness=str(Completeness.UNKNOWN),
+        )
+    return AuthenticationPosture(
+        provider=provider,
+        controls={"password_policy": {"status": AuthenticationStatus.COLLECTED, "policies": policies},
+                  "mfa": {"status": AuthenticationStatus.NOT_SUPPORTED},
+                  "federation": {"status": AuthenticationStatus.NOT_SUPPORTED},
+                  "tokens": {"status": AuthenticationStatus.NOT_SUPPORTED}},
+        source="openldap_ppolicy",
+        completeness=str(Completeness.UNKNOWN),
     )
 
 

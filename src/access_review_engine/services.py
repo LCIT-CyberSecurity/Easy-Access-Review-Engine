@@ -11,9 +11,11 @@ from access_review_engine.domain import (
     AccessPath,
     AccessRelation,
     AccessRelationType,
+    AuthenticationPosture,
     AuditEvent,
     Campaign,
     CampaignStatus,
+    canonical_permission_id,
     ComparisonState,
     Completeness,
     Decision,
@@ -531,9 +533,9 @@ def _observed_stable_key(
         return None
     raw_access_native = assignment.origin.raw.get("GroupSID") or assignment.origin.raw.get("group_native_id")
     access_native_id = str(raw_access_native) if raw_access_native else None
-    if access_native_id is None and access is not None:
+    if access_native_id is None and access and access.control_object:
         access_native_id = access.control_object.native_id
-    permission_id = access.permission.identifier if access is not None else "member"
+    permission_id = canonical_permission_id(access.permission if access else None)
     if not access_native_id and not identity.native_id:
         return None
     access_ref = (
@@ -577,6 +579,7 @@ def create_snapshot(
     golden_version: GoldenSourceVersion | None = None,
     import_scope: dict[str, object] | None = None,
     access_relations: list[AccessRelation] | None = None,
+    authentication_posture: AuthenticationPosture | None = None,
 ) -> Snapshot:
     snapshot = Snapshot(
         providers=deepcopy(providers),  # type: ignore[arg-type]
@@ -586,6 +589,7 @@ def create_snapshot(
         access_assignments=deepcopy(assignments),
         source_import_ids=list(source_import_ids),
         access_relations=deepcopy(list(access_relations or [])),
+        authentication_posture=deepcopy(authentication_posture),
     )
     snapshot.comparison_states = compare_snapshot(snapshot, golden_version, import_scope)
     return snapshot.finalize()
@@ -604,13 +608,17 @@ def create_golden_version(
     source_campaign_id: str | None = None,
     parent_version_id: str | None = None,
     comment: str | None = None,
+    golden_authentication_policy: AuthenticationPosture | None = None,
 ) -> GoldenSourceVersion:
     previous = list(previous_versions)
     version = max((item.version for item in previous), default=0) + 1
     incoming = list(assignments)
     _reject_duplicate_stable_golden_keys(incoming)
     ordered = sorted(set(incoming), key=lambda item: item.key())
-    checksum = stable_checksum([asdict(item) for item in ordered])
+    checksum = stable_checksum({
+        "assignments": [asdict(item) for item in ordered],
+        "golden_authentication_policy": asdict(golden_authentication_policy) if golden_authentication_policy else None,
+    })
     return GoldenSourceVersion(
         golden_source_id=golden_source.id,
         version=version,
@@ -621,6 +629,7 @@ def create_golden_version(
         source_campaign_id=source_campaign_id,
         parent_version_id=parent_version_id,
         comment=comment,
+        golden_authentication_policy=deepcopy(golden_authentication_policy),
     )
 
 
@@ -656,8 +665,8 @@ def promote_snapshot(
                 access_name=item.access_name,
                 identity_provider=item.identity_provider,
                 identity_identifier=item.identity_identifier,
-                access_native_id=access.control_object.native_id if access else None,
-                access_permission=access.permission.identifier if access else None,
+                access_native_id=access.control_object.native_id if access and access.control_object else None,
+                access_permission=access.permission.identifier if access and access.permission else None,
                 identity_native_id=identity.native_id if identity else None,
             )
         )
@@ -669,6 +678,7 @@ def promote_snapshot(
         previous,
         source_snapshot_id=snapshot.id,
         parent_version_id=parent_id,
+        golden_authentication_policy=snapshot.authentication_posture,
     )
 
 
@@ -795,8 +805,8 @@ def open_campaign(
                 identity_status=identity.status if identity else IdentityStatus.UNKNOWN,
                 access_provider=str(row["access_provider"]),
                 access_name=str(row["access_name"]),
-                control_object=asdict(access.control_object) if access else {},
-                permission=asdict(access.permission) if access else {},
+                control_object=asdict(access.control_object) if access and access.control_object else {},
+                permission=asdict(access.permission) if access and access.permission else {},
                 target=asdict(access.target) if access and access.target else None,
                 description=access.description if access else None,
                 origin=None,

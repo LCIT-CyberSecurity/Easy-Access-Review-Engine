@@ -32,6 +32,7 @@ from access_review_engine.storage import (
     hydrate_assignment,
     hydrate_identity,
     hydrate_provider,
+    hydrate_authentication_posture,
 )
 
 
@@ -88,60 +89,94 @@ def persist_import_result(
     if not authoritative:
         _retain_non_authoritative_unresolved(result)
 
-    repo.upsert("providers", result.provider)
-    repo.insert_append_only("imports", result.batch)
+    # The complete import, including its audit batch and snapshot, is one transaction.
+    with repo.transaction():
+        repo.upsert("providers", result.provider)
+        repo.insert_append_only("imports", result.batch)
 
-    existing_identities = _load_identities(repo, result.provider.name)
-    imported_identities = _dedupe_identities(result.identities)
-    merged_identities = reconcile_identities(
-        existing_identities,
-        imported_identities,
-        completeness=result.batch.completeness,
-        scope=result.batch.scope,
-        authoritative=authoritative,
-    )
-    for identity in sorted(merged_identities, key=lambda item: item.status != "deleted"):
-        repo.upsert("identities", identity)
-
-    accesses = _reconcile_accesses(_load_accesses(repo, result.provider.name), result.accesses)
-    for access in accesses:
-        repo.upsert("accesses", access)
-
-    access_relations = _reconcile_access_relations(
-        _load_access_relations(repo, result.provider.name),
-        result.access_relations,
-    )
-    if result.access_relations:
-        repo.replace_access_relations(access_relations, providers={result.provider.name})
-
-    snapshot_assignments = list(result.assignments)
-    if authoritative:
-        assignments = _reconcile_assignments(
-            _load_assignments(repo, result.provider.name),
-            result.assignments,
+        existing_identities = _load_identities(repo, result.provider.name)
+        imported_identities = _dedupe_identities(result.identities)
+        _reject_identity_rename_collisions(existing_identities, imported_identities)
+        identity_renames = _detect_identity_renames(existing_identities, imported_identities)
+        merged_identities = reconcile_identities(
+            existing_identities,
+            imported_identities,
+            completeness=result.batch.completeness,
+            scope=result.batch.scope,
+            authoritative=authoritative,
         )
-        repo.replace_assignments(assignments, providers={result.provider.name})
-        snapshot_assignments = assignments
+        for identity in sorted(merged_identities, key=lambda item: item.status != "deleted"):
+            repo.upsert("identities", identity)
 
-    resolved_authoritative = _resolve_unresolved_assignments(repo)
-    _resolve_non_authoritative_unresolved_observations(repo)
-    if authoritative and resolved_authoritative:
-        snapshot_assignments = _load_assignments(repo, result.provider.name)
+        existing_accesses = _load_accesses(repo, result.provider.name)
+        _reject_access_rename_collisions(existing_accesses, result.accesses)
+        access_renames = _detect_access_renames(existing_accesses, result.accesses)
+        accesses = _reconcile_accesses(existing_accesses, result.accesses)
+        obsolete_access_ids = {
+            access.id for access in existing_accesses
+        } - {access.id for access in accesses}
+        repo.delete_ids("accesses", obsolete_access_ids)
+        for access in accesses:
+            repo.upsert("accesses", access)
 
-    snapshot = create_snapshot(
-        [result.provider],
-        _load_identities(repo),
-        [],
-        _load_accesses(repo),
-        snapshot_assignments,
-        [result.batch.id],
-        golden_version,
-        result.batch.scope,
-        _load_access_relations(repo),
-    )
-    repo.insert_append_only("snapshots", snapshot)
+        observed_relations = result.access_relations
+        if observed_relations is not None:
+            existing_relations = _load_access_relations(repo, result.provider.name)
+            if authoritative:
+                relations = _reconcile_access_relations(existing_relations, observed_relations)
+                repo.replace_access_relations(relations, providers={result.provider.name})
+            elif observed_relations:
+                relations = _merge_access_relations(existing_relations, observed_relations)
+                repo.replace_access_relations(relations, providers={result.provider.name})
+
+        snapshot_assignments = list(result.assignments)
+        if authoritative:
+            assignments = _reconcile_assignments(
+                _load_assignments(repo, result.provider.name),
+                result.assignments,
+            )
+            repo.replace_assignments(assignments, providers={result.provider.name})
+            snapshot_assignments = assignments
+
+        references_renamed = _apply_current_reference_renames(
+            repo,
+            access_renames,
+            identity_renames,
+        )
+
+        resolved_authoritative = _resolve_unresolved_assignments(repo)
+        _resolve_non_authoritative_unresolved_observations(repo)
+        if authoritative and resolved_authoritative:
+            snapshot_assignments = _load_assignments(repo, result.provider.name)
+        elif not authoritative and references_renamed:
+            snapshot_assignments = _load_assignments(repo, result.provider.name)
+
+        authentication_posture = result.authentication_posture
+        if (
+            authentication_posture is None
+            or result.batch.completeness != Completeness.FULL
+            or authentication_posture.completeness != str(Completeness.FULL)
+        ):
+            for payload in reversed(repo.list_payloads("snapshots")):
+                previous = payload.get("authentication_posture")
+                if isinstance(previous, dict) and previous.get("provider") == result.provider.name:
+                    authentication_posture = hydrate_authentication_posture(previous)
+                    break
+
+        snapshot = create_snapshot(
+            [result.provider],
+            _load_identities(repo),
+            [],
+            _load_accesses(repo),
+            snapshot_assignments,
+            [result.batch.id],
+            golden_version,
+            result.batch.scope,
+            _load_access_relations(repo),
+            authentication_posture=authentication_posture,
+        )
+        repo.insert_append_only("snapshots", snapshot)
     return snapshot
-
 
 def _is_authoritative_full(result: ImportResult) -> bool:
     scope = result.batch.scope or {}
@@ -290,30 +325,344 @@ def _dedupe_identities(identities: Iterable[Identity]) -> list[Identity]:
     return list(by_key.values())
 
 
-def _reconcile_accesses(existing: Iterable[Access], imported: Iterable[Access]) -> list[Access]:
-    existing_by_name = {(access.provider, access.name): access for access in existing}
-    existing_by_native = {
-        (access.provider, access.control_object.native_id, access.permission.identifier): access
-        for access in existing
-        if access.control_object.native_id
+def _access_native_id(access: Access) -> str | None:
+    return access.control_object.native_id if access.control_object else None
+
+
+def _access_definition(access: Access) -> tuple[object, str | None]:
+    target = asdict(access.target) if access.target else None
+    permission = access.permission.identifier if access.permission else None
+    return target, permission
+
+
+def _access_collision_diagnostic(existing: Access, incoming: Access) -> dict[str, object]:
+    existing_target, existing_permission = _access_definition(existing)
+    incoming_target, incoming_permission = _access_definition(incoming)
+    return {
+        "type": "ACCESS_DEFINITION_COLLISION",
+        "provider": incoming.provider,
+        "name": incoming.name,
+        "existing_native_id": _access_native_id(existing),
+        "incoming_native_id": _access_native_id(incoming),
+        "existing_target": existing_target,
+        "incoming_target": incoming_target,
+        "existing_permission": existing_permission,
+        "incoming_permission": incoming_permission,
     }
-    reconciled: list[Access] = []
+
+
+def _raise_access_collision(existing: Access, incoming: Access) -> None:
+    diagnostic = _access_collision_diagnostic(existing, incoming)
+    raise ValueError(
+        "ACCESS_DEFINITION_COLLISION: "
+        f"provider={diagnostic['provider']!r} name={diagnostic['name']!r} "
+        f"existing_target={diagnostic['existing_target']!r} "
+        f"incoming_target={diagnostic['incoming_target']!r} "
+        f"existing_permission={diagnostic['existing_permission']!r} "
+        f"incoming_permission={diagnostic['incoming_permission']!r}"
+    )
+
+
+def _access_definitions_conflict(existing: Access, incoming: Access) -> bool:
+    existing_target, existing_permission = _access_definition(existing)
+    incoming_target, incoming_permission = _access_definition(incoming)
+    return (
+        existing_target is not None
+        and incoming_target is not None
+        and existing_target != incoming_target
+    ) or (
+        existing_permission is not None
+        and incoming_permission is not None
+        and existing_permission != incoming_permission
+    )
+
+
+def _enrich_access(existing: Access, incoming: Access) -> Access:
+    if existing.target is None and incoming.target is not None:
+        existing.target = incoming.target
+    if existing.permission is None and incoming.permission is not None:
+        existing.permission = incoming.permission
+    if existing.control_object is None and incoming.control_object is not None:
+        existing.control_object = incoming.control_object
+    elif existing.control_object and incoming.control_object:
+        existing.control_object.display_name = (
+            incoming.control_object.display_name or existing.control_object.display_name
+        )
+        existing.control_object.description = (
+            incoming.control_object.description or existing.control_object.description
+        )
+        existing.control_object.metadata = {
+            **existing.control_object.metadata,
+            **incoming.control_object.metadata,
+        }
+    existing.display_name = incoming.display_name or existing.display_name
+    existing.description = incoming.description or existing.description
+    existing.metadata = {**existing.metadata, **incoming.metadata}
+    return existing
+
+
+def _reconcile_accesses(existing: Iterable[Access], imported: Iterable[Access]) -> list[Access]:
+    existing_items = list(existing)
+    existing_by_name: dict[tuple[str, str], Access] = {}
+    existing_by_native: dict[tuple[str, str], Access] = {}
+    for access in existing_items:
+        key = (access.provider, access.name)
+        previous = existing_by_name.get(key)
+        if previous is not None:
+            _raise_access_collision(previous, access)
+        existing_by_name[key] = access
+        native_id = _access_native_id(access)
+        if native_id is not None:
+            existing_by_native[(access.provider, native_id)] = access
+
+    reconciled = list(existing_items)
     seen: set[tuple[str, str]] = set()
     for access in imported:
-        previous = None
-        if access.control_object.native_id:
-            previous = existing_by_native.get(
-                (access.provider, access.control_object.native_id, access.permission.identifier)
-            )
-        else:
-            previous = existing_by_name.get((access.provider, access.name))
-        if previous is not None:
-            access.id = previous.id
         key = (access.provider, access.name)
-        if key not in seen:
+        previous = existing_by_name.get(key)
+        native_id = _access_native_id(access)
+        if previous is None and native_id is not None:
+            previous = existing_by_native.get((access.provider, native_id))
+        if previous is not None:
+            if _access_definitions_conflict(previous, access):
+                _raise_access_collision(previous, access)
+            position = reconciled.index(previous)
+            previous_native_id = _access_native_id(previous)
+            old_key = (previous.provider, previous.name)
+            if previous_native_id is not None and native_id is not None and previous_native_id != native_id:
+                # Same logical name, new source object: keep the unique key and replace the source object.
+                reconciled[position] = access
+            elif old_key != key:
+                # Stable native identity with a renamed Access keeps its repository identity.
+                access.id = previous.id
+                reconciled[position] = access
+            else:
+                access.id = previous.id
+                _enrich_access(previous, access)
+                access = previous
+            if old_key != key:
+                existing_by_name.pop(old_key, None)
+            existing_by_name[key] = access
+            if native_id is not None:
+                existing_by_native[(access.provider, native_id)] = access
+        else:
+            existing_by_name[key] = access
+            if native_id is not None:
+                existing_by_native[(access.provider, native_id)] = access
+        if key not in seen and access not in reconciled:
             reconciled.append(access)
-            seen.add(key)
+        seen.add(key)
     return reconciled
+
+
+def _reject_identity_rename_collisions(
+    existing: Iterable[Identity], imported: Iterable[Identity]
+) -> None:
+    existing_by_ref = {
+        (identity.provider, identity.identifier): identity
+        for identity in existing
+        if identity.status != "deleted"
+    }
+    existing_by_native = {
+        (identity.provider, identity.native_id): identity
+        for identity in existing_by_ref.values()
+        if identity.native_id is not None
+    }
+    for identity in imported:
+        if identity.native_id is None:
+            continue
+        previous = existing_by_native.get((identity.provider, identity.native_id))
+        target = existing_by_ref.get((identity.provider, identity.identifier))
+        if previous is None or target is None or previous.id == target.id:
+            continue
+        if target.native_id != identity.native_id:
+            raise ValueError(
+                "IDENTITY_RENAME_COLLISION: "
+                f"provider={identity.provider!r} identifier={identity.identifier!r} "
+                f"existing_native_id={target.native_id!r} "
+                f"incoming_native_id={identity.native_id!r}"
+            )
+
+
+def _detect_identity_renames(
+    existing: Iterable[Identity], imported: Iterable[Identity]
+) -> dict[tuple[str, str], tuple[str, str]]:
+    existing_by_native = _unique_by_native_identity_ref(existing)
+    imported_by_native = _unique_by_native_identity_ref(imported)
+    renames: dict[tuple[str, str], tuple[str, str]] = {}
+    for native_key, old_ref in existing_by_native.items():
+        new_ref = imported_by_native.get(native_key)
+        if new_ref is not None and old_ref != new_ref:
+            renames[old_ref] = new_ref
+    return renames
+
+
+def _unique_by_native_identity_ref(
+    identities: Iterable[Identity],
+) -> dict[tuple[str, str], tuple[str, str]]:
+    found: dict[tuple[str, str], tuple[str, str] | None] = {}
+    for identity in identities:
+        if not identity.native_id or identity.status == "deleted":
+            continue
+        native_key = (identity.provider, identity.native_id)
+        ref = (identity.provider, identity.identifier)
+        if native_key in found:
+            found[native_key] = None
+        else:
+            found[native_key] = ref
+    return {native_key: ref for native_key, ref in found.items() if ref is not None}
+
+
+def _reject_access_rename_collisions(
+    existing: Iterable[Access], imported: Iterable[Access]
+) -> None:
+    existing_by_ref = {(access.provider, access.name): access for access in existing}
+    existing_by_native = {
+        (access.provider, native_id): access
+        for access in existing_by_ref.values()
+        if (native_id := _access_native_id(access)) is not None
+    }
+    for access in imported:
+        native_id = _access_native_id(access)
+        if native_id is None:
+            continue
+        previous = existing_by_native.get((access.provider, native_id))
+        target = existing_by_ref.get((access.provider, access.name))
+        if previous is None or target is None or previous.id == target.id:
+            continue
+        if _access_native_id(target) != native_id:
+            raise ValueError(
+                "ACCESS_RENAME_COLLISION: "
+                f"provider={access.provider!r} name={access.name!r} "
+                f"existing_native_id={_access_native_id(target)!r} "
+                f"incoming_native_id={native_id!r}"
+            )
+
+
+def _detect_access_renames(
+    existing: Iterable[Access], imported: Iterable[Access]
+) -> dict[tuple[str, str], tuple[str, str]]:
+    existing_by_native = _unique_by_native_access_ref(existing)
+    imported_by_native = _unique_by_native_access_ref(imported)
+    renames: dict[tuple[str, str], tuple[str, str]] = {}
+    for native_key, old_ref in existing_by_native.items():
+        new_ref = imported_by_native.get(native_key)
+        if new_ref is not None and old_ref != new_ref:
+            renames[old_ref] = new_ref
+    return renames
+
+
+def _unique_by_native_access_ref(
+    accesses: Iterable[Access],
+) -> dict[tuple[str, str], tuple[str, str]]:
+    found: dict[tuple[str, str], tuple[str, str] | None] = {}
+    for access in accesses:
+        native_id = _access_native_id(access)
+        if native_id is None:
+            continue
+        native_key = (access.provider, native_id)
+        ref = (access.provider, access.name)
+        if native_key in found:
+            found[native_key] = None
+        else:
+            found[native_key] = ref
+    return {native_key: ref for native_key, ref in found.items() if ref is not None}
+
+
+def _apply_current_reference_renames(
+    repo: Repository,
+    access_renames: dict[tuple[str, str], tuple[str, str]],
+    identity_renames: dict[tuple[str, str], tuple[str, str]],
+) -> bool:
+    changed_assignments = _rename_assignment_references(repo, access_renames, identity_renames)
+    changed_relations = _rename_relation_references(repo, access_renames)
+    return changed_assignments or changed_relations
+
+
+def _rename_assignment_references(
+    repo: Repository,
+    access_renames: dict[tuple[str, str], tuple[str, str]],
+    identity_renames: dict[tuple[str, str], tuple[str, str]],
+) -> bool:
+    if not access_renames and not identity_renames:
+        return False
+    assignments = _load_assignments(repo)
+    changed_providers: set[str] = set()
+    for assignment in assignments:
+        original_provider = assignment.provider
+        access_ref = (assignment.provider, assignment.access_name)
+        if access_ref in access_renames:
+            assignment.provider, assignment.access_name = access_renames[access_ref]
+        identity_ref = (assignment.identity_provider, assignment.identity_identifier)
+        if identity_ref in identity_renames:
+            assignment.identity_provider, assignment.identity_identifier = identity_renames[
+                identity_ref
+            ]
+        if (
+            original_provider != assignment.provider
+            or access_ref != (assignment.provider, assignment.access_name)
+            or identity_ref != (assignment.identity_provider, assignment.identity_identifier)
+        ):
+            changed_providers.update({original_provider, assignment.provider})
+    if not changed_providers:
+        return False
+    scoped = [assignment for assignment in assignments if assignment.provider in changed_providers]
+    repo.replace_assignments(_dedupe_assignments(scoped), providers=changed_providers)
+    return True
+
+
+def _dedupe_assignments(assignments: Iterable[AccessAssignment]) -> list[AccessAssignment]:
+    deduped: dict[tuple[str, str, str, str, str], AccessAssignment] = {}
+    for assignment in assignments:
+        key = assignment.comparison_key() + (assignment.origin_fingerprint,)
+        deduped.setdefault(key, assignment)
+    return list(deduped.values())
+
+
+def _rename_relation_references(
+    repo: Repository,
+    access_renames: dict[tuple[str, str], tuple[str, str]],
+) -> bool:
+    if not access_renames:
+        return False
+    relations = _load_access_relations(repo)
+    changed_parent_providers: set[str] = set()
+    for relation in relations:
+        original_parent_provider = relation.parent_provider
+        parent_ref = (relation.parent_provider, relation.parent_access_name)
+        if parent_ref in access_renames:
+            relation.parent_provider, relation.parent_access_name = access_renames[parent_ref]
+        child_ref = (relation.child_provider, relation.child_access_name)
+        if child_ref in access_renames:
+            relation.child_provider, relation.child_access_name = access_renames[child_ref]
+        if (
+            original_parent_provider != relation.parent_provider
+            or parent_ref != (relation.parent_provider, relation.parent_access_name)
+            or child_ref != (relation.child_provider, relation.child_access_name)
+        ):
+            changed_parent_providers.update({original_parent_provider, relation.parent_provider})
+    if not changed_parent_providers:
+        return False
+    scoped = [
+        relation for relation in relations if relation.parent_provider in changed_parent_providers
+    ]
+    repo.replace_access_relations(scoped, providers=changed_parent_providers)
+    return True
+
+
+def _merge_access_relations(
+    existing: Iterable[AccessRelation], imported: Iterable[AccessRelation]
+) -> list[AccessRelation]:
+    merged = list(existing)
+    existing_by_key = {relation.key(): relation for relation in merged}
+    for relation in imported:
+        previous = existing_by_key.get(relation.key())
+        if previous is not None:
+            relation.id = previous.id
+            continue
+        existing_by_key[relation.key()] = relation
+        merged.append(relation)
+    return merged
 
 
 def _reconcile_access_relations(

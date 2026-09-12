@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 
 from access_review_engine.domain import (
@@ -8,6 +9,8 @@ from access_review_engine.domain import (
     AccessAssignment,
     AccessRelation,
     AccessRelationType,
+    AuthenticationPosture,
+    AuthenticationStatus,
     Completeness,
     ControlObject,
     Identity,
@@ -38,6 +41,7 @@ class CRMCollection:
     relations: list[AccessRelation]
     completeness: str = Completeness.FULL
     scope: dict[str, object] | None = None
+    authentication_posture: AuthenticationPosture | None = None
 
 
 def collect_crm(
@@ -62,7 +66,18 @@ def collect_crm(
         relations=relations if relations is not None else build_relations(role_permissions(policy_dir)),
         completeness=completeness,
         scope=scope or {"type": "all", "completeness": str(completeness)},
+        authentication_posture=observed_authentication_posture(policy_dir),
     )
+
+
+def observed_authentication_posture(policy_dir: Path = POLICY_DIR) -> AuthenticationPosture:
+    payload = json.loads((policy_dir / "observed-authentication-posture.json").read_text(encoding="utf-8"))
+    return AuthenticationPosture(**payload)
+
+
+def golden_authentication_policy(policy_dir: Path = POLICY_DIR) -> AuthenticationPosture:
+    payload = json.loads((policy_dir / "golden-authentication-policy.json").read_text(encoding="utf-8"))
+    return AuthenticationPosture(**payload)
 
 
 def identity_from_row(row: dict[str, str]) -> Identity:

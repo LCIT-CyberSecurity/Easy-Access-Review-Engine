@@ -24,6 +24,7 @@ from access_review_engine.domain import (
     Finding,
     GoldenSourceAssignment,
     IdentityStatus,
+    AuthenticationPosture,
     Origin,
     OwnerRef,
     Permission,
@@ -62,7 +63,7 @@ from access_review_engine.storage import (
     hydrate_snapshot,
 )
 
-from crm_collector import CRMCollection, collect_crm, direct_permission_assignment, reject_access_name_collisions
+from crm_collector import (CRMCollection, collect_crm, direct_permission_assignment, golden_authentication_policy, observed_authentication_posture, reject_access_name_collisions)
 from crm_lab import (
     ARTIFACTS_DIR,
     POLICY_DIR,
@@ -607,7 +608,7 @@ def test_reports_are_written_for_troubleshooting_artifacts() -> None:
     campaign, items = open_campaign(_campaign(snapshot, golden), snapshot)
     decisions = [_decision_for(item) for item in items]
     close_campaign(campaign, items, decisions)
-    write_reports(ARTIFACTS_DIR, campaign, items, decisions, golden)
+    write_reports(ARTIFACTS_DIR, campaign, items, decisions, golden, snapshot.authentication_posture)
 
     assert (ARTIFACTS_DIR / "campaign-report.html").exists()
     assert (ARTIFACTS_DIR / "campaign-results.json").exists()
@@ -636,7 +637,9 @@ def golden_from_collection(collection: CRMCollection):
                 identity_native_id=identity.native_id,
             )
         )
-    return create_golden_version(source, assignments, "imported_csv")
+    return create_golden_version(
+        source, assignments, "imported_csv", golden_authentication_policy=golden_authentication_policy()
+    )
 
 
 def snapshot_from_collection(
@@ -654,6 +657,7 @@ def snapshot_from_collection(
         golden,
         import_scope or collection.scope,
         collection.relations,
+        authentication_posture=collection.authentication_posture,
     )
 
 

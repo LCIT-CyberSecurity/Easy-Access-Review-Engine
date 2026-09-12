@@ -49,6 +49,28 @@ Le modele interne reste generique: les informations AD specifiques sont conserve
 ou `origin.raw`.
 
 
+La conception detaillee est documentee dans [docs/engineering.md](docs/engineering.md), avec les
+frontieres de modules, le graphe d'acces effectif, la Golden Source, la persistance SQLite, les
+regles de compatibilite et les limites V1.
+
+
+Le parcours fonctionnel est decrit dans le [guide utilisateur](docs/user-guide.md). La documentation
+technique pour les developpeurs reste dans [docs/engineering.md](docs/engineering.md).
+
+
+## Modele de composition et stabilisation V1
+
+Le coeur conserve un modele minimal: `Provider`, `Identity`, `Access`, `AccessAssignment` et
+`AccessRelation`. Un `Access` peut etre opaque, composite ou fin; `target` et `permission` sont
+optionnels. Les relations `grants` composent les acces et le calcul effectif conserve la provenance
+sans creer d'assignments derives.
+
+La branche `improve-model` durcit la reconciliation sans migration destructive de la cle historique
+`(provider, name)`: les enrichissements sont conservateurs et les collisions de target/permission
+sont refusees explicitement. AD et OpenLDAP restent les connecteurs integres. Les autres technologies
+servent uniquement de fixtures de stress du modele.
+
+
 ## Active Directory support
 
 The AD V1 importer/exporter targets file-based collection from recent enterprise AD DS deployments

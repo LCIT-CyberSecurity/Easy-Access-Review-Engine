@@ -30,6 +30,92 @@ Le type de relation MVP est limite a `grants`. Une relation porte un `origin` et
 
 Les descripteurs `ControlObject`, `Permission`, `Target` et `Origin` restent attaches aux Access ou aux relations. Ils decrivent l'objet controle, la permission, la cible et la provenance sans transformer le core en modele IAM specifique a un provider.
 
+
+## Imbrication des objets
+
+Les objets ne sont pas imbriques par copie les uns dans les autres. Ils se referencent par des
+cles `(provider, identifier)`; cela evite de dupliquer un Access dans chaque assignment ou chaque
+snapshot.
+
+```text
+Provider
+  |
+  +--> Identity ------------------------------+
+  |                                           |
+  +--> Access                                 |
+        |                                     |
+        +--> ControlObject (optionnel)        |
+        +--> Target (optionnel)               |
+        +--> Permission (optionnelle)         |
+                                              |
+Identity + Access ----------------------------+
+              |                               |
+              +--> AccessAssignment           |
+                    +--> Origin               |
+                                              |
+Access(parent) -- AccessRelation: grants --> Access(child)
+                                              |
+                                              v
+                              EffectiveAccessEvaluation
+                              +--> AccessPath(s)
+```
+
+### Cycle de vie reviewable
+
+```text
+ImportResult
+  +--> Provider / Identity / Access
+  +--> AccessAssignment direct
+  +--> AccessRelation grants
+              |
+              v
+Snapshot immutable
+  +--> observed direct assignments
+  +--> current relation graph
+  +--> effective access calculable + provenance
+              |
+              +--> comparaison avec GoldenSourceVersion
+                              |
+                              v
+                         Campaign
+                              |
+                              +--> ReviewItem
+                              +--> Decision (approve/revoke/not_applicable)
+                              +--> Report / Remediation
+```
+
+La Golden Source contient principalement les assignments attendus, pas les acces effectifs
+recalcules. Un `Snapshot` conserve l'etat observe a un instant donne; une `Campaign` ouvre des
+items de revue sur ce snapshot et ses decisions ne modifient pas le snapshot historique.
+
+
+### A quoi servent les descripteurs
+
+- `ControlObject` identifie l'objet natif ou logique auquel l'habilitation se rapporte quand il
+  existe, par exemple un groupe AD, un role applicatif ou un permission set. Il peut rester absent
+  pour un Access opaque.
+- `Target` identifie la cible lorsque le provider la fournit reellement. Il est optionnel et ne doit
+  pas etre invente pour un entitlement opaque. Exemples: `Contacts`, `/srv/finance`,
+  `arn:aws:s3:::finance/*` ou `namespace/prod/pods`.
+- `Permission` identifie l'action sur la cible. Elle est optionnelle, singuliere et peut garder la
+  syntaxe native du provider: `read`, `write`, `SELECT`, `s3:GetObject`, `get` ou `list`.
+- `Origin` explique d'ou vient l'observation: import AD, groupe LDAP, role applicatif ou policy
+  native. Les details provider-specific restent dans `origin.raw` et `metadata`.
+
+Exemples representables simultanement:
+
+```text
+Access(name="PREMIUM_USER", target=null, permission=null)
+Access(name="CRM-Sales", target=null, permission=null)
+Access(name="Contacts", target="Contacts", permission=null)
+Access(name="Contacts:Read", target="Contacts", permission="read")
+Access(name="FinanceBucket:GetObject", target="arn:aws:s3:::finance/*", permission="s3:GetObject")
+```
+
+`Contacts:Read` et `Contacts:Write` sont deux Access distincts. Cela permet une revocation
+partielle, un diff Golden precis, une campagne separee, une provenance propre et une remediation
+ciblee. L'interface peut les afficher comme `R/W`, mais le modele ne fusionne pas les permissions.
+
 ## Acces directs et effectifs
 
 Un acces direct est observe comme attribue a une Identity:
@@ -55,6 +141,24 @@ customers:export
 ```
 
 Si un provider encode deja la permission dans `access_name`, ce format reste compatible. L'identite stable d'un Access ne doit pas confondre `resource=customers permission=read` avec `resource=customers permission=write`.
+
+### Schema CrashTests-CRM
+
+```text
+                         AccessRelation: grants
+  Emma  ── AccessAssignment ──> CRM-Sales ─────────────────> contacts:read
+                                      │                     └> contacts:write
+                                      └─────────────────────> invoices:read
+
+  Golden Source attend: Emma -> CRM-Sales
+  Calcul effectif:      Emma -> CRM-Sales -> contacts:read/write, invoices:read
+```
+
+Le bloc de gauche est l'attribution directe certifiable. Les fleches `grants` composent le role
+CRM. Le calcul effectif explique les droits sans les persister comme assignments directs.
+
+Dans les CrashTests-CRM, un ajout ou retrait d'une relation modifie le graphe effectif, mais ne
+modifie pas automatiquement l'attendu Golden `Emma -> CRM-Sales`.
 
 ## Exemples
 
@@ -123,3 +227,19 @@ Bob -> reports:read
 Les droits effectifs issus de la Golden peuvent etre calcules en appliquant le graphe de relations a ses assignments directs. Si la composition d'un role change entre deux versions de relations, l'affectation directe peut rester inchangee alors que les droits effectifs changent. Le service de diff effectif expose cette information sans creer automatiquement un finding metier.
 
 Les snapshots et bases legacy qui ne contiennent pas `AccessRelation` sont interpretes comme `access_relations = []`.
+
+## Identite et enrichissement conservateurs
+
+Access.key() conserve la cle historique (provider, name). Cette branche ne fait pas de migration
+de cle SQLite et ne traite pas native_id comme une identite universelle: il sert a reconnaitre un
+objet renomme lorsqu'il est stable dans le provider, comme un SID AD ou un entryUUID OpenLDAP.
+
+target et permission sont optionnels. Une collecte qui enrichit un Access de null vers une valeur
+connue peut completer l'objet existant. Une collecte moins riche ne remplace pas une valeur deja
+connue par null. Deux valeurs connues incompatibles sous le meme (provider, name) refusent la
+reconciliation avec le diagnostic ACCESS_DEFINITION_COLLISION; aucun ecrasement silencieux n'est
+autorise.
+
+Un Access opaque ou composite peut donc etre represente sans permission ni cible. Les permissions
+distinctes restent des Access distincts et les droits effectifs restent calcules par le graphe,
+sans etre persistes comme des AccessAssignment directs.

@@ -7,7 +7,8 @@ from html import escape
 import json
 from pathlib import Path
 
-from access_review_engine.domain import Campaign, Decision, GoldenSourceVersion, ReviewItem
+from access_review_engine.authentication import compare_authentication_posture
+from access_review_engine.domain import AuthenticationPosture, Campaign, Decision, GoldenSourceVersion, ReviewItem
 from access_review_engine.services import latest_decisions
 
 
@@ -57,6 +58,7 @@ def write_reports(
     review_items: list[ReviewItem],
     decisions: list[Decision],
     golden_version: GoldenSourceVersion | None = None,
+    authentication_posture: AuthenticationPosture | None = None,
 ) -> None:
     path = Path(output_dir)
     path.mkdir(parents=True, exist_ok=True)
@@ -71,12 +73,19 @@ def write_reports(
     matrix = path.parent / "policy" / "role-permissions.csv"
     if matrix.exists():
         role_permissions = _role_permission_summary(matrix)
+        matrix_auth = (
+            [_authentication_posture_policy(golden_version.golden_authentication_policy)]
+            if golden_version and golden_version.golden_authentication_policy
+            else _authentication_policies(rows)
+        )
         (path / "access-matrix.html").write_text(
-            render_access_matrix(matrix, _authentication_policies(rows)), encoding="utf-8"
+            render_access_matrix(matrix, matrix_auth), encoding="utf-8"
         )
         reference_links.append({"label": "Access matrix", "href": "access-matrix.html"})
     (path / "campaign-report.html").write_text(
-        render_html_report(campaign, rows, golden_version, reference_links, role_permissions), encoding="utf-8"
+        render_html_report(
+            campaign, rows, golden_version, reference_links, role_permissions, authentication_posture
+        ), encoding="utf-8"
     )
 
 
@@ -168,6 +177,67 @@ def _safe_auth_value(value: object) -> str:
     return str(value)
 
 
+def _authentication_posture_policy(posture: AuthenticationPosture) -> dict[str, str]:
+    return {"provider": posture.provider, **_authentication_policy_values(posture.controls)}
+
+
+def _authentication_report_html(
+    observed: AuthenticationPosture | None,
+    expected: AuthenticationPosture | None,
+    fallback: list[dict[str, str]],
+) -> str:
+    if expected is None and observed is None:
+        return _authentication_cards_html(fallback)
+    source = observed or expected
+    assert source is not None
+    rows = compare_authentication_posture(expected, observed) if expected else []
+    assessments = {row["control"]: row for row in rows}
+    cards = [f'<div class="auth-provider"><strong>Provider</strong><span>{escape(source.provider)}</span></div>']
+    control_names = sorted(
+        set((expected.controls if expected else {}))
+        | set((observed.controls if observed else {}))
+    )
+    for name in control_names:
+        control = (observed.controls.get(name) if observed else None) or {}
+        expected_control = (expected.controls.get(name) if expected else None) or {}
+        expected_has_value = any(
+            key not in {"status", "expected", "observed", "value", "operator", "policies"}
+            and expected_control[key] not in (None, "")
+            for key in expected_control
+        ) or expected_control.get("expected", expected_control.get("value")) not in (None, "")
+        observed_status = str(control.get("status", "not_collected"))
+        if name == "mfa" and observed_status != "collected":
+            continue
+        observed_has_value = any(
+            key not in {"status", "expected", "observed", "value", "operator"}
+            and control[key] not in (None, "")
+            for key in control
+        ) or control.get("observed", control.get("value")) not in (None, "")
+        if not expected_has_value and not observed_has_value and observed_status in {"not_collected", "not_supported", "unknown", "error"}:
+            continue
+        nested = [
+            key for key in expected_control
+            if key not in {"status", "expected", "observed", "value", "operator", "policies"}
+        ]
+        fields = nested or [name]
+        for field_name in fields:
+            assessment_row = assessments.get(field_name) or assessments.get(name, {})
+            expected_value = assessment_row.get("expected", "Not configured")
+            if field_name == name:
+                observed_value = assessment_row.get("observed", control.get("value", control.get("status", "Not collected")))
+            else:
+                observed_value = assessment_row.get("observed", control.get(field_name, control.get("status", "Not collected")))
+            assessment = assessment_row.get("assessment", control.get("status", "not_collected"))
+            title = name.replace("_", " ").title() if field_name == name else f"{name.replace('_', ' ').title()} — {field_name.replace('_', ' ').title()}"
+            cards.append(
+                f'<article class="auth-card"><h3>{escape(title)}</h3>'
+                f'<dl class="auth-fields"><div class="auth-field"><dt>Expected</dt><dd>{escape(_safe_auth_value(expected_value))}</dd></div>'
+                f'<div class="auth-field"><dt>Observed</dt><dd>{escape(_safe_auth_value(observed_value))}</dd></div>'
+                f'<div class="auth-field"><dt>Assessment</dt><dd>{escape(str(assessment).title())}</dd></div></dl></article>'
+            )
+    return f'<div class="authentication-cards">{"".join(cards)}</div>'
+
+
 def _authentication_cards_html(policies: list[dict[str, str]]) -> str:
     cards = []
     fields = [
@@ -179,9 +249,12 @@ def _authentication_cards_html(policies: list[dict[str, str]]) -> str:
         ("local_authentication", "Local authentication"), ("status", "Status"),
     ]
     for policy in policies:
+        available = [(key, label) for key, label in fields if policy.get(key) not in (None, "", "Not collected")]
+        if not available:
+            available = [("status", "Status")]
         rows_html = "".join(
-            f'<div class="auth-field"><dt>{escape(label)}</dt><dd>{escape(policy.get(key) or "Not collected")}</dd></div>'
-            for key, label in fields
+            f'<div class="auth-field"><dt>{escape(label)}</dt><dd>{escape(policy[key])}</dd></div>'
+            for key, label in available
         )
         cards.append(f'<article class="auth-card"><h3>{escape(policy["provider"])}</h3><dl class="auth-fields">{rows_html}</dl></article>')
     return f'<div class="authentication-cards">{"".join(cards)}</div>'
@@ -255,6 +328,7 @@ def render_html_report(
     golden_version: GoldenSourceVersion | None = None,
     reference_links: list[dict[str, str]] | None = None,
     role_permissions: dict[str, list[str]] | None = None,
+    authentication_posture: AuthenticationPosture | None = None,
 ) -> str:
     summary = _summary(rows)
     campaign_name = campaign.display_name or campaign.name
@@ -279,7 +353,11 @@ def render_html_report(
     }
     filters = "".join(_filter_select_html(name, values) for name, values in options.items())
     references = _reference_links_html(reference_links or [])
-    authentication_html = _authentication_cards_html(_authentication_policies(rows))
+    authentication_html = _authentication_report_html(
+        authentication_posture,
+        golden_version.golden_authentication_policy if golden_version else None,
+        _authentication_policies(rows),
+    )
     report_rows = _html_safe_rows(rows)
     data_json = (
         json.dumps(report_rows)

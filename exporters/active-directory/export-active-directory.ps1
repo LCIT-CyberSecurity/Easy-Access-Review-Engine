@@ -89,6 +89,34 @@ statistics:
 }
 
 
+function ConvertTo-AuthDurationSeconds {
+  param($Value)
+  if ($null -eq $Value) { return $null }
+  if ($Value -is [timespan]) { return [int][math]::Round($Value.TotalSeconds) }
+  return $Value
+}
+
+function Get-AuthenticationPosture {
+  param($ServerArg, $OperationTimeoutSeconds)
+  $script:authenticationErrors = @()
+  $passwordPolicy = $null
+  $fineGrained = @()
+  try {
+    $passwordPolicy = Invoke-AdCollectorOperation -Operation 'Get-ADDefaultDomainPasswordPolicy' -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
+      param($ServerArg)
+      Get-ADDefaultDomainPasswordPolicy @ServerArg
+    } -ArgumentList @($ServerArg)
+  } catch { $script:authenticationErrors += New-CollectionError -ObjectType 'authentication' -ObjectIdentifier '*' -Operation 'Get-ADDefaultDomainPasswordPolicy' -ErrorRecord $_ }
+  try {
+    $fineGrained = @(Invoke-AdCollectorOperation -Operation 'Get-ADFineGrainedPasswordPolicy' -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
+      param($ServerArg)
+      Get-ADFineGrainedPasswordPolicy -Filter * @ServerArg
+    } -ArgumentList @($ServerArg))
+  } catch { $script:authenticationErrors += New-CollectionError -ObjectType 'authentication' -ObjectIdentifier '*' -Operation 'Get-ADFineGrainedPasswordPolicy' -ErrorRecord $_ }
+  $policy = if ($passwordPolicy) { [PSCustomObject]@{ status='collected'; minimum_length=$passwordPolicy.MinPasswordLength; history=$passwordPolicy.PasswordHistoryCount; minimum_age_seconds=(ConvertTo-AuthDurationSeconds $passwordPolicy.MinPasswordAge); maximum_age_seconds=(ConvertTo-AuthDurationSeconds $passwordPolicy.MaxPasswordAge); complexity=$passwordPolicy.ComplexityEnabled; reversible_encryption=$passwordPolicy.ReversibleEncryptionEnabled; lockout_threshold=$passwordPolicy.LockoutThreshold; lockout_duration_seconds=(ConvertTo-AuthDurationSeconds $passwordPolicy.LockoutDuration); lockout_observation_window_seconds=(ConvertTo-AuthDurationSeconds $passwordPolicy.LockoutObservationWindow) } } else { [PSCustomObject]@{ status='unknown' } }
+  [PSCustomObject]@{ provider=$ProviderName; source='active_directory'; completeness='full'; controls=@{ password_policy=$policy; mfa=@{ status='not_supported' }; federation=@{ status='not_supported' }; tokens=@{ status='not_supported' }; session_policy=@{ status='not_supported' } }; fine_grained_policies=@($fineGrained | ForEach-Object { [PSCustomObject]@{ name=$_.Name; precedence=$_.Precedence; minimum_length=$_.MinPasswordLength; history=$_.PasswordHistoryCount; minimum_age_seconds=(ConvertTo-AuthDurationSeconds $_.MinPasswordAge); maximum_age_seconds=(ConvertTo-AuthDurationSeconds $_.MaxPasswordAge); complexity=$_.ComplexityEnabled; lockout_threshold=$_.LockoutThreshold; lockout_duration_seconds=(ConvertTo-AuthDurationSeconds $_.LockoutDuration); lockout_observation_window_seconds=(ConvertTo-AuthDurationSeconds $_.LockoutObservationWindow) } }) }
+}
+
 function Add-PrimaryGroupMembership {
   param($Memberships, $MembershipIndex, $Principal, $GroupsBySid)
   if (-not $Principal.SID -or -not $Principal.PrimaryGroupID) { return }
@@ -299,6 +327,9 @@ try {
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/computers.csv"
 
   $memberships | Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/memberships.csv"
+  $authenticationPosture = Get-AuthenticationPosture -ServerArg $serverArg -OperationTimeoutSeconds $OperationTimeoutSeconds
+  $errors += @($script:authenticationErrors)
+  $authenticationPosture | ConvertTo-Json -Depth 12 | Out-File -Encoding utf8 "$tmp/authentication-posture.json"
   $errors | Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/collection-errors.csv"
 
   $completeness = if ($errors.Count -eq 0) { 'full' } else { 'unknown' }
@@ -316,7 +347,7 @@ try {
     throw "Active Directory collection failed for $($errors.Count) object(s). Re-run with -AllowPartial to keep a diagnostic ZIP marked completeness: unknown."
   }
 
-  Compress-Archive -Path "$tmp/manifest.yaml","$tmp/users.csv","$tmp/groups.csv","$tmp/service_accounts.csv","$tmp/computers.csv","$tmp/memberships.csv","$tmp/collection-errors.csv" -DestinationPath $Output -Force
+  Compress-Archive -Path "$tmp/manifest.yaml","$tmp/users.csv","$tmp/groups.csv","$tmp/service_accounts.csv","$tmp/computers.csv","$tmp/memberships.csv","$tmp/collection-errors.csv","$tmp/authentication-posture.json" -DestinationPath $Output -Force
 }
 finally {
     Remove-Item -Recurse -Force $tmp
