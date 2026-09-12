@@ -54,6 +54,10 @@ frontieres de modules, le graphe d'acces effectif, la Golden Source, la persista
 regles de compatibilite et les limites V1.
 
 
+Le parcours fonctionnel est decrit dans le [guide utilisateur](docs/user-guide.md). La documentation
+technique pour les developpeurs reste dans [docs/engineering.md](docs/engineering.md).
+
+
 ## Modele de composition et stabilisation V1
 
 Le coeur conserve un modele minimal: `Provider`, `Identity`, `Access`, `AccessAssignment` et
