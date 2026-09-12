@@ -49,6 +49,11 @@ Le modele interne reste generique: les informations AD specifiques sont conserve
 ou `origin.raw`.
 
 
+La conception detaillee est documentee dans [docs/engineering.md](docs/engineering.md), avec les
+frontieres de modules, le graphe d'acces effectif, la Golden Source, la persistance SQLite, les
+regles de compatibilite et les limites V1.
+
+
 ## Modele de composition et stabilisation V1
 
 Le coeur conserve un modele minimal: `Provider`, `Identity`, `Access`, `AccessAssignment` et

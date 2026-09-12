@@ -31,6 +31,64 @@ Le type de relation MVP est limite a `grants`. Une relation porte un `origin` et
 Les descripteurs `ControlObject`, `Permission`, `Target` et `Origin` restent attaches aux Access ou aux relations. Ils decrivent l'objet controle, la permission, la cible et la provenance sans transformer le core en modele IAM specifique a un provider.
 
 
+## Imbrication des objets
+
+Les objets ne sont pas imbriques par copie les uns dans les autres. Ils se referencent par des
+cles `(provider, identifier)`; cela evite de dupliquer un Access dans chaque assignment ou chaque
+snapshot.
+
+```text
+Provider
+  |
+  +--> Identity ------------------------------+
+  |                                           |
+  +--> Access                                 |
+        |                                     |
+        +--> ControlObject (optionnel)        |
+        +--> Target (optionnel)               |
+        +--> Permission (optionnelle)         |
+                                              |
+Identity + Access ----------------------------+
+              |                               |
+              +--> AccessAssignment           |
+                    +--> Origin               |
+                                              |
+Access(parent) -- AccessRelation: grants --> Access(child)
+                                              |
+                                              v
+                              EffectiveAccessEvaluation
+                              +--> AccessPath(s)
+```
+
+### Cycle de vie reviewable
+
+```text
+ImportResult
+  +--> Provider / Identity / Access
+  +--> AccessAssignment direct
+  +--> AccessRelation grants
+              |
+              v
+Snapshot immutable
+  +--> observed direct assignments
+  +--> current relation graph
+  +--> effective access calculable + provenance
+              |
+              +--> comparaison avec GoldenSourceVersion
+                              |
+                              v
+                         Campaign
+                              |
+                              +--> ReviewItem
+                              +--> Decision (approve/revoke/not_applicable)
+                              +--> Report / Remediation
+```
+
+La Golden Source contient principalement les assignments attendus, pas les acces effectifs
+recalcules. Un `Snapshot` conserve l'etat observe a un instant donne; une `Campaign` ouvre des
+items de revue sur ce snapshot et ses decisions ne modifient pas le snapshot historique.
+
+
 ### A quoi servent les descripteurs
 
 - `ControlObject` identifie l'objet natif ou logique auquel l'habilitation se rapporte quand il

@@ -1,5 +1,10 @@
 # Architecture
 
+
+La conception detaillee et les contrats d'implementation sont dans
+[engineering.md](engineering.md). Ce document resume les frontieres d'architecture et les
+invariants principaux.
+
 ## Invariants du modele
 
 Le coeur de l'application ne connait aucun fournisseur technique particulier. Active Directory,
@@ -29,6 +34,19 @@ Observed State
     -> ReviewItem
     -> Decision
     -> Report / Remediation / Audit
+```
+
+
+Imbrication des responsabilites:
+
+```text
+Provider -> Identity
+Provider -> Access
+Identity + Access -> AccessAssignment (direct)
+Access -> AccessRelation(grants) -> Access
+Assignments + Relations -> effective access + provenance
+Snapshot -> Campaign -> ReviewItem -> Decision
+GoldenSourceVersion -> expected direct assignments
 ```
 
 Les champs specifiques a un fournisseur restent dans `metadata` ou `origin.raw`. Le coeur n'ajoute
