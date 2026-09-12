@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 
-import pytest
 
 from access_review_engine.application import _reconcile_accesses
 from access_review_engine.domain import (
@@ -182,3 +181,108 @@ def test_cycle_diagnostics_are_deterministic() -> None:
     assert [item.key() for item in first.effective_accesses] == [
         item.key() for item in second.effective_accesses
     ]
+
+
+def test_access_variants_preserve_optional_target_and_permission() -> None:
+    variants = [
+        _access("PREMIUM_USER"),
+        _access("Contacts", target=Target(resource={"identifier": "Contacts"})),
+        _access("Contacts:Read", permission=Permission("read")),
+        _access(
+            "FinanceBucket:GetObject",
+            target=Target(resource={"identifier": "arn:aws:s3:::finance/*"}),
+            permission=Permission("s3:GetObject"),
+        ),
+    ]
+
+    assert variants[0].target is None and variants[0].permission is None
+    assert variants[1].target is not None and variants[1].permission is None
+    assert variants[2].target is None
+    assert variants[2].permission is not None
+    assert variants[2].permission.identifier == "read"
+    assert variants[3].target is not None
+    assert variants[3].target.resource is not None
+    assert variants[3].target.resource["identifier"].endswith("finance/*")
+    assert variants[3].permission is not None
+    assert variants[3].permission.identifier == "s3:GetObject"
+
+
+def test_access_names_preserve_case_unicode_and_provider_symbols() -> None:
+    access = _access(" Finance/Équipe:Read? ", provider="Provider.Case")
+
+    assert access.name == " Finance/Équipe:Read? "
+    assert access.provider == "Provider.Case"
+    assert access.key() == "Provider.Case: Finance/Équipe:Read? "
+
+
+def test_self_loop_is_reported_without_duplicate_effective_access() -> None:
+    access = _access("A")
+    assignment = AccessAssignment("fixture", "A", "fixture", "alice", Origin("fixture", True, False))
+
+    evaluation = calculate_effective_accesses([assignment], [_relation("A", "A")], [access])
+
+    assert [item.key() for item in evaluation.effective_accesses] == [
+        ("fixture", "alice", "fixture", "A")
+    ]
+    assert [item["type"] for item in evaluation.diagnostics] == ["cycle_detected"]
+    assert evaluation.diagnostics[0]["access_chain"] == ["fixture:A", "fixture:A"]
+
+
+def test_path_limit_bounds_multipath_provenance() -> None:
+    accesses = [_access(name) for name in ("A", "B", "C", "D")]
+    relations = [
+        _relation("A", "B"),
+        _relation("A", "C"),
+        _relation("B", "D"),
+        _relation("C", "D"),
+    ]
+    assignment = AccessAssignment("fixture", "A", "fixture", "alice", Origin("fixture", True, False))
+
+    evaluation = calculate_effective_accesses(
+        [assignment], relations, accesses, max_paths_per_access=1
+    )
+
+    d = next(item for item in evaluation.effective_accesses if item.access_name == "D")
+    assert len(d.paths) == 1
+    assert any(item["type"] == "path_limit_reached" for item in evaluation.diagnostics)
+
+
+def test_unknown_direct_assignment_is_diagnostic_and_not_materialized() -> None:
+    assignment = AccessAssignment(
+        "fixture", "missing", "fixture", "alice", Origin("fixture", True, False)
+    )
+
+    evaluation = calculate_effective_accesses([assignment], [], [_access("known")])
+
+    assert evaluation.effective_accesses == []
+    assert evaluation.diagnostics[0]["type"] == "unresolved_direct_assignment"
+    assert evaluation.diagnostics[0]["access_name"] == "missing"
+
+
+def test_duplicate_relation_observation_keeps_one_path() -> None:
+    accesses = [_access("A"), _access("B")]
+    assignment = AccessAssignment("fixture", "A", "fixture", "alice", Origin("fixture", True, False))
+    relation = _relation("A", "B")
+
+    evaluation = calculate_effective_accesses(
+        [assignment], [relation, copy.deepcopy(relation)], accesses
+    )
+
+    child = next(item for item in evaluation.effective_accesses if item.access_name == "B")
+    assert len(child.paths) == 1
+    assert not evaluation.diagnostics
+
+
+def test_same_native_id_in_different_providers_stays_distinct() -> None:
+    accesses = [
+        _access("view", provider="aws", native_id="shared-role-id"),
+        _access("view", provider="gcp", native_id="shared-role-id"),
+    ]
+    assignments = [
+        AccessAssignment("aws", "view", "aws", "alice", Origin("fixture", True, False)),
+        AccessAssignment("gcp", "view", "gcp", "alice", Origin("fixture", True, False)),
+    ]
+
+    evaluation = calculate_effective_accesses(assignments, [], accesses)
+
+    assert {item.access_provider for item in evaluation.effective_accesses} == {"aws", "gcp"}
