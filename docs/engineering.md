@@ -365,4 +365,4 @@ by replacing the current Access under the unique `(provider, name)` key, while a
 continues to preserve rename reconciliation. Incompatible target or permission definitions are
 rejected explicitly. The full suite is `229 passed, 0 failed, 7 skipped`; the skips require external
 PowerShell or Docker environments.
-\n\n## Verification\n\nThe repository test harness is run with python3 pytest.py. The current result is 234 passed, 0 failed, 7 skipped; the skipped tests require PowerShell or Docker runtimes that are not available in every environment.\n
+\n\n## Verification\n\nThe repository test harness is run with python3 pytest.py. The current result is 236 passed, 0 failed, 7 skipped; the skipped tests require PowerShell or Docker runtimes that are not available in every environment.\n
