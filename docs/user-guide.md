@@ -13,7 +13,7 @@ EARE stores observations, compares them with an optional Golden Source, opens re
 You can feed EARE in two ways:
 
 - import an existing export produced by another trusted process;
-- run a read-only remote query through the provided collectors and then import the generated artifact.
+- use direct read-only access to the IDP through the provided collectors, then import the generated artifact.
 
 Both paths use the same normalization, reconciliation, Golden Source comparison, campaign, and reporting engine.
 
@@ -127,7 +127,7 @@ Secrets belong in environment variables or local files referenced by environment
 EARE supports both operating models:
 
 - **offline import**, when you already have an export file;
-- **read-only remote collection**, when EARE can query the provider through the existing exporter.
+- **direct read-only IDP access**, when EARE can query the provider through the existing collector/exporter.
 
 The CLI commands are shortcuts around the same engine, not a second implementation.
 
@@ -144,7 +144,7 @@ Running `check` is useful, but it is not required before `sync`.
 
 ### collect
 
-`collect` runs a read-only exporter and writes an artifact. It does not import into SQLite. Use it when collection and import are separated by process, approval, or change-control requirements.
+`collect` uses direct read-only IDP access through the existing exporter and writes an artifact. It does not import into SQLite. Use it when collection and import are separated by process, approval, or change-control requirements.
 
 ```bash
 eare collect corp-ad --output /tmp/corp-ad.zip
@@ -164,7 +164,7 @@ The import path reuses `import_file_to_repository(...)`; the CLI must not reimpl
 
 ### sync
 
-`sync` is the main operator workflow for repeatable read-only collection. It combines configuration, collection, and import:
+`sync` is the main operator workflow for repeatable direct read-only IDP collection. It combines configuration, collection, and import:
 
 ```bash
 eare sync corp-ad

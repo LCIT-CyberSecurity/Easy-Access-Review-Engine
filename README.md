@@ -7,7 +7,7 @@ It helps IAM, SecOps, audit, and compliance teams turn technical access evidence
 EARE helps you:
 
 - collect identities, groups, roles, entitlements, and access relationships;
-- work either from an existing export or from a read-only remote query through the provided collectors;
+- work either from an existing export or from direct read-only access to the IDP through the provided collectors;
 - normalize heterogeneous sources into a common model that is independent from any single IDP;
 - compare observed access with a versioned **Golden Source**;
 - detect unexpected, missing, incomplete, or risky access;
@@ -88,10 +88,11 @@ EARE is designed to fit real operating constraints. You can use it in two comple
    - import an OpenLDAP LDIF;
    - reuse exports produced by another secured process.
 
-2. **Collect remotely with read-only access**
-   - query Active Directory through `exporters/active-directory/export-active-directory.ps1`;
-   - query OpenLDAP through `exporters/openldap/export-openldap.sh`;
-   - keep collector accounts read-only and separate from remediation.
+2. **Use direct read-only access to the IDP**
+   - connect to Active Directory with a read-only account;
+   - connect to OpenLDAP with a read-only bind account;
+   - use the provided collectors as the acquisition layer that turns those read-only queries into importable artifacts;
+   - keep collection accounts separate from remediation or administration accounts.
 
 This makes adoption easier: teams can begin with offline files, then move to repeatable read-only collection when they are ready. Collectors are read-only. EARE observes, compares, supports decisions, and exports remediation evidence. It does not provision accounts and does not modify directories.
 
