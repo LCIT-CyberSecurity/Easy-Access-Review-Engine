@@ -159,8 +159,15 @@ def provider_meta_command(a: argparse.Namespace) -> int:
         for key in ("uri", "base_dn", "bind_dn"):
             value = input(f"{key} [{data['connection'].get(key, '')}]: ").strip()
             if value: current["connection"][key] = value
-    value = input(f"Allow partial [{data.get('collection', {}).get('allow_partial', False)}]: ").strip()
-    if value: current.setdefault("collection", {})["allow_partial"] = parse_value(value)
+    collection = current.setdefault("collection", {})
+    if data["type"] == "active_directory":
+        value = input(f"Timeout [{collection.get('timeout', 300)}]: ").strip()
+        if value: collection["timeout"] = parse_value(value)
+    else:
+        value = input(f"Command timeout [{collection.get('command_timeout', 180)}]: ").strip()
+        if value: collection["command_timeout"] = parse_value(value)
+    value = input(f"Allow partial [{collection.get('allow_partial', False)}]: ").strip()
+    if value: collection["allow_partial"] = parse_value(value)
     connector_path(a.provider).write_text(yaml.safe_dump({k:v for k,v in current.items() if k != "_path"}, sort_keys=False), encoding="utf-8")
     print(f"updated {connector_path(a.provider)}")
     return 0
@@ -175,9 +182,17 @@ def provider_setup_command() -> int:
     connection = data["connection"]
     for key in tuple(connection):
         connection[key] = input(f"{key}: ").strip()
+    collection = data["collection"]
+    timeout_prompt = "Command timeout" if kind == "openldap" else "Timeout"
+    timeout_key = "command_timeout" if kind == "openldap" else "timeout"
+    value = input(f"{timeout_prompt} [{collection.get(timeout_key)}]: ").strip()
+    if value: collection[timeout_key] = parse_value(value)
+    value = input("Allow partial [false]: ").strip()
+    if value: collection["allow_partial"] = parse_value(value) if value else False
     data["credentials"] = {
         "username_env": input("Username environment variable (optional): ").strip(),
         "password_env": input("Password environment variable (optional): ").strip(),
+        "password_file_env": input("Password file environment variable (optional): ").strip(),
     }
     data["credentials"] = {k:v for k,v in data["credentials"].items() if v}
     path = connector_path(name); path.parent.mkdir(parents=True, exist_ok=True)
@@ -283,6 +298,7 @@ def dry_import(path: Path, a: argparse.Namespace, provider: str) -> None:
             snapshot = import_file_to_repository(repo, path, provider_name=provider)
         after = table_counts(target)
         changed = {table: {"before": before[table], "after": after[table]} for table in before if before[table] != after[table]}
+        object_changes = object_deltas(a.db, target)
         states: dict[str, int] = {}
         for row in snapshot.comparison_states:
             state = str(row.get("classification", "unknown"))
@@ -290,11 +306,30 @@ def dry_import(path: Path, a: argparse.Namespace, provider: str) -> None:
         incomplete = any(Finding.COLLECTION_INCOMPLETE in row.get("findings", []) for row in snapshot.comparison_states)
         print(f"EARE DRY RUN {provider}")
         print(f"Changes: {json.dumps(changed, sort_keys=True)}")
+        print(f"Objects: {json.dumps(object_changes, sort_keys=True)}")
         print(f"Comparison: {json.dumps(states, sort_keys=True)}")
         print(f"Collection incomplete: {'YES' if incomplete else 'NO'}")
         print("Persistence: NONE (--dry-run)")
     finally:
         shutil.rmtree(target.parent, ignore_errors=True)
+
+def object_deltas(before_path: str | Path, after_path: str | Path) -> dict[str, dict[str, int]]:
+    from access_review_engine.storage import TABLES
+    def records(path: str | Path, table: str) -> set[str]:
+        if not Path(path).exists():
+            return set()
+        connection = sqlite3.connect(path)
+        try:
+            return {str(row[0]) for row in connection.execute(f"SELECT id FROM {table}")}
+        finally:
+            connection.close()
+    result: dict[str, dict[str, int]] = {}
+    for table in TABLES:
+        before = records(before_path, table)
+        after = records(after_path, table)
+        if before != after:
+            result[table] = {"added": len(after - before), "removed": len(before - after)}
+    return result
 
 def table_counts(path: str | Path) -> dict[str, int]:
     from access_review_engine.storage import TABLES

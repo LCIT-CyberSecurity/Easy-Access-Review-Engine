@@ -145,3 +145,18 @@ def test_golden_source_can_start_from_csv(tmp_path: Path) -> None:
 def test_global_menu_quit_is_non_business_and_returns_zero() -> None:
     with patch("builtins.input", side_effect=["6"]):
         assert run_global_menu() == 0
+
+
+def test_dry_run_keeps_existing_database_byte_identical(tmp_path: Path) -> None:
+    import os
+    from ad_test_helpers import zip_fixture
+    old = Path.cwd()
+    root = Path(__file__).parent.parent
+    os.chdir(root)
+    archive = zip_fixture(tmp_path, "standard")
+    db = tmp_path / "review.db"
+    assert main(["--db", str(db), "provider", "import", str(archive)]) == 0
+    before = db.read_bytes()
+    assert main(["--db", str(db), "provider", "import", str(archive), "--dry-run"]) == 0
+    assert db.read_bytes() == before
+    os.chdir(old)
