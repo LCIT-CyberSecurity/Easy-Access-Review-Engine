@@ -8,7 +8,14 @@ Easy Access Review Engine helps answer three operational questions:
 2. Does that access match what is expected?
 3. What should be approved, investigated, removed, or documented?
 
-EARE stores observations, compares them with an optional Golden Source, opens review campaigns, preserves decisions, and generates reusable reports for audit and remediation.
+EARE stores observations, compares them with an optional Golden Source, opens review campaigns, preserves decisions, and generates reusable reports for audit and remediation. It is built to reduce manual spreadsheet work, shorten review cycles, improve evidence quality, and make access reviews repeatable.
+
+You can feed EARE in two ways:
+
+- import an existing export produced by another trusted process;
+- run a read-only remote query through the provided collectors and then import the generated artifact.
+
+Both paths use the same normalization, reconciliation, Golden Source comparison, campaign, and reporting engine.
 
 ## 2. Core Concepts
 
@@ -40,6 +47,14 @@ Snapshot -> Golden Source -> Campaign -> Decision -> Report
 
 The Golden Source is the expected access baseline. It is optional, versioned, and immutable per version.
 
+It can be created from:
+
+- an existing access configuration or reference baseline;
+- a CSV file maintained by IAM, application owners, or auditors;
+- a from-scratch baseline built progressively from reviewed observations.
+
+This lets teams start with what they already have, then improve quality over time without blocking the first review campaign.
+
 It lets EARE classify observed access as:
 
 ```text
@@ -53,6 +68,8 @@ no_reference            observed without any Golden Source reference
 Stable native identifiers, such as AD SID or OpenLDAP `entryUUID`, let EARE keep matching across reliable renames without turning those identifiers into new business keys.
 
 ## 4. CLI Overview
+
+The CLI is designed to simplify day-to-day operations. It wraps the existing EARE engine so operators can configure connectors, collect evidence, import artifacts, run analysis, manage Golden Source versions, and export reports with clear commands instead of manual scripting.
 
 The recommended command name is:
 
@@ -107,6 +124,13 @@ Secrets belong in environment variables or local files referenced by environment
 
 ## 6. Check, Collect, Sync, Import
 
+EARE supports both operating models:
+
+- **offline import**, when you already have an export file;
+- **read-only remote collection**, when EARE can query the provider through the existing exporter.
+
+The CLI commands are shortcuts around the same engine, not a second implementation.
+
 ### check
 
 `check` is diagnostic. It validates configuration and, when supported, asks the existing collector to verify the provider. It must not modify SQLite or the provider.
@@ -120,7 +144,7 @@ Running `check` is useful, but it is not required before `sync`.
 
 ### collect
 
-`collect` runs a read-only exporter and writes an artifact. It does not import into SQLite.
+`collect` runs a read-only exporter and writes an artifact. It does not import into SQLite. Use it when collection and import are separated by process, approval, or change-control requirements.
 
 ```bash
 eare collect corp-ad --output /tmp/corp-ad.zip
@@ -129,7 +153,7 @@ eare collect ldap-prod --output /tmp/ldap-prod.zip
 
 ### import
 
-`import` loads an existing artifact into EARE by calling the application import engine.
+`import` loads an existing artifact into EARE by calling the application import engine. Use it when the evidence already exists as a ZIP, LDIF, CSV-derived artifact, or another supported extraction.
 
 ```bash
 eare import corp-ad-export.zip
@@ -140,7 +164,7 @@ The import path reuses `import_file_to_repository(...)`; the CLI must not reimpl
 
 ### sync
 
-`sync` is the main operator workflow. It combines configuration, collection, and import:
+`sync` is the main operator workflow for repeatable read-only collection. It combines configuration, collection, and import:
 
 ```bash
 eare sync corp-ad
@@ -191,7 +215,7 @@ If no snapshot exists, the CLI should explain that no local analysis is availabl
 
 ## 9. Active Directory Collection
 
-Use the existing exporter; do not reimplement AD collection in Python.
+Use the existing exporter; do not reimplement AD collection in Python. The exporter performs read-only queries and produces an artifact that EARE imports through the same engine as offline files.
 
 ```powershell
 .\export-active-directory.ps1 `
@@ -205,7 +229,7 @@ Use the existing exporter; do not reimplement AD collection in Python.
 
 ## 10. OpenLDAP Collection
 
-Use the existing shell exporter; do not reimplement LDAP collection in Python.
+Use the existing shell exporter; do not reimplement LDAP collection in Python. The exporter performs read-only LDAP queries and produces an artifact that EARE imports through the same engine as offline files.
 
 ```dotenv
 LDAP_URI=ldaps://ldap.example.test

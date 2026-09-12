@@ -7,6 +7,7 @@ It helps IAM, SecOps, audit, and compliance teams turn technical access evidence
 EARE helps you:
 
 - collect identities, groups, roles, entitlements, and access relationships;
+- work either from an existing export or from a read-only remote query through the provided collectors;
 - normalize heterogeneous sources into a common model that is independent from any single IDP;
 - compare observed access with a versioned **Golden Source**;
 - detect unexpected, missing, incomplete, or risky access;
@@ -14,7 +15,7 @@ EARE helps you:
 - generate automated HTML, CSV, and JSON reports for audit and remediation;
 - run access review campaigns and preserve decisions over time.
 
-The goal is practical: save time, improve reliability, reduce manual errors, and strengthen operational security.
+The goal is practical: save a lot of manual review time, improve reliability, reduce spreadsheet-driven errors, accelerate audit preparation, and strengthen operational security.
 
 ## Why EARE?
 
@@ -42,6 +43,12 @@ This makes EARE useful across environments instead of locking review logic to on
 ## Golden Source
 
 The Golden Source describes the expected access state.
+
+It can be built from several starting points:
+
+- an existing configuration or access baseline already maintained by the organization;
+- a CSV file prepared by IAM, application owners, or auditors;
+- a clean from-scratch baseline created progressively from reviewed observations.
 
 It is:
 
@@ -73,22 +80,24 @@ Reports preserve the full review trail: observation, comparison, reviewer, decis
 
 ## Flexible Collection
 
-EARE supports two collection modes:
+EARE is designed to fit real operating constraints. You can use it in two complementary ways:
 
-1. **Remote read-only collection through existing exporters**
-   - Active Directory with `exporters/active-directory/export-active-directory.ps1`;
-   - OpenLDAP with `exporters/openldap/export-openldap.sh`.
+1. **Start from an existing extraction**
+   - import an Active Directory ZIP;
+   - import an OpenLDAP ZIP;
+   - import an OpenLDAP LDIF;
+   - reuse exports produced by another secured process.
 
-2. **Import from an existing extraction**
-   - Active Directory ZIP;
-   - OpenLDAP ZIP;
-   - OpenLDAP LDIF.
+2. **Collect remotely with read-only access**
+   - query Active Directory through `exporters/active-directory/export-active-directory.ps1`;
+   - query OpenLDAP through `exporters/openldap/export-openldap.sh`;
+   - keep collector accounts read-only and separate from remediation.
 
-Collectors are read-only. EARE observes, compares, supports decisions, and exports remediation evidence. It does not provision accounts and does not modify directories.
+This makes adoption easier: teams can begin with offline files, then move to repeatable read-only collection when they are ready. Collectors are read-only. EARE observes, compares, supports decisions, and exports remediation evidence. It does not provision accounts and does not modify directories.
 
 ## CLI
 
-The CLI is the user-facing orchestration layer for the EARE engine.
+The CLI is the user-facing orchestration layer for the EARE engine. It is there to make daily work faster: initialize connector configuration, run checks, collect evidence, import data, analyze results, manage the Golden Source, and export reports without manually wiring each step.
 
 The target interface is:
 
@@ -126,12 +135,22 @@ Main command groups:
 
 ## Quick Start
 
+Install EARE locally and run the repository test wrapper:
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e ".[app,dev]"
 python3 pytest.py
 ```
+
+Use `python3 pytest.py` from the repository root. The project wrapper sets the expected local test configuration; do not replace it with a bare `pytest` command unless you have configured the same paths and environment yourself.
+
+Then choose the operating mode that matches your organization:
+
+- for an existing export, import the artifact directly;
+- for repeatable read-only collection, configure the provider connection, run `check`, then use `collect` or `sync`;
+- for secrets, update environment variables or `.env`; do not put passwords in connector YAML or SQLite.
 
 Import an Active Directory export:
 
