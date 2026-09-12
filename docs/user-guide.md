@@ -83,7 +83,7 @@ The compatibility alias remains:
 access-review
 ```
 
-Expected command groups:
+Available command groups:
 
 ```bash
 eare config ...
@@ -129,7 +129,7 @@ EARE supports both operating models:
 - **offline import**, when you already have an export file;
 - **direct read-only IDP access**, when EARE can query the provider through the existing collector/exporter.
 
-The CLI commands are shortcuts around the same engine, not a second implementation.
+The CLI commands are available shortcuts around the same engine, not a second implementation.
 
 ### check
 
@@ -211,7 +211,7 @@ eare analyze --identity alice
 eare analyze --access Finance
 ```
 
-If no snapshot exists, the CLI should explain that no local analysis is available and suggest `eare sync <provider>` or `eare import <file>`.
+If no snapshot exists, the CLI explains that no local analysis is available and suggest `eare sync <provider>` or `eare import <file>`.
 
 ## 9. Active Directory Collection
 

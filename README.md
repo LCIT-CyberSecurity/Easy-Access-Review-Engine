@@ -100,7 +100,7 @@ This makes adoption easier: teams can begin with offline files, then move to rep
 
 The CLI is the user-facing orchestration layer for the EARE engine. It is there to make daily work faster: initialize connector configuration, run checks, collect evidence, import data, analyze results, manage the Golden Source, and export reports without manually wiring each step.
 
-The target interface is:
+The installed CLI interface is:
 
 ```bash
 eare config ...
