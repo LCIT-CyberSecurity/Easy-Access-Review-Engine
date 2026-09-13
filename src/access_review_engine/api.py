@@ -1,75 +1,141 @@
 from __future__ import annotations
 
-try:
-    from fastapi import FastAPI, Query
-except ModuleNotFoundError:  # pragma: no cover - optional runtime dependency
-    FastAPI = None  # type: ignore[assignment]
-    Query = None  # type: ignore[assignment]
+from dataclasses import asdict, dataclass
+import json
+from pathlib import Path
+from typing import Any
 
-from access_review_engine.storage import Repository
+try:
+    from fastapi import FastAPI, Header, HTTPException
+    from fastapi.responses import StreamingResponse
+except ModuleNotFoundError:  # pragma: no cover
+    FastAPI = None  # type: ignore[assignment]
+    Header = HTTPException = StreamingResponse = None  # type: ignore[assignment,misc]
+
+from access_review_engine.application import import_file_to_repository
+from access_review_engine.collector_runner import RunnerError, run_exporter
+from access_review_engine.config_loader import load_connector, secret_environment
+from access_review_engine.services import create_decision
+from access_review_engine.storage import Repository, hydrate_review_item
+from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
+from access_review_engine.web_use_cases import latest_snapshot, list_payloads, preview_import
+
+
+@dataclass(frozen=True)
+class WebPrincipal:
+    subject: str
+    role: str
+    scopes: frozenset[str]
+
+    def can_access(self, scope: str | None) -> bool:
+        return self.role == "ADMIN" or not scope or "*" in self.scopes or scope in self.scopes
+
+
+def _principal(role: str | None, scopes: str | None) -> WebPrincipal:
+    normalized = (role or "ADMIN").upper()
+    if normalized not in {"ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN"}:
+        raise HTTPException(status_code=403, detail="Unsupported role")
+    return WebPrincipal("header-user", normalized, frozenset(filter(None, (scopes or "*").split(","))))
+
+
+def _require(user: WebPrincipal, roles: tuple[str, ...] = (), scope: str | None = None) -> None:
+    if roles and user.role not in roles and user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Insufficient role")
+    if not user.can_access(scope):
+        raise HTTPException(status_code=403, detail="Scope is not authorized")
 
 
 def create_app(db_path: str = "access-review.db"):
     if FastAPI is None:
         raise RuntimeError("Install the 'app' extra to use the REST API")
-    app = FastAPI(title="Easy Access Review Engine")
+    app = FastAPI(title="Easy Access Review Engine", version="0.2.0")
 
-    def page(table: str, limit: int, offset: int) -> dict[str, object]:
-        rows = Repository(db_path).list_payloads(table)
+    def user(role: str | None, scopes: str | None) -> WebPrincipal:
+        return _principal(role, scopes)
+
+    def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None):
+        return list_payloads(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider)
+
+    @app.get("/api/me")
+    def me(x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        return asdict(user(x_eare_role, x_eare_scopes))
+
+    @app.get("/api/dashboard")
+    def dashboard(x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        current = user(x_eare_role, x_eare_scopes)
+        _require(current)
+        campaigns = page("campaigns", 500, 0, None, None, None)["items"]
+        items = page("review_items", 500, 0, None, None, None)["items"]
+        actions = page("remediation_actions", 500, 0, None, None, None)["items"]
+        return {"role": current.role, "metrics": {"campaigns": len(campaigns), "pending_reviews": len(items), "remediation_actions": len(actions), "anomalies": sum(bool(item.get("findings")) for item in items)}, "latest_snapshot": latest_snapshot(db_path)}
+
+    tables = {"providers": "providers", "imports": "imports", "identities": "identities", "accesses": "accesses", "assignments": "access_assignments", "golden-sources": "golden_sources", "golden-source-versions": "golden_source_versions", "snapshots": "snapshots", "campaigns": "campaigns", "review-items": "review_items", "decisions": "decisions", "remediation": "remediation_actions"}
+    for path, table in tables.items():
+        def route(limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None), _table: str = table):
+            _require(user(x_eare_role, x_eare_scopes))
+            return page(_table, limit, offset, search, status, provider)
+        app.get(f"/api/{path}")(route)
+        app.get(f"/{path}")(route)
+
+    @app.get("/api/findings")
+    def findings(limit: int = 100, offset: int = 0, x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes))
+        snapshot = latest_snapshot(db_path)
+        rows = snapshot.get("comparison_states", []) if snapshot else []
         return {"items": rows[offset : offset + limit], "total": len(rows), "limit": limit, "offset": offset}
 
-    @app.get("/providers")
-    def providers(limit: int = 100, offset: int = 0):
-        return page("providers", limit, offset)
+    @app.post("/api/sources/{provider}/sync", status_code=202)
+    def sync(provider: str, x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes), ("ADMIN", "OPERATOR"), provider)
+        def operation(job_id: str) -> dict[str, Any]:
+            config = load_connector(provider)
+            secrets = secret_environment(config)
+            if secrets.get("password_file"):
+                config.setdefault("credentials", {})["password_file"] = secrets["password_file"]
+            artifact = Path(db_path).with_name(f".eare-{provider}-{job_id}.zip")
+            update_progress(db_path, job_id, "Collecting read-only source data")
+            result = run_exporter(config, artifact)
+            if result.returncode:
+                raise RunnerError(result.stderr.strip() or "Collector failed")
+            update_progress(db_path, job_id, "Importing and creating snapshot")
+            with Repository(db_path) as repo:
+                snapshot = import_file_to_repository(repo, artifact, provider_name=provider)
+            artifact.unlink(missing_ok=True)
+            return {"snapshot_id": snapshot.id, "provider": provider}
+        return create_job(db_path, "sync", operation)
 
-    @app.get("/imports")
-    def imports(limit: int = 100, offset: int = 0):
-        return page("imports", limit, offset)
+    @app.post("/api/sources/{provider}/sync/preview")
+    def sync_preview(provider: str, input_path: str, classification_rules: str | None = None, x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes), ("ADMIN", "OPERATOR"), provider)
+        return preview_import(db_path, input_path, provider=provider, classification_rules=classification_rules).as_dict()
 
-    @app.get("/identities")
-    def identities(limit: int = 100, offset: int = 0):
-        return page("identities", limit, offset)
+    @app.get("/api/jobs/{job_id}")
+    def job(job_id: str, x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes))
+        try:
+            return get_job(db_path, job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
 
-    @app.get("/accesses")
-    def accesses(limit: int = 100, offset: int = 0):
-        return page("accesses", limit, offset)
+    @app.get("/api/jobs/{job_id}/events")
+    def job_events(job_id: str, x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes))
+        try:
+            get_job(db_path, job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        body = "".join(f"event: {event['event']}\ndata: {json.dumps(event)}\n\n" for event in get_events(db_path, job_id))
+        return StreamingResponse(iter([body]), media_type="text/event-stream")
 
-    @app.get("/assignments")
-    def assignments(limit: int = 100, offset: int = 0):
-        return page("access_assignments", limit, offset)
-
-    @app.get("/findings")
-    def findings(limit: int = 100, offset: int = 0):
-        rows = Repository(db_path).list_payloads("snapshots")
-        states = rows[-1]["comparison_states"] if rows else []
-        return {"items": states[offset : offset + limit], "total": len(states)}
-
-    @app.get("/golden-sources")
-    def golden_sources(limit: int = 100, offset: int = 0):
-        return page("golden_sources", limit, offset)
-
-    @app.get("/golden-source-versions")
-    def golden_source_versions(limit: int = 100, offset: int = 0):
-        return page("golden_source_versions", limit, offset)
-
-    @app.get("/snapshots")
-    def snapshots(limit: int = 100, offset: int = 0):
-        return page("snapshots", limit, offset)
-
-    @app.get("/campaigns")
-    def campaigns(limit: int = 100, offset: int = 0):
-        return page("campaigns", limit, offset)
-
-    @app.get("/review-items")
-    def review_items(limit: int = 100, offset: int = 0):
-        return page("review_items", limit, offset)
-
-    @app.get("/decisions")
-    def decisions(limit: int = 100, offset: int = 0):
-        return page("decisions", limit, offset)
-
-    @app.get("/remediation")
-    def remediation(limit: int = 100, offset: int = 0):
-        return page("remediation_actions", limit, offset)
+    @app.post("/api/review-items/{review_item_id}/decision")
+    def decision(review_item_id: str, value: str, comment: str | None = None, x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes), ("ADMIN", "OPERATOR", "GROUP_OWNER"))
+        with Repository(db_path) as repo:
+            payload = repo.get_payload("review_items", review_item_id)
+            if payload is None:
+                raise HTTPException(status_code=404, detail="Review item not found")
+            result = create_decision(hydrate_review_item(payload), value, comment, "header-user")
+            repo.insert_append_only("decisions", result)
+        return asdict(result)
 
     return app

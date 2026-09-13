@@ -9,8 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 from access_review_engine.application import import_file_to_repository, load_classification_rules, _zip_source_type
-from access_review_engine.cli.config_loader import ConfigError, connector_path, load_connector, secret_environment, template, validate_connector, validate_no_plaintext_secrets
-from access_review_engine.cli.runner import RunnerError, run_exporter
+from access_review_engine.config_loader import ConfigError, connector_path, load_connector, secret_environment, template, validate_connector, validate_no_plaintext_secrets
+from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.cli.campaign_ui import run_campaign_review
 from access_review_engine.cli.golden_ui import run_golden_editor
 from access_review_engine.cli.menu import run_global_menu
@@ -25,6 +25,7 @@ from access_review_engine.storage import (
     hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version,
     hydrate_review_item, hydrate_snapshot,
 )
+from access_review_engine.web_use_cases import object_deltas as shared_object_deltas, preview_import, table_counts as shared_table_counts
 
 CONFIG_CODE, COLLECTION_CODE, IMPORT_CODE = 2, 5, 6
 
@@ -393,66 +394,16 @@ def import_real(path: Path, a: argparse.Namespace, provider: str) -> None:
     print(f"imported provider={provider} snapshot={snapshot.id}")
 
 def dry_import(path: Path, a: argparse.Namespace, provider: str) -> None:
-    target = Path(tempfile.mkdtemp()) / "dry-run.db"
-    before = table_counts(a.db)
-    try:
-        backup_if_present(a.db, target)
-        with repository(target) as repo:
-            snapshot = import_file_to_repository(repo, path, provider_name=provider, classification_rules=load_classification_rules(getattr(a, "classification_rules", None)))
-        after = table_counts(target)
-        changed = {table: {"before": before[table], "after": after[table]} for table in before if before[table] != after[table]}
-        object_changes = object_deltas(a.db, target)
-        states: dict[str, int] = {}
-        for row in snapshot.comparison_states:
-            state = str(row.get("classification", "unknown"))
-            states[state] = states.get(state, 0) + 1
-        incomplete = any(Finding.COLLECTION_INCOMPLETE in row.get("findings", []) for row in snapshot.comparison_states)
-        print(f"EARE DRY RUN {provider}")
-        print(f"Changes: {json.dumps(changed, sort_keys=True)}")
-        print(f"Objects: {json.dumps(object_changes, sort_keys=True)}")
-        print(f"Comparison: {json.dumps(states, sort_keys=True)}")
-        print(f"Collection incomplete: {'YES' if incomplete else 'NO'}")
-        print("Persistence: NONE (--dry-run)")
-    finally:
-        shutil.rmtree(target.parent, ignore_errors=True)
+    result = preview_import(a.db, path, provider=provider, classification_rules=getattr(a, "classification_rules", None))
+    print(f"EARE DRY RUN {provider}")
+    print(f"Changes: {json.dumps(result.tables, sort_keys=True)}")
+    print(f"Objects: {json.dumps(result.objects, sort_keys=True)}")
+    print(f"Comparison: {json.dumps(result.comparison, sort_keys=True)}")
+    print(f"Collection incomplete: {"YES" if result.collection_incomplete else "NO"}")
+    print("Persistence: NONE (--dry-run)")
 
 def object_deltas(before_path: str | Path, after_path: str | Path) -> dict[str, dict[str, int]]:
-    from access_review_engine.storage import TABLES
-
-    def records(path: str | Path, table: str) -> dict[str, dict[str, Any]]:
-        if not Path(path).exists():
-            return {}
-        connection = sqlite3.connect(path)
-        try:
-            rows = connection.execute(f"SELECT id, payload FROM {table}").fetchall()
-            return {str(row[0]): json.loads(str(row[1])) for row in rows}
-        finally:
-            connection.close()
-
-    result: dict[str, dict[str, int]] = {}
-    for table in TABLES:
-        before = records(before_path, table)
-        after = records(after_path, table)
-        added = set(after) - set(before)
-        removed = set(before) - set(after)
-        common = set(before) & set(after)
-        counts = {"added": len(added), "removed": len(removed), "updated": 0, "renamed": 0, "disabled": 0, "deleted": 0}
-        for object_id in common:
-            if before[object_id] == after[object_id]:
-                continue
-            before_payload = before[object_id]
-            after_payload = after[object_id]
-            if _payload_name(before_payload) != _payload_name(after_payload):
-                counts["renamed"] += 1
-            if before_payload.get("status") != "disabled" and after_payload.get("status") == "disabled":
-                counts["disabled"] += 1
-            if before_payload.get("status") != "deleted" and after_payload.get("status") == "deleted":
-                counts["deleted"] += 1
-            counts["updated"] += 1
-        if any(counts.values()):
-            result[table] = counts
-    return result
-
+    return shared_object_deltas(before_path, after_path)
 
 def _payload_name(payload: dict[str, Any]) -> str | None:
     for key in ("name", "identifier", "access_name"):
@@ -462,17 +413,7 @@ def _payload_name(payload: dict[str, Any]) -> str | None:
     return None
 
 def table_counts(path: str | Path) -> dict[str, int]:
-    from access_review_engine.storage import TABLES
-    counts = {table: 0 for table in TABLES}
-    if not Path(path).exists():
-        return counts
-    connection = sqlite3.connect(path)
-    try:
-        for table in counts:
-            counts[table] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-    finally:
-        connection.close()
-    return counts
+    return shared_table_counts(path)
 
 class repository:
     def __init__(self, path: str | Path): self.path = path; self.repo: Repository | None = None
@@ -481,10 +422,8 @@ class repository:
         assert self.repo is not None; self.repo.close()
 
 def backup_if_present(source: str | Path, target: Path) -> None:
-    if not Path(source).exists(): return
-    src = sqlite3.connect(source); dst = sqlite3.connect(target)
-    try: src.backup(dst)
-    finally: dst.close(); src.close()
+    from access_review_engine.web_use_cases import backup_if_present as shared_backup_if_present
+    shared_backup_if_present(source, target)
 
 def local_command(a: argparse.Namespace) -> int:
     if not Path(a.db).exists():
@@ -524,7 +463,7 @@ def golden_command(a: argparse.Namespace) -> int:
         sources = repo.list_payloads("golden_sources")
         if a.golden_command == "list":
             for row in sources:
-                print(f"{row[name]} active_version={row.get(active_version_id)}")
+                print(f"{row["name"]} active_version={row.get("active_version_id")}")
             return 0
 
         source = next((r for r in sources if r["name"] == a.name), None)
@@ -680,7 +619,7 @@ def campaign_command(a: argparse.Namespace) -> int:
         campaigns = repo.list_payloads("campaigns")
         if a.campaign_command == "list":
             for row in campaigns:
-                print(f"{row[name]} {row[status]}")
+                print(f"{row["name"]} {row["status"]}")
             return 0
         if a.campaign_command == "status":
             selected = campaigns if not a.name else [r for r in campaigns if r["name"] == a.name]
