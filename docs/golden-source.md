@@ -1,68 +1,38 @@
 # Golden Source
 
-Une Golden Source est optionnelle. Ses versions sont immuables et activees explicitement. Les
-promotions supportees sont snapshot observe et campagne validee. Le mode par defaut est
-`replace_scope`; `full_replace` est disponible sur demande explicite.
+A Golden Source is optional. Its versions are immutable and explicitly activated.
 
+Supported promotions are:
 
-## Schema de fonctionnement
+- observed snapshot promotion;
+- reviewed campaign promotion.
 
-```text
-+------------------+       +------------------+       +----------------------+
-| Import observe   | ----> | Snapshot immutable| ----> | GoldenSourceVersion  |
-| AD / OpenLDAP    |       | AccessAssignment |       | assignments attendus |
-| + AccessRelation |       | + graphe courant |       | + checksum           |
-+------------------+       +------------------+       +----------+-----------+
-                                                               |
-                                                               v
-                                                    +----------------------+
-                                                    | Campagne de revue    |
-                                                    | findings + decisions |
-                                                    +----------+-----------+
-                                                               |
-                                      promote campagne validee |
-                                                               v
-                                                    +----------------------+
-                                                    | Version GoldenSource |
-                                                    | suivante             |
-                                                    +----------------------+
-```
-
-## Ce que la Golden certifie
-
-La Golden Source certifie principalement les `AccessAssignment` directs, par exemple:
+The default campaign promotion mode replaces the reviewed scope without silently deleting unrelated providers.
 
 ```text
-Emma -> CRM-Sales
+Observed import -> immutable Snapshot -> GoldenSourceVersion
+                                      ^
+                                      |
+                         reviewed Campaign decisions
 ```
 
-Elle ne doit pas etre transformee automatiquement en:
+The Golden Source primarily certifies direct `AccessAssignment` objects, for example:
 
 ```text
-Emma -> contacts:read
-Emma -> contacts:write
+Alice -> CRM-Sales
 ```
 
-Ces deux acces sont derives par les relations:
+It does not need to list every effective access granted by `CRM-Sales`. Effective access can be calculated by applying the access-relation graph to direct assignments.
+
+A role composition change can therefore alter effective access while the direct Golden assignment remains unchanged. EARE can expose that drift without rewriting the Golden Source as derived assignments.
+
+## Comparison States
 
 ```text
-CRM-Sales grants contacts:read
-CRM-Sales grants contacts:write
+Golden expected + observed snapshot -> expected_and_observed
+Observed without Golden             -> no_reference or unexpected
+Golden expected but absent          -> missing when authoritative
+Scoped or unknown evidence          -> unknown_due_to_scope
 ```
 
-Un changement de composition peut donc produire un drift des acces effectifs sans changer
-l'assignment direct de la Golden. La campagne permet de revoir cet ecart; une promotion cree une
-nouvelle version immutable au lieu de modifier l'historique.
-
-## Etats de comparaison
-
-```text
-Golden attend + snapshot observe       -> expected_and_observed
-Golden absent + snapshot observe       -> no_reference
-Golden attend + absence authoritative  -> missing
-Collection scoped/unknown              -> unknown_due_to_scope
-Snapshot observe hors Golden           -> unexpected
-```
-
-Un Access direct `read` et un Access direct `write` restent deux elements distincts pour la Golden,
-la campagne, la decision et la remediation.
+Direct `read` and `write` Access objects remain distinct for Golden Source, campaigns, decisions, and remediation.

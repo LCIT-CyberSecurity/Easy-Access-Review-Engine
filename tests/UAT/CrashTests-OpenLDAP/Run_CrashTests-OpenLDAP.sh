@@ -24,6 +24,16 @@ main() {
   docker version >/dev/null 2>&1 || fail "Docker Engine is not reachable"
   docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin is not available"
   docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate
+  for _ in 1 2 3 4 5; do
+    if [[ "$(docker inspect -f '{{.State.Running}}' eare-crashtests-openldap 2>/dev/null || true)" == "true" ]]; then
+      break
+    fi
+    sleep 1
+  done
+  [[ "$(docker inspect -f '{{.State.Running}}' eare-crashtests-openldap 2>/dev/null || true)" == "true" ]] || {
+    docker logs eare-crashtests-openldap >&2 || true
+    fail "OpenLDAP container exited during startup"
+  }
   capture
   (
     cd "${REPO_ROOT}"

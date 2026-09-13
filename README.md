@@ -1,91 +1,335 @@
 # Easy Access Review Engine
 
-MVP Python open source pour importer des exports AD/OpenLDAP, normaliser les acces, comparer avec
-une Golden Source optionnelle, lancer une campagne de recertification et produire un rapport HTML
-autonome.
+**Easy Access Review Engine (EARE)** is an open source, universal access review system.
 
-## Demarrage rapide
+It helps IAM, SecOps, audit, and compliance teams turn technical access evidence into reliable, traceable, automated reviews.
+
+EARE helps you:
+
+- collect identities, groups, roles, entitlements, and access relationships;
+- work either from an existing export or from direct read-only access to the IDP through the provided collectors;
+- normalize heterogeneous sources into a common model that is independent from any single IDP;
+- compare observed access with a versioned **Golden Source**;
+- detect unexpected, missing, incomplete, or risky access;
+- calculate effective access from groups, roles, and access relations;
+- generate automated HTML, CSV, and JSON reports for audit and remediation;
+- run access review campaigns and preserve decisions over time.
+
+The goal is practical: save a lot of manual review time, improve reliability, reduce spreadsheet-driven errors, accelerate audit preparation, and strengthen operational security.
+
+## Why EARE?
+
+Access reviews are often slow, fragile, and tied to manual exports. The same questions keep coming back:
+
+```text
+Who has access to what?
+Is this access expected?
+Why does this access exist?
+What should be approved, investigated, or removed?
+```
+
+EARE provides a common engine for those questions, whether the source is Active Directory, OpenLDAP, a business application, an IAM platform, a SaaS tool, or a future connector.
+
+The core is intentionally IDP-agnostic:
+
+- a Provider represents the source;
+- an Identity represents the subject;
+- an Access represents the entitlement;
+- an AccessAssignment represents direct assignment;
+- an AccessRelation represents groups, roles, and access composition.
+
+This makes EARE useful across environments instead of locking review logic to one directory or one vendor.
+
+## Golden Source
+
+The Golden Source describes the expected access state.
+
+It can be built from several starting points:
+
+- an existing configuration or access baseline already maintained by the organization;
+- a CSV file prepared by IAM, application owners, or auditors;
+- a clean from-scratch baseline created progressively from reviewed observations.
+
+It is:
+
+- versioned;
+- immutable per version;
+- comparable with observed snapshots;
+- resilient to reliable renames when the source provides a stable native identifier, such as an Active Directory SID or an OpenLDAP `entryUUID`.
+
+EARE can distinguish:
+
+- expected and observed access;
+- unexpected access;
+- expected but missing access;
+- unknown cases caused by scoped or incomplete collection.
+
+## Automated Reporting
+
+EARE produces reports that can be shared directly with auditors, reviewers, and remediation teams:
+
+- standalone HTML report;
+- CSV export;
+- JSON export;
+- access deviations;
+- security findings;
+- campaign results;
+- remediation exports.
+
+Reports preserve the full review trail: observation, comparison, reviewer, decision, comment, and status.
+
+## Flexible Collection
+
+EARE is designed to fit real operating constraints. You can use it in two complementary ways:
+
+1. **Start from an existing extraction**
+   - import an Active Directory ZIP;
+   - import an OpenLDAP ZIP;
+   - import an OpenLDAP LDIF;
+   - reuse exports produced by another secured process.
+
+2. **Use direct read-only access to the IDP**
+   - connect to Active Directory with a read-only account;
+   - connect to OpenLDAP with a read-only bind account;
+   - use the provided collectors as the acquisition layer that turns those read-only queries into importable artifacts;
+   - keep collection accounts separate from remediation or administration accounts.
+
+This makes adoption easier: teams can begin with offline files, then move to repeatable read-only collection when they are ready. Collectors are read-only. EARE observes, compares, supports decisions, and exports remediation evidence. It does not provision accounts and does not modify directories.
+
+## CLI
+
+The CLI is the user-facing orchestration layer for the EARE engine. It is there to make daily work faster: initialize connector configuration, run checks, collect evidence, import data, analyze results, manage the Golden Source, and export reports without manually wiring each step.
+
+The installed CLI interface is:
+
+```bash
+eare provider ...
+eare analyze ...
+eare golden ...
+eare campaign ...
+eare export ...
+```
+
+The legacy alias remains available:
+
+```bash
+access-review ...
+```
+
+Main command groups:
+
+- `config` manages connector YAML files;
+- `check` diagnoses a connector without changing EARE state;
+- `collect` runs a read-only collector and writes an artifact;
+- `sync` runs collection plus import;
+- `import` imports an existing extraction;
+- `analyze` analyzes local EARE state without contacting a provider;
+- `golden` manages the Golden Source;
+- `campaign` manages review campaigns;
+- `export` produces reports and remediation exports.
+
+`--dry-run` is for import and sync workflows. It runs the real engine against an isolated temporary database copy to explain what would change, while leaving the real EARE database untouched.
+
+## Interactive Menu
+
+Run eare without arguments in a terminal to open the human-friendly menu:
+
+Easy Access Review Engine
+
+1. Providers
+2. Analyze
+3. Golden Source
+4. Campaigns
+5. Exports
+6. Quit
+
+The menu calls the same command handlers as direct CLI usage. In CI, pipes, and other non-interactive contexts, eare without arguments prints help and exits instead of waiting for input.
+
+Provider workflows use the canonical namespace:
+
+eare provider list
+eare provider init corp-ad --type active_directory
+eare provider setup
+eare provider check --all
+eare provider sync corp-ad
+eare provider sync corp-ad --dry-run
+
+## Quick Start
+
+The fastest useful path is: connect EARE to an IDP with a read-only account, run a remote synchronization, inspect findings, and optionally create a Golden Source baseline.
+
+### 1. Install the CLI
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -e ".[app,dev]"
-pytest
+pip install -e ".[app]"
+eare --help
 ```
 
-Importer un ZIP Active Directory:
+By default EARE stores its local state in `access-review.db`. To use another database file, pass `--db` before the command.
+
+### 2. Configure read-only IDP access
+
+Use a dedicated read-only account. Do not reuse an admin or remediation account.
+
+Active Directory remote read-only example:
 
 ```bash
-access-review import corp-ad-export.zip
-access-review findings-list
+eare provider init corp-ad --type active_directory
+eare provider set corp-ad connection.server dc01.corp.local
+eare provider check corp-ad
 ```
 
-Importer un LDIF OpenLDAP:
+OpenLDAP remote read-only example:
 
 ```bash
-access-review import directory.ldif --provider internal-ldap
+eare provider init ldap-prod --type openldap
+eare provider set ldap-prod connection.uri ldaps://ldap.example.com:636
+eare provider set ldap-prod connection.base_dn dc=example,dc=com
+eare provider set ldap-prod connection.bind_dn cn=eare-readonly,ou=service-accounts,dc=example,dc=com
+export LDAP_PASSWORD_FILE=/run/secrets/eare-ldap-readonly-password
+eare provider check ldap-prod
 ```
 
-Exporter un rapport de campagne:
+The password value stays outside the command line and outside the repository; only the secret file path is referenced. Secrets belong in environment variables, `.env`, or secret-mounted files, never in connector YAML, reports, or SQLite.
+
+### 3. Run the first remote sync
 
 ```bash
-access-review campaign-export reports/
+eare provider sync corp-ad
+# or
+eare provider sync ldap-prod
 ```
 
-Le fichier `reports/campaign-report.html` est autonome et s'ouvre sans backend.
+`sync` performs the read-only collection, normalizes the result, imports it into EARE, and creates the review snapshot. The IDP is never modified.
 
-## Experience AD
+To preview the impact without changing the EARE database:
 
-1. Lancer `exporters/active-directory/export-active-directory.ps1`.
-2. Recuperer `corp-ad-export.zip`.
-3. Importer le ZIP.
-4. Consulter les ecarts/anomalies.
-5. Creer et ouvrir une campagne.
-6. Saisir les decisions.
-7. Generer HTML/CSV/JSON/remediation.
-8. Promouvoir le snapshot ou la campagne en Golden Source.
+```bash
+eare provider sync corp-ad --dry-run
+```
 
-Le modele interne reste generique: les informations AD specifiques sont conservees dans `metadata`
-ou `origin.raw`.
+### 4. Inspect results immediately
 
+```bash
+eare analyze --provider corp-ad
+eare analyze --identity alice
+eare analyze --access Finance
+```
 
-La conception detaillee est documentee dans [docs/engineering.md](docs/engineering.md), avec les
-frontieres de modules, le graphe d'acces effectif, la Golden Source, la persistance SQLite, les
-regles de compatibilite et les limites V1.
+These commands help you move quickly from IDP evidence to reviewable results: identities, observed access, findings, and effective access paths.
 
+### 5. Optional: create a Golden Source baseline
 
-Le parcours fonctionnel est decrit dans le [guide utilisateur](docs/user-guide.md). La documentation
-technique pour les developpeurs reste dans [docs/engineering.md](docs/engineering.md).
+A Golden Source is optional, but it is what turns EARE from inventory into expected-vs-observed review.
 
+You can build it from:
 
-## Modele de composition et stabilisation V1
+- an existing access reference or application configuration;
+- a CSV maintained by IAM, application owners, or auditors;
+- a from-scratch baseline created by collecting reality, reviewing it, then promoting the validated snapshot or campaign.
 
-Le coeur conserve un modele minimal: `Provider`, `Identity`, `Access`, `AccessAssignment` et
-`AccessRelation`. Un `Access` peut etre opaque, composite ou fin; `target` et `permission` sont
-optionnels. Les relations `grants` composent les acces et le calcul effectif conserve la provenance
-sans creer d'assignments derives.
+Recommended first rollout:
 
-La branche `improve-model` durcit la reconciliation sans migration destructive de la cle historique
-`(provider, name)`: les enrichissements sont conservateurs et les collisions de target/permission
-sont refusees explicitement. AD et OpenLDAP restent les connecteurs integres. Les autres technologies
-servent uniquement de fixtures de stress du modele.
+```text
+sync current IDP evidence with read-only access
+review findings with owners
+approve the expected access
+promote the reviewed baseline into Golden Source v1
+run the next sync against that Golden Source
+```
 
+Typical CLI flow:
 
-## Active Directory support
+```bash
+eare golden promote baseline --snapshot latest
+eare golden diff baseline
+```
 
-The AD V1 importer/exporter targets file-based collection from recent enterprise AD DS deployments
-(Windows Server 2019, 2022 and 2025 ActiveDirectory module shapes). Supported observations include:
+The Golden Source workflow is described in [Golden Source](docs/golden-source.md). If you start without a Golden Source, EARE still saves time by producing inventory, findings, effective access, and reports; comparison states become more powerful once the baseline exists.
 
-- users, groups and direct nested group edges;
-- disabled accounts without confusing them with locked or expired accounts;
-- gMSA/MSA as `technical_account` identities;
-- computer principals referenced by group memberships;
-- primary group memberships reconstructed as normal assignments with `MembershipType=primary_group`;
-- Foreign Security Principals preserved by SID when unresolved;
-- cross-domain membership resolution by SID when both providers are available;
+### 6. Export a report
+
+When a campaign exists, export the review evidence:
+
+```bash
+eare export report --output reports/
+```
+
+The generated HTML report is standalone and opens without a backend.
+
+## Documentation
+
+- [User Guide](docs/user-guide.md)
+- [Architecture and Engineering](docs/engineering.md)
+- [Golden Source](docs/golden-source.md)
+- [Active Directory](docs/active-directory.md)
+- [OpenLDAP](docs/openldap.md)
+
+The user guide covers configuration, collection, import, sync, dry-run, local analysis, Golden Source, campaigns, and reporting.
+
+## Active Directory Support
+
+The Active Directory V1 connector targets recent AD DS environments through the PowerShell ActiveDirectory module. It covers:
+
+- users, groups, and direct memberships;
+- nested groups and access relations;
+- disabled, locked, or expired accounts;
+- MSA/gMSA technical accounts;
+- computer principals in groups;
+- Foreign Security Principals;
+- cross-domain SID resolution when both providers are imported;
 - built-in accounts detected by SID/RID;
-- deterministic optional classification rules for classic service/shared user accounts;
-- locked and expired account findings.
+- authentication posture when collected.
 
-The project does not claim to compute effective NTFS permissions, GPO permissions, AD ACL effective
-rights, Kerberos delegation effective access, Azure/Entra permissions, PAM/JIT or provisioning.
+## OpenLDAP Support
+
+The OpenLDAP V1 connector uses `ldapsearch` through the provided shell exporter. It covers:
+
+- `inetOrgPerson`, `posixAccount`, `groupOfNames`, `groupOfUniqueNames`, and `posixGroup`;
+- `member`, `uniqueMember`, and `memberUid` memberships;
+- `entryUUID`-based rename stability;
+- strict TLS for LDAPS or StartTLS;
+- reduced scopes and unknown collections without destructive deletion.
+
+## Intentional Limits
+
+EARE does not claim to compute every effective permission for every technology.
+
+The project does not modify directories and does not provision access. It observes, compares, supports review, preserves decisions, and exports remediation evidence.
+
+The V1 scope intentionally excludes:
+
+- direct AD/OpenLDAP modification;
+- provisioning;
+- effective NTFS/GPO/AD ACL computation;
+- PAM/JIT workflows;
+- full cloud effective-permission engines;
+- complex workflow automation.
+
+That restraint is deliberate: it keeps the model reliable, auditable, and extensible.
+
+
+## Remediation Exports
+
+After decisions have been recorded, export review-driven remediation actions without changing the provider:
+
+`bash
+eare export revocations --output reports/revocations.csv
+`
+
+The export is generated through the existing remediation service. EARE never applies revocations directly to an IDP.
+
+
+## Golden Source Creation
+
+A Golden Source can start empty for a from-scratch review or be created from a CSV reference file:
+
+`bash
+eare golden create baseline
+eare golden create baseline --csv expected-access.csv
+eare golden edit baseline --csv updated-access.csv
+`
+
+CSV files use the columns access_provider, access_name, identity_provider, and identity_identifier. Optional native identifier columns are supported for stable matching. Each CSV operation creates an immutable Golden Source version.

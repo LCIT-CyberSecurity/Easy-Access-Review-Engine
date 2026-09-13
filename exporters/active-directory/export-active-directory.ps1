@@ -3,7 +3,8 @@ param(
   [string]$Output,
   [string]$Server,
   [int]$OperationTimeoutSeconds = 300,
-  [switch]$AllowPartial
+  [switch]$AllowPartial,
+  [switch]$CheckOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -201,8 +202,20 @@ function Invoke-ActiveDirectoryExport {
     [Parameter(Mandatory=$true)][string]$Output,
     [string]$Server,
     [int]$OperationTimeoutSeconds = 300,
-    [switch]$AllowPartial
+    [switch]$AllowPartial,
+    [switch]$CheckOnly
   )
+
+  if ($CheckOnly) {
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $serverArg = Add-ServerArg
+    $domain = Invoke-AdCollectorOperation -Operation "Get-ADDomain" -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
+      param($ServerArg)
+      Get-ADDomain @ServerArg
+    } -ArgumentList @($serverArg)
+    Write-Output ("Active Directory check succeeded for " + $domain.DNSRoot)
+    return
+  }
 
   $tmp = New-Item -ItemType Directory -Path ([System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString()))
 $errors = @()
@@ -357,4 +370,4 @@ finally {
 if ($MyInvocation.InvocationName -eq '.') { return }
 if (-not $ProviderName) { throw "ProviderName is required" }
 if (-not $Output) { throw "Output is required" }
-Invoke-ActiveDirectoryExport -ProviderName $ProviderName -Output $Output -Server $Server -OperationTimeoutSeconds $OperationTimeoutSeconds -AllowPartial:$AllowPartial
+Invoke-ActiveDirectoryExport -ProviderName $ProviderName -Output $Output -Server $Server -OperationTimeoutSeconds $OperationTimeoutSeconds -AllowPartial:$AllowPartial -CheckOnly:$CheckOnly

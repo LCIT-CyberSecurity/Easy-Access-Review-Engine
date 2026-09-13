@@ -25,7 +25,8 @@ dev = [
 ]
 
 [project.scripts]
-access-review = "access_review_engine.cli:main"
+eare = "access_review_engine.cli.main:main"
+access-review = "access_review_engine.cli.main:main"
 
 [tool.ruff]
 line-length = 100

@@ -6,6 +6,8 @@ RUN apt-get update \
         ldap-utils \
         slapd \
         python3 \
+    && mkdir -p /var/run/slapd \
+    && chown openldap:openldap /var/run/slapd \
     && apt-get clean \
     && find /var/lib/apt/lists -type f -delete
 

@@ -20,9 +20,9 @@ without silently losing identity, scope, provenance or review meaning.
 AD and OpenLDAP are the integrated connectors. AWS, Azure, GCP, Entra ID, Keycloak, Kubernetes and
 GitHub are model stress-test domains only in this V1 scope.
 
-## 1 bis. Schemas synthetiques
+## 1.1 Synthetic Schemas
 
-### Objets du modele
+### Model objects
 
 ```text
 Provider
@@ -36,10 +36,10 @@ Provider
 ### Certification
 
 ```text
-Importeurs AD/OpenLDAP
+AD/OpenLDAP importers
           |
           v
-Etat observe -> Snapshot immutable -> comparaison Golden
+Observed state -> immutable Snapshot -> Golden comparison
                                       |
                                       v
                               Campaign / ReviewItem
@@ -48,14 +48,14 @@ Etat observe -> Snapshot immutable -> comparaison Golden
                               Decision / Report / Remediation
 ```
 
-### CRM: direct versus effectif
+### CRM: direct versus effective
 
 ```text
 Emma --direct--> CRM-Sales --grants--> contacts:read
                               \-------> contacts:write
 
 Golden:   Emma -> CRM-Sales
-Effectif: Emma -> CRM-Sales -> contacts:read + contacts:write
+Effective: Emma -> CRM-Sales -> contacts:read + contacts:write
 ```
 
 ## 2. System context
@@ -365,3 +365,4 @@ by replacing the current Access under the unique `(provider, name)` key, while a
 continues to preserve rename reconciliation. Incompatible target or permission definitions are
 rejected explicitly. The full suite is `229 passed, 0 failed, 7 skipped`; the skips require external
 PowerShell or Docker environments.
+\n\n## Verification\n\nThe repository test harness is run with python3 pytest.py. The current result is 242 passed, 0 failed, 7 skipped; the skipped tests require PowerShell or Docker runtimes that are not available in every environment.\n
