@@ -8,6 +8,15 @@ class ConfigError(ValueError):
     pass
 
 SUPPORTED_TYPES = {"active_directory", "openldap"}
+SENSITIVE_KEY_PARTS = ("password", "secret", "token", "private_key")
+ALLOWED_SECRET_REFERENCE_KEYS = {
+    "username_env",
+    "password_env",
+    "password_file_env",
+    "token_env",
+    "token_file_env",
+    "private_key_file_env",
+}
 
 def connector_path(name: str, directory: str | Path = "config/connectors") -> Path:
     if not name or Path(name).name != name or name in {".", ".."}:
@@ -31,6 +40,20 @@ def validate_connector(data: Any, expected_name: str | None = None) -> None:
     missing = [key for key in required if not connection.get(key)]
     if missing:
         raise ConfigError("Missing connection settings: " + ", ".join(missing))
+    validate_no_plaintext_secrets(data)
+
+def validate_no_plaintext_secrets(data: Any, path: str = "") -> None:
+    if isinstance(data, dict):
+        for key, value in data.items():
+            key_text = str(key)
+            child_path = f"{path}.{key_text}" if path else key_text
+            lowered = key_text.lower()
+            if any(part in lowered for part in SENSITIVE_KEY_PARTS) and lowered not in ALLOWED_SECRET_REFERENCE_KEYS:
+                raise ConfigError(f"Plaintext secret key is not allowed in connector YAML: {child_path}")
+            validate_no_plaintext_secrets(value, child_path)
+    elif isinstance(data, list):
+        for index, value in enumerate(data):
+            validate_no_plaintext_secrets(value, f"{path}[{index}]")
 
 def load_connector(name: str, config: str | Path | None = None) -> dict[str, Any]:
     path = Path(config) if config else connector_path(name)

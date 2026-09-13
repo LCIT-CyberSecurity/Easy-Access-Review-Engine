@@ -16,13 +16,22 @@ class RunnerResult:
 class RunnerError(RuntimeError):
     pass
 
-def build_command(config: dict[str, object], output: Path, root: str | Path = ".") -> tuple[list[str], dict[str, str]]:
+def exporter_root() -> Path:
+    package_root = Path(__file__).resolve().parents[3]
+    if (package_root / "exporters").is_dir():
+        return package_root
+    cwd = Path.cwd()
+    if (cwd / "exporters").is_dir():
+        return cwd
+    return package_root
+
+def build_command(config: dict[str, object], output: Path, root: str | Path | None = None) -> tuple[list[str], dict[str, str]]:
     kind = str(config["type"])
     connection = config["connection"]
     collection = config.get("collection", {})
     if not isinstance(connection, dict) or not isinstance(collection, dict):
         raise ValueError("Invalid connector settings")
-    base = Path(root).resolve()
+    base = Path(root).resolve() if root is not None else exporter_root()
     if kind == "active_directory":
         command = ["pwsh", str(base / "exporters/active-directory/export-active-directory.ps1"), "-ProviderName", str(config["provider"]), "-Output", str(output), "-Server", str(connection["server"]), "-OperationTimeoutSeconds", str(collection.get("timeout", 300))]
         if collection.get("allow_partial"): command.append("-AllowPartial")
@@ -40,7 +49,7 @@ def build_command(config: dict[str, object], output: Path, root: str | Path = ".
         return ["bash", str(base / "exporters/openldap/export-openldap.sh"), str(output)], env
     raise ValueError(f"Unsupported connector type: {kind}")
 
-def run_exporter(config: dict[str, object], output: str | Path, root: str | Path = ".", timeout: int | None = None) -> RunnerResult:
+def run_exporter(config: dict[str, object], output: str | Path, root: str | Path | None = None, timeout: int | None = None) -> RunnerResult:
     path = Path(output).resolve()
     command, env = build_command(config, path, root)
     secrets = secret_environment(config)
