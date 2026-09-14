@@ -2,13 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { getRows, postDecision } from './client'
 
 describe('API client', () => {
-  it('falls back to isolated fixtures when the API is unavailable', async () => {
+  it('does not fabricate data when the API is unavailable', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
 
-    await expect(getRows('campaigns')).resolves.toEqual([
-      expect.objectContaining({ name: 'Quarterly access review' }),
-      expect.objectContaining({ name: 'Finance privileged access' }),
-    ])
+    await expect(getRows('campaigns')).rejects.toThrow('offline')
   })
 
   it('posts a decision through the REST API', async () => {

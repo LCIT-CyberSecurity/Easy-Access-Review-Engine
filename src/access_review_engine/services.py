@@ -633,7 +633,7 @@ def create_golden_version(
     )
 
 
-def promote_snapshot(
+def golden_version_from_snapshot(
     golden_source: GoldenSource,
     snapshot: Snapshot,
     previous_versions: Iterable[GoldenSourceVersion] = (),
@@ -680,6 +680,15 @@ def promote_snapshot(
         parent_version_id=parent_id,
         golden_authentication_policy=snapshot.authentication_posture,
     )
+
+
+def promote_snapshot(
+    golden_source: GoldenSource,
+    snapshot: Snapshot,
+    previous_versions: Iterable[GoldenSourceVersion] = (),
+) -> GoldenSourceVersion:
+    """Create the next Golden Source version from a snapshot for a mutating workflow."""
+    return golden_version_from_snapshot(golden_source, snapshot, previous_versions)
 
 
 def _reject_duplicate_stable_golden_keys(assignments: Iterable[GoldenSourceAssignment]) -> None:

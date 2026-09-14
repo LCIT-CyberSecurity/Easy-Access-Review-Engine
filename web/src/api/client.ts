@@ -1,19 +1,26 @@
-export type Row = Record<string, any>
+export type Row = Record<string, unknown>
 
-const fixtures: Record<string, Row[]> = {
-  campaigns: [{ name: 'Quarterly access review', scope: 'Production', status: 'open', progress: 74, pending: 11, due_at: '2026-09-30' }, { name: 'Finance privileged access', scope: 'SAP Finance', status: 'draft', progress: 0, pending: 24, due_at: '2026-10-12' }],
-  'review-items': [{ id: 'r1', identity_identifier: 'alice.martin', identity_provider: 'corp-ad', access_name: 'Finance Administrator', classification: 'unexpected', expected: false, observed: true, findings: ['disabled_with_access'] }, { id: 'r2', identity_identifier: 'bob.dupont', identity_provider: 'corp-ad', access_name: 'SAP Read', classification: 'expected_and_observed', expected: true, observed: true, findings: [] }, { id: 'r3', identity_identifier: 'claire.bernard', identity_provider: 'openldap-prod', access_name: 'Production Admin', classification: 'missing', expected: true, observed: false, findings: [] }],
-  providers: [{ name: 'corp-ad', display_name: 'Corporate Active Directory', type: 'active_directory', status: 'Healthy', identities: 1432, groups: 128, last_sync: '14 min ago' }, { name: 'openldap-prod', display_name: 'OpenLDAP Production', type: 'openldap', status: 'Healthy', identities: 684, groups: 42, last_sync: '38 min ago' }],
-  'remediation-actions': [{ identity_identifier: 'alice.martin', access_name: 'Finance Administrator', action: 'revoke', status: 'pending', due_at: '2026-09-18' }, { identity_identifier: 'service.backup', access_name: 'Backup Operators', action: 'revoke', status: 'exported', due_at: '2026-09-21' }],
-  identities: [{ identifier: 'alice.martin', provider: 'corp-ad', type: 'user_account', status: 'active' }, { identifier: 'service.backup', provider: 'corp-ad', type: 'technical_account', status: 'active' }],
+export type Principal = { subject: string; username: string; display_name: string; role: string; scopes: string[] }
+
+async function request(path: string, init: RequestInit = {}): Promise<unknown> {
+  const response = await fetch(path, { ...init, credentials: 'same-origin', headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers } })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { detail?: string }
+    throw new Error(body.detail ?? `Request failed (${response.status})`)
+  }
+  return response.status === 204 ? null : response.json()
 }
 
-export async function getRows(path: string): Promise<Row[]> {
-  try { const response = await fetch(`/api/${path}`); if (!response.ok) throw new Error('API unavailable'); const body = await response.json(); return body.items?.length ? body.items : fixtures[path] ?? [] } catch { return fixtures[path] ?? [] }
+export async function getSession(): Promise<Principal> { return request('/api/auth/session') as Promise<Principal> }
+export async function login(username: string, password: string): Promise<Principal> { return request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }) as Promise<Principal> }
+export async function logout(): Promise<void> { await request('/api/auth/logout', { method: 'POST' }) }
+
+export async function getRows(path: string, params: Record<string, string | number | undefined> = {}): Promise<Row[]> {
+  const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)]))
+  const body = await request(`/api/${path}${query.size ? `?${query}` : ''}`) as { items?: Row[] } | Row[]
+  return Array.isArray(body) ? body : body.items ?? []
 }
 
-export async function postDecision(id: string, value: string, comment?: string) {
-  const response = await fetch(`/api/review-items/${id}/decision?value=${encodeURIComponent(value)}${comment ? `&comment=${encodeURIComponent(comment)}` : ''}`, { method: 'POST', headers: { 'X-EARE-Role': 'ADMIN' } })
-  if (!response.ok) throw new Error((await response.json()).detail ?? 'Decision failed')
-  return response.json()
-}
+export async function getJson(path: string): Promise<Row> { return request(`/api/${path}`) as Promise<Row> }
+export async function postJson(path: string, body?: Row): Promise<Row> { return request(`/api/${path}`, { method: 'POST', body: body ? JSON.stringify(body) : undefined }) as Promise<Row> }
+export async function postDecision(id: string, value: string, comment?: string): Promise<Row> { return postJson(`review-items/${encodeURIComponent(id)}/decision?value=${encodeURIComponent(value)}${comment ? `&comment=${encodeURIComponent(comment)}` : ''}`) }
