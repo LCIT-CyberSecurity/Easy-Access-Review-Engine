@@ -9,7 +9,7 @@ const fixtures: Record<string, Row[]> = {
 }
 
 export async function getRows(path: string): Promise<Row[]> {
-  try { const response = await fetch(`/api/${path}`); if (!response.ok) throw new Error('API unavailable'); const body = await response.json(); return body.items ?? [] } catch { return fixtures[path] ?? [] }
+  try { const response = await fetch(`/api/${path}`); if (!response.ok) throw new Error('API unavailable'); const body = await response.json(); return body.items?.length ? body.items : fixtures[path] ?? [] } catch { return fixtures[path] ?? [] }
 }
 
 export async function postDecision(id: string, value: string, comment?: string) {

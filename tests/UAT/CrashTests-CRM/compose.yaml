@@ -12,6 +12,20 @@ services:
       - ./seed:/opt/crashtests-crm/seed:ro
     command: ["/bin/sh", "-c", "rm -f /srv/crm/.ready && python3 /opt/crashtests-crm/seed/generate_data.py --root /srv/crm --policy /opt/crashtests-crm/policy && touch /srv/crm/.ready && sleep infinity"]
 
+  crashtests-webui:
+    build:
+      context: ../../../web
+      dockerfile: Dockerfile
+    image: eare-crashtests-webui:node22
+    container_name: eare-crashtests-webui
+    ports:
+      - "4173:4173"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4173/').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
 volumes:
   crashtests-crm-data:
     name: eare-crashtests-crm-data

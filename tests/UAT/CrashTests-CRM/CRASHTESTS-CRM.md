@@ -57,6 +57,10 @@ debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b625
 The container exposes no network port and uses `network_mode: none`. It does not mount the Docker
 socket, the host home directory, SSH keys, tokens, credentials or environment files.
 
+The Compose lab also builds and runs the EARE Web UI as `eare-crashtests-webui` from `web/Dockerfile`.
+It publishes port `4173` and uses a Node healthcheck to verify that the compiled UI starts and serves
+HTTP before the CRM assertions run.
+
 The CRM filesystem is under `/srv/crm` inside the container and is backed by the dedicated Docker
 volume `eare-crashtests-crm-data`. Files are owned by `root:root` inside the container so access is
 governed by role groups and POSIX ACLs, not by file ownership of the fictitious users.

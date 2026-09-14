@@ -15,6 +15,7 @@ capture_diagnostics() {
   mkdir -p "${ARTIFACTS}"
   docker compose -f "${COMPOSE_FILE}" logs --no-color >"${ARTIFACTS}/docker.log" 2>&1 || true
   docker inspect eare-crashtests-crm >"${ARTIFACTS}/container-inspect.json" 2>/dev/null || true
+  docker inspect eare-crashtests-webui >"${ARTIFACTS}/webui-container-inspect.json" 2>/dev/null || true
   docker exec eare-crashtests-crm getfacl -R /srv/crm >"${ARTIFACTS}/filesystem-acl.txt" 2>&1 || true
   docker exec eare-crashtests-crm getent passwd >"${ARTIFACTS}/users.txt" 2>&1 || true
   docker exec eare-crashtests-crm getent group >"${ARTIFACTS}/groups.txt" 2>&1 || true
@@ -37,6 +38,17 @@ main() {
     if [[ "${attempt}" == "60" ]]; then
       capture_diagnostics
       fail "lab did not become ready after ACL/data generation"
+    fi
+    sleep 1
+  done
+  for attempt in $(seq 1 30); do
+    webui_health="$(docker inspect -f '{{.State.Health.Status}}' eare-crashtests-webui 2>/dev/null || true)"
+    if [[ "${webui_health}" == "healthy" ]]; then
+      break
+    fi
+    if [[ "${attempt}" == "30" ]]; then
+      capture_diagnostics
+      fail "web UI did not become healthy; current state: ${webui_health:-unknown}"
     fi
     sleep 1
   done
