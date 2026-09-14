@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
 try:
-    from fastapi import FastAPI, Header, HTTPException
+    from fastapi import Body, FastAPI, Header, HTTPException
     from fastapi.responses import StreamingResponse
 except ModuleNotFoundError:  # pragma: no cover
     FastAPI = None  # type: ignore[assignment]
-    Header = HTTPException = StreamingResponse = None  # type: ignore[assignment,misc]
+    Body = Header = HTTPException = StreamingResponse = None  # type: ignore[assignment,misc]
 
 from access_review_engine.application import import_file_to_repository
 from access_review_engine.collector_runner import RunnerError, run_exporter
@@ -19,6 +20,7 @@ from access_review_engine.services import create_decision
 from access_review_engine.storage import Repository, hydrate_review_item
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_use_cases import latest_snapshot, list_payloads, preview_import
+from access_review_engine.system_admin import init_system, list_idps, list_users, run_openldap_tests, upsert_idp, upsert_user
 
 
 @dataclass(frozen=True)
@@ -49,12 +51,37 @@ def create_app(db_path: str = "access-review.db"):
     if FastAPI is None:
         raise RuntimeError("Install the 'app' extra to use the REST API")
     app = FastAPI(title="Easy Access Review Engine", version="0.2.0")
+    system_conn = sqlite3.connect(db_path, check_same_thread=False)
+    system_conn.row_factory = sqlite3.Row
+    init_system(system_conn)
 
     def user(role: str | None, scopes: str | None) -> WebPrincipal:
         return _principal(role, scopes)
 
     def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None):
         return list_payloads(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider)
+
+    @app.get("/api/system")
+    def system_overview(x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes), ("ADMIN",))
+        return {"users": list_users(system_conn), "identity_providers": list_idps(system_conn), "roles": sorted({"ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN"})}
+
+    @app.post("/api/system/users")
+    def system_user_create(payload: dict[str, Any] = Body(...), x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes), ("ADMIN",))
+        try: return upsert_user(system_conn, payload)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/system/identity-providers")
+    def system_idp_create(payload: dict[str, Any] = Body(...), x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes), ("ADMIN",))
+        try: return upsert_idp(system_conn, payload)
+        except ValueError as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/system/tests/openldap")
+    def system_openldap_test(x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes), ("ADMIN",))
+        return run_openldap_tests(str(Path(__file__).resolve().parents[2]))
 
     @app.get("/api/me")
     def me(x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):

@@ -1,0 +1,9 @@
+services:
+  eare-webui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eare-webui:node22
+    container_name: eare-webui
+    ports:
+      - "4173:4173"
