@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import csv
+import io
 import json
 import sqlite3
 from pathlib import Path
@@ -16,8 +18,8 @@ except ModuleNotFoundError:  # pragma: no cover
 from access_review_engine.application import import_file_to_repository
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import load_connector, secret_environment
-from access_review_engine.services import create_decision
-from access_review_engine.storage import Repository, hydrate_review_item
+from access_review_engine.services import create_decision, create_golden_source, golden_diff, promote_snapshot
+from access_review_engine.storage import Repository, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_use_cases import latest_snapshot, list_payloads, preview_import
 from access_review_engine.system_admin import init_system, list_idps, list_users, run_openldap_tests, upsert_idp, upsert_user
@@ -82,6 +84,62 @@ def create_app(db_path: str = "access-review.db"):
     def system_openldap_test(x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
         _require(user(x_eare_role, x_eare_scopes), ("ADMIN",))
         return run_openldap_tests(str(Path(__file__).resolve().parents[2]))
+
+    @app.post("/api/golden-sources/baseline")
+    def create_baseline(payload: dict[str, Any] | None = Body(default=None), x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            snapshots = repo.list_payloads("snapshots")
+            if not snapshots:
+                raise HTTPException(status_code=409, detail="No snapshot is available to create a baseline")
+            snapshot = hydrate_snapshot(snapshots[-1])
+            requested = payload or {}
+            name = str(requested.get("name") or "crashtests-crm").strip()
+            display_name = str(requested.get("display_name") or name).strip()
+            existing = repo.find_by_name("golden_sources", name)
+            source = hydrate_golden_source(existing) if existing else create_golden_source(name, display_name)
+            previous = [hydrate_golden_version(row) for row in repo.list_payloads("golden_source_versions") if row.get("golden_source_id") == source.id]
+            try:
+                version = promote_snapshot(source, snapshot, previous)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            source.active_version_id = version.id
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+            return {"source": asdict(source), "version": asdict(version), "snapshot_id": snapshot.id}
+
+    @app.get("/api/golden-sources/{name}/compare")
+    def compare_baseline(name: str, x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes))
+        with Repository(db_path) as repo:
+            source_payload = repo.find_by_name("golden_sources", name)
+            if not source_payload:
+                raise HTTPException(status_code=404, detail="Golden Source not found")
+            source = hydrate_golden_source(source_payload)
+            versions = [hydrate_golden_version(row) for row in repo.list_payloads("golden_source_versions") if row.get("golden_source_id") == source.id]
+            snapshots = repo.list_payloads("snapshots")
+            if not versions or not snapshots:
+                raise HTTPException(status_code=409, detail="Baseline and snapshot are required for comparison")
+            current = promote_snapshot(source, hydrate_snapshot(snapshots[-1]), versions)
+            return {"name": name, "current_version": current.version, "changes": golden_diff(versions[-1], current)}
+
+    @app.get("/api/golden-sources/{name}/export")
+    def export_baseline(name: str, x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
+        _require(user(x_eare_role, x_eare_scopes))
+        with Repository(db_path) as repo:
+            source = repo.find_by_name("golden_sources", name)
+            if not source:
+                raise HTTPException(status_code=404, detail="Golden Source not found")
+            golden = hydrate_golden_source(source)
+            versions = [hydrate_golden_version(row) for row in repo.list_payloads("golden_source_versions") if row.get("golden_source_id") == golden.id]
+            if not versions:
+                raise HTTPException(status_code=409, detail="Golden Source has no version")
+            output = io.StringIO()
+            writer = csv.DictWriter(output, fieldnames=["access_provider", "access_name", "identity_provider", "identity_identifier", "permission"])
+            writer.writeheader()
+            for item in versions[-1].assignments:
+                writer.writerow({"access_provider": item.access_provider, "access_name": item.access_name, "identity_provider": item.identity_provider, "identity_identifier": item.identity_identifier, "permission": item.access_permission or ""})
+            return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={name}-baseline.csv"})
 
     @app.get("/api/me")
     def me(x_eare_role: str | None = Header(default=None), x_eare_scopes: str | None = Header(default=None)):
