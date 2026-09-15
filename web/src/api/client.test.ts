@@ -17,8 +17,8 @@ describe('API client', () => {
 
     await expect(postDecision('review-1', 'approve', 'Reviewed')).resolves.toEqual({ id: 'decision-1' })
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/review-items/review-1/decision?value=approve&comment=Reviewed',
-      expect.objectContaining({ method: 'POST' }),
+      '/api/review-items/review-1/decision',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ value: 'approve', comment: 'Reviewed' }) }),
     )
   })
 })

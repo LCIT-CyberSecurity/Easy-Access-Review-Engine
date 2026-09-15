@@ -21,6 +21,14 @@ export async function getRows(path: string, params: Record<string, string | numb
   return Array.isArray(body) ? body : body.items ?? []
 }
 
+export type Page = { items: Row[]; total: number; limit: number; offset: number }
+
+export async function getPage(path: string, params: Record<string, string | number | undefined> = {}): Promise<Page> {
+  const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== undefined && value !== '').map(([key, value]) => [key, String(value)]))
+  const body = await request(`/api/${path}${query.size ? `?${query}` : ''}`) as Partial<Page>
+  return { items: body.items ?? [], total: Number(body.total ?? 0), limit: Number(body.limit ?? 25), offset: Number(body.offset ?? 0) }
+}
+
 export async function getJson(path: string): Promise<Row> { return request(`/api/${path}`) as Promise<Row> }
 export async function postJson(path: string, body?: Row): Promise<Row> { return request(`/api/${path}`, { method: 'POST', body: body ? JSON.stringify(body) : undefined }) as Promise<Row> }
-export async function postDecision(id: string, value: string, comment?: string): Promise<Row> { return postJson(`review-items/${encodeURIComponent(id)}/decision?value=${encodeURIComponent(value)}${comment ? `&comment=${encodeURIComponent(comment)}` : ''}`) }
+export async function postDecision(id: string, value: string, comment?: string): Promise<Row> { return postJson(`review-items/${encodeURIComponent(id)}/decision`, { value, ...(comment === undefined ? {} : { comment }) }) }

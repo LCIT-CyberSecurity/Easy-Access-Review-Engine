@@ -27,6 +27,7 @@ from access_review_engine.config_loader import load_connector, secret_environmen
 from access_review_engine.services import create_decision, create_golden_source, golden_diff, golden_version_from_snapshot, promote_snapshot
 from access_review_engine.storage import Repository, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
+from access_review_engine.web_read_models import projected_rows
 from access_review_engine.web_use_cases import latest_snapshot, list_payloads, preview_import
 from access_review_engine.system_admin import authenticate_user, ensure_bootstrap_user, init_system, list_idps, list_users, upsert_idp, upsert_user
 
@@ -101,7 +102,7 @@ def create_app(db_path: str | None = None):
         return {"status": "ok"}
 
     def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None):
-        return list_payloads(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider)
+        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider)
 
     def scoped_page(principal: WebPrincipal, table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None):
         result = page(table, limit, offset, search, status, provider)
@@ -228,7 +229,7 @@ def create_app(db_path: str | None = None):
         items = page("review_items", 500, 0, None, None, None)["items"]
         actions = page("remediation_actions", 500, 0, None, None, None)["items"]
         pending = [item for item in items if not item.get("decision")]
-        return {"role": principal.role, "metrics": {"campaigns": len(campaigns), "pending_reviews": len(pending), "remediation_actions": len(actions), "anomalies": sum(bool(item.get("findings")) for item in items)}, "latest_snapshot": latest_snapshot(db_path), "campaigns": campaigns[:3], "attention": []}
+        return {"role": principal.role, "metrics": {"campaigns": len(campaigns), "pending_reviews": len(pending), "remediation_actions": len(actions), "findings": sum(bool(item.get("findings")) for item in items)}, "latest_snapshot": latest_snapshot(db_path), "campaigns": campaigns[:3], "attention": []}
 
     @app.get("/api/campaigns/{campaign_id}")
     def campaign_detail(campaign_id: str, request: Request):
@@ -239,7 +240,7 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=404, detail="Campaign not found")
         reviews = [item for item in page("review_items", 500, 0, None, None, None)["items"] if item.get("campaign_id") == campaign_id]
         findings = [finding for item in reviews for finding in item.get("findings", [])]
-        return {"campaign": campaign, "reviews": reviews, "findings": sorted(set(findings)), "activity": []}
+        return {"campaign": campaign, "reviews": reviews, "findings": sorted(set(findings))}
 
     tables = {"providers": "providers", "imports": "imports", "identities": "identities", "accesses": "accesses", "assignments": "access_assignments", "golden-sources": "golden_sources", "golden-source-versions": "golden_source_versions", "snapshots": "snapshots", "campaigns": "campaigns", "review-items": "review_items", "decisions": "decisions", "remediation-actions": "remediation_actions"}
     for path, table in tables.items():
@@ -322,16 +323,23 @@ def create_app(db_path: str | None = None):
         return StreamingResponse(iter([body]), media_type="text/event-stream")
 
     @app.post("/api/review-items/{review_item_id}/decision")
-    def decision(review_item_id: str, request: Request, value: str, comment: str | None = None):
+    def decision(review_item_id: str, request: Request, body: dict[str, Any] = Body(...)):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR", "GROUP_OWNER"))
         with Repository(db_path) as repo:
-            payload = repo.get_payload("review_items", review_item_id)
-            if payload is None:
+            item_payload = repo.get_payload("review_items", review_item_id)
+            if item_payload is None:
                 raise HTTPException(status_code=404, detail="Review item not found")
-            item = hydrate_review_item(payload)
+            item = hydrate_review_item(item_payload)
             if principal.role == "GROUP_OWNER" and (item.reviewer is None or item.reviewer.identity != principal.username):
                 raise HTTPException(status_code=403, detail="Review item is not assigned to this user")
-            result = create_decision(item, value, comment, principal.subject)
+            value = body.get("value")
+            comment = body.get("comment")
+            if not isinstance(value, str) or (comment is not None and not isinstance(comment, str)):
+                raise HTTPException(status_code=400, detail="A decision value and optional comment are required")
+            try:
+                result = create_decision(item, value, comment, principal.subject)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             repo.insert_append_only("decisions", result)
         return asdict(result)
 
