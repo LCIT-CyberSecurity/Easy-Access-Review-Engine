@@ -1,9 +1,45 @@
 services:
+  eare-api:
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    image: eare-api:python312
+    container_name: eare-api
+    env_file:
+      - ../.env
+    environment:
+      EARE_DB_PATH: /data/access-review.db
+    volumes:
+      - eare-data:/data
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 6
+    restart: unless-stopped
+
   eare-webui:
     build:
       context: .
       dockerfile: Dockerfile
-    image: eare-webui:node22
+    image: eare-webui:nginx
     container_name: eare-webui
+    depends_on:
+      eare-api:
+        condition: service_healthy
     ports:
-      - "4173:4173"
+      - "4173:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  eare-data:
+    name: eare-data

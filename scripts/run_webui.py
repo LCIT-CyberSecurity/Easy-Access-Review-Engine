@@ -10,7 +10,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from access_review_engine.api import create_app
-from access_review_engine.storage import Repository
 
 
 class SpaFallbackMiddleware(BaseHTTPMiddleware):
@@ -26,10 +25,6 @@ class SpaFallbackMiddleware(BaseHTTPMiddleware):
 
 
 def build_app(db_path: str, dist_path: str = "web/dist"):
-    # Repository is used as a context manager by the API while the current
-    # storage implementation exposes explicit close semantics.
-    Repository.__enter__ = lambda self: self
-    Repository.__exit__ = lambda self, exc_type, exc, tb: (self.conn.close(), False)[1]
     app = create_app(db_path)
     dist = Path(dist_path).resolve()
     app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")

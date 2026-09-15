@@ -66,6 +66,13 @@ class Repository:
         self._transaction_depth = 0
         self.init_schema()
 
+    def __enter__(self) -> "Repository":
+        return self
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> bool:
+        self.close()
+        return False
+
     def init_schema(self) -> None:
         cur = self.conn.cursor()
         for table in sorted(TABLES):

@@ -82,9 +82,10 @@ def _require(user: WebPrincipal | None, roles: tuple[str, ...] = (), scope: str 
     return user
 
 
-def create_app(db_path: str = "access-review.db"):
+def create_app(db_path: str | None = None):
     if FastAPI is None:
         raise RuntimeError("Install the 'app' extra to use the REST API")
+    db_path = db_path or os.environ.get("EARE_DB_PATH", "access-review.db")
     app = FastAPI(title="Easy Access Review Engine", version="0.3.0")
     system_conn = sqlite3.connect(db_path, check_same_thread=False)
     system_conn.row_factory = sqlite3.Row
@@ -94,6 +95,10 @@ def create_app(db_path: str = "access-review.db"):
 
     def current_user(request: Request) -> WebPrincipal | None:
         return _decode_session(request.cookies.get(SESSION_COOKIE), session_secret)
+
+    @app.get("/api/health")
+    def health():
+        return {"status": "ok"}
 
     def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None):
         return list_payloads(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider)
