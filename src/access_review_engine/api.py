@@ -105,11 +105,7 @@ def create_app(db_path: str | None = None):
         return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider)
 
     def scoped_page(principal: WebPrincipal, table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None):
-        result = page(table, limit, offset, search, status, provider)
-        if principal.role == "GROUP_OWNER":
-            result["items"] = [item for item in result["items"] if (item.get("reviewer") or {}).get("identity") == principal.username]
-            result["total"] = len(result["items"])
-        return result
+        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=principal.scopes if principal.role == "BUSINESS_ADMIN" else None)
 
     def require_table_access(principal: WebPrincipal, table: str) -> None:
         if principal.role == "BUSINESS_ADMIN" and table != "remediation_actions":
@@ -189,7 +185,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/golden-sources/{name}/compare")
     def compare_baseline(name: str, request: Request):
-        _require(current_user(request))
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             source_payload = repo.find_by_name("golden_sources", name)
             if not source_payload:
@@ -206,7 +202,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/golden-sources/{name}/export")
     def export_baseline(name: str, request: Request):
-        _require(current_user(request))
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             source = repo.find_by_name("golden_sources", name)
             if not source:
@@ -233,7 +229,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/campaigns/{campaign_id}")
     def campaign_detail(campaign_id: str, request: Request):
-        _require(current_user(request))
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
         result = page("campaigns", 500, 0, None, None, None)
         campaign = next((item for item in result["items"] if item.get("id") == campaign_id), None)
         if campaign is None:
@@ -252,7 +248,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/findings")
     def findings(request: Request, limit: int = 100, offset: int = 0, status: str | None = None):
-        _require(current_user(request))
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
         snapshot = latest_snapshot(db_path)
         rows = snapshot.get("comparison_states", []) if snapshot else []
         if status:
@@ -261,7 +257,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/identities/{identity_id}/accesses")
     def identity_accesses(identity_id: str, request: Request):
-        _require(current_user(request))
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
         snapshot = latest_snapshot(db_path) or {}
         identities = {f"{item.get('provider')}:{item.get('identifier')}": item for item in snapshot.get("identities", [])}
         identity = next((item for item in snapshot.get("identities", []) if item.get("id") == identity_id), None)
@@ -274,7 +270,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/accesses/{provider}/{access_name}/holders")
     def access_holders(provider: str, access_name: str, request: Request):
-        _require(current_user(request))
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
         snapshot = latest_snapshot(db_path) or {}
         rows = [row for row in snapshot.get("access_assignments", []) if row.get("provider") == provider and row.get("access_name") == access_name]
         return {"access": {"provider": provider, "name": access_name}, "holders": rows, "paths": []}
@@ -306,7 +302,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/jobs/{job_id}")
     def job(job_id: str, request: Request):
-        _require(current_user(request))
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
         try:
             return get_job(db_path, job_id)
         except KeyError as exc:
@@ -314,7 +310,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/jobs/{job_id}/events")
     def job_events(job_id: str, request: Request):
-        _require(current_user(request))
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
         try:
             get_job(db_path, job_id)
         except KeyError as exc:

@@ -50,13 +50,16 @@ def authenticate_user(conn: sqlite3.Connection, username: str, password: str) ->
 
 
 def ensure_bootstrap_user(conn: sqlite3.Connection) -> None:
-    """Provision the first administrator only when explicit deployment secrets are supplied."""
-    username = os.environ.get("EARE_ADMIN_USERNAME", "").strip()
-    password = os.environ.get("EARE_ADMIN_PASSWORD")
-    if not username or not password:
-        return
+    """Provision the first local administrator, with environment overrides."""
     if conn.execute("SELECT 1 FROM system_users LIMIT 1").fetchone() is None:
-        upsert_user(conn, {"username": username, "display_name": username, "role": "ADMIN", "password": password})
+        username = os.environ.get("EARE_ADMIN_USERNAME", "admin").strip().lower() or "admin"
+        password = os.environ.get("EARE_ADMIN_PASSWORD") or "admin"
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, created_at) VALUES(?,?,?,?,?,?,?,?)",
+            (username, username, username, "ADMIN", json.dumps(["*"]), 1, _password_hash(password), now),
+        )
+        conn.commit()
 
 
 def upsert_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any]:
