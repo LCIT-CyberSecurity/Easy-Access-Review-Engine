@@ -10,6 +10,7 @@ import json
 import os
 import secrets
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -24,11 +25,12 @@ except ModuleNotFoundError:  # pragma: no cover
 from access_review_engine.application import import_file_to_repository
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import load_connector, secret_environment
-from access_review_engine.services import create_decision, create_golden_source, golden_diff, golden_version_from_snapshot, promote_snapshot
-from access_review_engine.storage import Repository, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
+from access_review_engine.reporting import write_reports
+from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot
+from access_review_engine.storage import Repository, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_read_models import projected_rows
-from access_review_engine.web_use_cases import latest_snapshot, list_payloads, preview_import
+from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import
 from access_review_engine.system_admin import authenticate_user, ensure_bootstrap_user, init_system, list_idps, list_users, upsert_idp, upsert_user
 
 
@@ -97,6 +99,20 @@ def create_app(db_path: str | None = None):
     def current_user(request: Request) -> WebPrincipal | None:
         return _decode_session(request.cookies.get(SESSION_COOKIE), session_secret)
 
+    def record_audit(
+        repo: Repository,
+        request: Request,
+        event_type: str,
+        object_type: str | None = None,
+        object_id: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        principal = current_user(request)
+        event = audit(event_type, object_type, object_id)
+        event.actor = principal.subject if principal else None
+        event.details = details or {}
+        repo.insert_append_only("audit_events", event)
+
     @app.get("/api/health")
     def health():
         return {"status": "ok"}
@@ -146,7 +162,10 @@ def create_app(db_path: str | None = None):
     def system_user_create(request: Request, payload: dict[str, Any] = Body(...)):
         _require(current_user(request), ("ADMIN",))
         try:
-            return upsert_user(system_conn, payload)
+            result = upsert_user(system_conn, payload)
+            with Repository(db_path) as repo:
+                record_audit(repo, request, "system.user_upserted", "user", str(result.get("username", "")), {"role": result.get("role", "")})
+            return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -154,7 +173,10 @@ def create_app(db_path: str | None = None):
     def system_idp_create(request: Request, payload: dict[str, Any] = Body(...)):
         _require(current_user(request), ("ADMIN",))
         try:
-            return upsert_idp(system_conn, payload)
+            result = upsert_idp(system_conn, payload)
+            with Repository(db_path) as repo:
+                record_audit(repo, request, "system.identity_provider_upserted", "identity_provider", str(result.get("name", "")), {"kind": result.get("kind", "")})
+            return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -165,8 +187,12 @@ def create_app(db_path: str | None = None):
             snapshots = repo.list_payloads("snapshots")
             if not snapshots:
                 raise HTTPException(status_code=409, detail="No snapshot is available to create a baseline")
-            snapshot = hydrate_snapshot(snapshots[-1])
             requested = payload or {}
+            snapshot_id = requested.get("snapshot_id")
+            selected = next((row for row in snapshots if row.get("id") == snapshot_id), None) if snapshot_id else snapshots[-1]
+            if selected is None:
+                raise HTTPException(status_code=404, detail="Requested snapshot not found")
+            snapshot = hydrate_snapshot(selected)
             name = str(requested.get("name") or "").strip()
             if not name:
                 raise HTTPException(status_code=400, detail="Golden Source name is required")
@@ -181,6 +207,7 @@ def create_app(db_path: str | None = None):
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
+            record_audit(repo, request, "golden_source.version_created", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
             return {"source": asdict(source), "version": asdict(version), "snapshot_id": snapshot.id}
 
     @app.get("/api/golden-sources/{name}/compare")
@@ -198,8 +225,38 @@ def create_app(db_path: str | None = None):
             if snapshot is None:
                 raise HTTPException(status_code=409, detail="A snapshot is required for comparison")
             current = golden_version_from_snapshot(source, snapshot, versions)
-            return {"name": name, "active_version": max(versions, key=lambda item: item.version).version, "observed_snapshot_id": snapshot.id, "changes": golden_diff(versions[-1], current)}
+            active = max(versions, key=lambda item: item.version)
+            return {"name": name, "active_version": active.version, "active_golden_version_id": active.id, "observed_snapshot_id": snapshot.id, "changes": golden_diff(active, current)}
 
+
+    @app.post("/api/golden-sources/{name}/confirm-version")
+    def confirm_golden_version(name: str, request: Request, payload: dict[str, Any] = Body(...)):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        snapshot_id = payload.get("observed_snapshot_id")
+        expected_id = payload.get("active_golden_version_id")
+        if not isinstance(snapshot_id, str) or not isinstance(expected_id, str):
+            raise HTTPException(status_code=400, detail="Comparison context is required")
+        with Repository(db_path) as repo:
+            source_payload = repo.find_by_name("golden_sources", name)
+            if not source_payload:
+                raise HTTPException(status_code=404, detail="Golden Source not found")
+            source = hydrate_golden_source(source_payload)
+            versions = [hydrate_golden_version(row) for row in repo.list_payloads("golden_source_versions") if row.get("golden_source_id") == source.id]
+            active = max(versions, key=lambda item: item.version) if versions else None
+            snapshots = repo.list_payloads("snapshots")
+            current_snapshot = snapshots[-1] if snapshots else None
+            if current_snapshot is None or current_snapshot.get("id") != snapshot_id or active is None or active.id != expected_id:
+                raise HTTPException(status_code=409, detail="The observed or expected data changed since this comparison. Please compare again before confirming.")
+            snapshot = hydrate_snapshot(current_snapshot)
+            try:
+                version = promote_snapshot(source, snapshot, versions)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            source.active_version_id = version.id
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+            record_audit(repo, request, "golden_source.version_confirmed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version, "snapshot_id": snapshot_id})
+            return {"source": asdict(source), "version": asdict(version), "observed_snapshot_id": snapshot_id, "active_golden_version_id": expected_id}
     @app.get("/api/golden-sources/{name}/export")
     def export_baseline(name: str, request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"))
@@ -218,6 +275,29 @@ def create_app(db_path: str | None = None):
                 writer.writerow({"access_provider": item.access_provider, "access_name": item.access_name, "identity_provider": item.identity_provider, "identity_identifier": item.identity_identifier, "permission": item.access_permission or ""})
             return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={name}-baseline.csv"})
 
+
+    @app.get("/api/reports/{campaign_id}/{format}")
+    def campaign_report(campaign_id: str, format: str, request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if format not in {"html", "csv", "json"}:
+            raise HTTPException(status_code=404, detail="Report format not available")
+        with Repository(db_path) as repo:
+            raw = repo.get_payload("campaigns", campaign_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            campaign = hydrate_campaign(raw)
+            items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
+            decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
+            golden = _golden_version(repo, campaign.golden_source_version_id)
+            snapshot = _snapshot(repo, campaign.snapshot_id)
+            with tempfile.TemporaryDirectory(prefix="eare-report-") as directory:
+                write_reports(directory, campaign, items, decisions, golden, snapshot.authentication_posture)
+                filename = {"html": "campaign-report.html", "csv": "campaign-results.csv", "json": "campaign-results.json"}[format]
+                content = (Path(directory) / filename).read_bytes()
+            media = {"html": "text/html", "csv": "text/csv", "json": "application/json"}[format]
+            safe_campaign_id = "".join(character if character.isalnum() or character in "-_" else "_" for character in campaign_id)
+            return StreamingResponse(iter([content]), media_type=media, headers={"Content-Disposition": f"attachment; filename={safe_campaign_id}-{filename}"})
+
     @app.get("/api/dashboard")
     def dashboard(request: Request):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
@@ -226,6 +306,155 @@ def create_app(db_path: str | None = None):
         actions = page("remediation_actions", 500, 0, None, None, None)["items"]
         pending = [item for item in items if not item.get("decision")]
         return {"role": principal.role, "metrics": {"campaigns": len(campaigns), "pending_reviews": len(pending), "remediation_actions": len(actions), "findings": sum(bool(item.get("findings")) for item in items)}, "latest_snapshot": latest_snapshot(db_path), "campaigns": campaigns[:3], "attention": []}
+
+
+    def _snapshot(repo: Repository, snapshot_id: str | None = None):
+        snapshots = repo.list_payloads("snapshots")
+        payload = next((row for row in snapshots if row.get("id") == snapshot_id), None) if snapshot_id else (snapshots[-1] if snapshots else None)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Snapshot not found")
+        return hydrate_snapshot(payload)
+
+    def _golden_version(repo: Repository, version_id: str | None):
+        if not version_id:
+            return None
+        payload = next((row for row in repo.list_payloads("golden_source_versions") if row.get("id") == version_id), None)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Golden Source version not found")
+        return hydrate_golden_version(payload)
+
+    def _campaign_payload(payload: dict[str, Any], *, draft_id: str | None = None):
+        from access_review_engine.domain import Campaign, OwnerRef
+        def owner(value: Any):
+            if value is None:
+                return None
+            if not isinstance(value, dict) or not value.get("provider") or not value.get("identity"):
+                raise HTTPException(status_code=400, detail="Reviewer references require provider and identity")
+            return OwnerRef(provider=str(value["provider"]), identity=str(value["identity"]))
+        allowed = {key: payload[key] for key in ("name", "snapshot_id", "display_name", "description", "golden_source_version_id", "scope", "allow_unresolved_reviewers", "due_at") if key in payload}
+        allowed["name"] = str(allowed.get("name") or "").strip()
+        if not allowed["name"] or not isinstance(allowed.get("snapshot_id"), str) or not allowed["snapshot_id"].strip():
+            raise HTTPException(status_code=400, detail="Campaign name and snapshot_id are required")
+        allowed["snapshot_id"] = allowed["snapshot_id"].strip()
+        allowed["scope"] = allowed.get("scope") or {"type": "all"}
+        if not isinstance(allowed["scope"], dict) or allowed["scope"].get("type") not in {"all", "providers"}:
+            raise HTTPException(status_code=400, detail="Campaign scope must be all or providers")
+        allowed["default_reviewer"] = owner(payload.get("default_reviewer"))
+        allowed["manager"] = owner(payload.get("manager"))
+        if draft_id:
+            allowed["id"] = draft_id
+        return Campaign(**allowed)
+
+    @app.post("/api/campaigns/preview")
+    def campaign_preview(request: Request, payload: dict[str, Any] = Body(...)):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        campaign = _campaign_payload(payload)
+        with Repository(db_path) as repo:
+            snapshot = _snapshot(repo, campaign.snapshot_id)
+            golden = _golden_version(repo, campaign.golden_source_version_id)
+            return preview_campaign_review(campaign, snapshot, golden)
+
+    @app.post("/api/campaigns")
+    def campaign_create(request: Request, payload: dict[str, Any] = Body(...)):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        campaign = _campaign_payload(payload)
+        with Repository(db_path) as repo:
+            _snapshot(repo, campaign.snapshot_id)
+            repo.upsert("campaigns", campaign)
+            record_audit(repo, request, "campaign.created", "campaign", campaign.id, {"snapshot_id": campaign.snapshot_id})
+        return asdict(campaign)
+
+    @app.post("/api/campaigns/{campaign_id}/open")
+    def campaign_open(campaign_id: str, request: Request, payload: dict[str, Any] | None = Body(default=None)):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            raw = repo.get_payload("campaigns", campaign_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            campaign = hydrate_campaign(raw)
+            if payload and "allow_unresolved_reviewers" in payload:
+                campaign.allow_unresolved_reviewers = bool(payload["allow_unresolved_reviewers"])
+            snapshot = _snapshot(repo, campaign.snapshot_id)
+            golden = _golden_version(repo, campaign.golden_source_version_id)
+            try:
+                preparation = prepare_campaign_review(campaign, snapshot, golden)
+                opened, items = open_campaign(campaign, preparation.snapshot)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            repo.upsert("campaigns", opened)
+            for item in items:
+                repo.upsert("review_items", item)
+            record_audit(repo, request, "campaign.opened", "campaign", opened.id, {"review_items": len(items)})
+            return {"campaign": asdict(opened), "items": len(items)}
+
+    @app.post("/api/campaigns/{campaign_id}/close")
+    def campaign_close(campaign_id: str, request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            raw = repo.get_payload("campaigns", campaign_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            campaign = hydrate_campaign(raw)
+            if campaign.status != "open":
+                raise HTTPException(status_code=409, detail="Only open campaigns can be closed")
+            items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
+            decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
+            try:
+                closed = close_campaign(campaign, items, decisions)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            repo.upsert("campaigns", closed)
+            record_audit(repo, request, "campaign.closed", "campaign", closed.id, {"review_items": len(items)})
+            return asdict(closed)
+
+    @app.post("/api/campaigns/{campaign_id}/cancel")
+    def campaign_cancel(campaign_id: str, request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            raw = repo.get_payload("campaigns", campaign_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            campaign = hydrate_campaign(raw)
+            if campaign.status != "draft":
+                raise HTTPException(status_code=409, detail="Only draft campaigns can be cancelled")
+            campaign.status = "cancelled"
+            repo.upsert("campaigns", campaign)
+            record_audit(repo, request, "campaign.cancelled", "campaign", campaign.id)
+            return asdict(campaign)
+
+    @app.post("/api/campaigns/{campaign_id}/promote")
+    def campaign_promote(campaign_id: str, request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            raw = repo.get_payload("campaigns", campaign_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            campaign = hydrate_campaign(raw)
+            if campaign.status != "closed":
+                raise HTTPException(status_code=409, detail="Only closed campaigns can be promoted")
+            source_payloads = repo.list_payloads("golden_sources")
+            if not source_payloads:
+                raise HTTPException(status_code=409, detail="A Golden Source is required")
+            version_payloads = repo.list_payloads("golden_source_versions")
+            selected_version = next((row for row in version_payloads if row.get("id") == campaign.golden_source_version_id), None)
+            source_payload = next(
+                (row for row in source_payloads if row.get("id") == selected_version.get("golden_source_id")),
+                None,
+            ) if selected_version else source_payloads[0]
+            source = hydrate_golden_source(source_payload)
+            versions = [hydrate_golden_version(row) for row in version_payloads if row.get("golden_source_id") == source.id]
+            previous = max(versions, key=lambda item: item.version) if versions else None
+            items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
+            decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
+            try:
+                version = promote_campaign(source, campaign, items, decisions, previous, mode="replace_scope")
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            source.active_version_id = version.id
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+            record_audit(repo, request, "campaign.promoted", "campaign", campaign.id, {"version_id": version.id, "golden_source_id": source.id})
+            return {"source": asdict(source), "version": asdict(version)}
 
     @app.get("/api/campaigns/{campaign_id}")
     def campaign_detail(campaign_id: str, request: Request):
@@ -238,6 +467,15 @@ def create_app(db_path: str | None = None):
         findings = [finding for item in reviews for finding in item.get("findings", [])]
         return {"campaign": campaign, "reviews": reviews, "findings": sorted(set(findings))}
 
+    @app.get("/api/audit-events")
+    def audit_events(request: Request, limit: int = 100, offset: int = 0):
+        _require(current_user(request), ("ADMIN",))
+        bounded_limit = max(1, min(limit, 500))
+        bounded_offset = max(0, offset)
+        with Repository(db_path) as repo:
+            events = repo.list_payloads("audit_events")
+        return {"items": events[bounded_offset : bounded_offset + bounded_limit], "total": len(events), "limit": bounded_limit, "offset": bounded_offset}
+
     tables = {"providers": "providers", "imports": "imports", "identities": "identities", "accesses": "accesses", "assignments": "access_assignments", "golden-sources": "golden_sources", "golden-source-versions": "golden_source_versions", "snapshots": "snapshots", "campaigns": "campaigns", "review-items": "review_items", "decisions": "decisions", "remediation-actions": "remediation_actions"}
     for path, table in tables.items():
         def route(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, _table: str = table):
@@ -247,12 +485,38 @@ def create_app(db_path: str | None = None):
         app.get(f"/api/{path}")(route)
 
     @app.get("/api/findings")
-    def findings(request: Request, limit: int = 100, offset: int = 0, status: str | None = None):
+    def findings(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, campaign: str | None = None):
         _require(current_user(request), ("ADMIN", "OPERATOR"))
-        snapshot = latest_snapshot(db_path)
-        rows = snapshot.get("comparison_states", []) if snapshot else []
+        snapshot = latest_snapshot(db_path) or {}
+        rows = list(snapshot.get("comparison_states", []))
+        if campaign:
+            with Repository(db_path) as repo:
+                campaign_keys = {
+                    (
+                        item.get("access_provider"),
+                        item.get("access_name"),
+                        item.get("identity_provider"),
+                        item.get("identity_identifier"),
+                    )
+                    for item in repo.list_payloads("review_items")
+                    if item.get("campaign_id") == campaign
+                }
+                rows = [
+                    row for row in rows
+                    if (
+                        row.get("access_provider"),
+                        row.get("access_name"),
+                        row.get("identity_provider"),
+                        row.get("identity_identifier"),
+                    ) in campaign_keys
+                ]
         if status:
             rows = [row for row in rows if row.get("classification") == status]
+        if provider:
+            rows = [row for row in rows if row.get("access_provider") == provider]
+        if search:
+            needle = search.casefold()
+            rows = [row for row in rows if needle in json.dumps(row, sort_keys=True).casefold()]
         return {"items": rows[offset : offset + limit], "total": len(rows), "limit": limit, "offset": offset}
 
     @app.get("/api/identities/{identity_id}/accesses")
@@ -265,15 +529,21 @@ def create_app(db_path: str | None = None):
             identity = next((item for item in snapshot.get("identities", []) if item.get("identifier") == identity_id), None)
         if identity is None:
             raise HTTPException(status_code=404, detail="Identity not found")
-        rows = [row for row in snapshot.get("access_assignments", []) if row.get("identity_provider") == identity.get("provider") and row.get("identity_identifier") == identity.get("identifier")]
-        return {"identity": identity, "accesses": rows, "paths": []}
+        assignments = [row for row in snapshot.get("access_assignments", []) if row.get("identity_provider") == identity.get("provider") and row.get("identity_identifier") == identity.get("identifier")]
+        hydrated = hydrate_snapshot(snapshot)
+        evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
+        effective = [asdict(item) for item in evaluation.effective_accesses if item.identity_provider == identity.get("provider") and item.identity_identifier == identity.get("identifier")]
+        return {"identity": identity, "accesses": assignments, "effective_accesses": effective, "paths": [asdict(path) for item in effective for path in item["paths"]]}
 
     @app.get("/api/accesses/{provider}/{access_name}/holders")
     def access_holders(provider: str, access_name: str, request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"))
         snapshot = latest_snapshot(db_path) or {}
         rows = [row for row in snapshot.get("access_assignments", []) if row.get("provider") == provider and row.get("access_name") == access_name]
-        return {"access": {"provider": provider, "name": access_name}, "holders": rows, "paths": []}
+        hydrated = hydrate_snapshot(snapshot)
+        evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
+        effective = [asdict(item) for item in evaluation.effective_accesses if item.access_provider == provider and item.access_name == access_name]
+        return {"access": {"provider": provider, "name": access_name}, "holders": rows, "effective_holders": effective, "paths": [asdict(path) for item in effective for path in item["paths"]]}
 
     @app.post("/api/sources/{provider}/sync", status_code=202)
     def sync(provider: str, request: Request):
@@ -284,16 +554,42 @@ def create_app(db_path: str | None = None):
             if secrets_config.get("password_file"):
                 config.setdefault("credentials", {})["password_file"] = secrets_config["password_file"]
             artifact = Path(db_path).with_name(f".eare-{provider}-{job_id}.zip")
-            update_progress(db_path, job_id, "Collecting read-only source data")
-            result = run_exporter(config, artifact)
-            if result.returncode:
-                raise RunnerError(result.stderr.strip() or "Collector failed")
-            update_progress(db_path, job_id, "Importing and creating snapshot")
-            with Repository(db_path) as repo:
-                snapshot = import_file_to_repository(repo, artifact, provider_name=provider)
-            artifact.unlink(missing_ok=True)
-            return {"snapshot_id": snapshot.id, "provider": provider}
+            try:
+                update_progress(db_path, job_id, "Collecting read-only source data")
+                result = run_exporter(config, artifact)
+                if result.returncode:
+                    raise RunnerError(result.stderr.strip() or "Collector failed")
+                update_progress(db_path, job_id, "Importing and creating snapshot")
+                with Repository(db_path) as repo:
+                    snapshot = import_file_to_repository(repo, artifact, provider_name=provider)
+                    record_audit(repo, request, "source.sync_completed", "snapshot", snapshot.id, {"provider": provider})
+                return {"snapshot_id": snapshot.id, "provider": provider}
+            finally:
+                artifact.unlink(missing_ok=True)
         return create_job(db_path, "sync", operation)
+
+    @app.post("/api/sources/{provider}/preview", status_code=202)
+    def source_preview(provider: str, request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
+        def operation(job_id: str) -> dict[str, Any]:
+            artifact = Path(db_path).with_name(f".eare-preview-{provider}-{job_id}.zip")
+            try:
+                update_progress(db_path, job_id, "Collecting read-only source data")
+                config = load_connector(provider)
+                secrets_config = secret_environment(config)
+                if secrets_config.get("password_file"):
+                    config.setdefault("credentials", {})["password_file"] = secrets_config["password_file"]
+                result = run_exporter(config, artifact)
+                if result.returncode:
+                    raise RunnerError(result.stderr.strip() or "Collector failed")
+                update_progress(db_path, job_id, "Analysing collected data")
+                preview = preview_import(db_path, artifact, provider=provider).as_dict()
+                with Repository(db_path) as repo:
+                    record_audit(repo, request, "source.preview_completed", "provider", provider)
+                return preview
+            finally:
+                artifact.unlink(missing_ok=True)
+        return create_job(db_path, "preview", operation)
 
     @app.post("/api/sources/{provider}/sync/preview")
     def sync_preview(provider: str, request: Request, input_path: str, classification_rules: str | None = None):
@@ -326,6 +622,11 @@ def create_app(db_path: str | None = None):
             if item_payload is None:
                 raise HTTPException(status_code=404, detail="Review item not found")
             item = hydrate_review_item(item_payload)
+            campaign_payload = repo.get_payload("campaigns", item_payload.get("campaign_id"))
+            if campaign_payload is None:
+                raise HTTPException(status_code=409, detail="Review item campaign is missing")
+            if hydrate_campaign(campaign_payload).status != "open":
+                raise HTTPException(status_code=409, detail="Decisions are only allowed for open campaigns")
             if principal.role == "GROUP_OWNER" and (item.reviewer is None or item.reviewer.identity != principal.username):
                 raise HTTPException(status_code=403, detail="Review item is not assigned to this user")
             value = body.get("value")
@@ -337,6 +638,7 @@ def create_app(db_path: str | None = None):
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             repo.insert_append_only("decisions", result)
+            record_audit(repo, request, "review.decision_recorded", "review_item", item.id, {"decision": result.value})
         return asdict(result)
 
     return app

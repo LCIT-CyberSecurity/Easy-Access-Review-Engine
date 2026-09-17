@@ -3,8 +3,19 @@ set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-.env}"
 if [[ -f "$ENV_FILE" ]]; then
+  # The dotenv file supplies defaults; explicit process environment values win.
+  declare -A provided_environment=()
+  for variable_name in LDAP_URI BASE_DN PROVIDER_NAME BIND_DN LDAP_PASSWORD LDAP_PASSWORD_FILE LDAP_CA_CERT SEARCH_SCOPE LDAP_FILTER START_TLS ALLOW_ANONYMOUS ALLOW_PARTIAL PAGE_SIZE CONNECTION_TIMEOUT_SECONDS SEARCH_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS CHECK_ONLY OUTPUT; do
+    if [[ ${!variable_name+x} ]]; then
+      provided_environment["$variable_name"]="${!variable_name}"
+    fi
+  done
   # shellcheck disable=SC1090
   . "$ENV_FILE"
+  for variable_name in "${!provided_environment[@]}"; do
+    printf -v "$variable_name" '%s' "${provided_environment[$variable_name]}"
+  done
+  unset provided_environment
 fi
 
 LDAP_URI="${LDAP_URI:-ldap://localhost}"

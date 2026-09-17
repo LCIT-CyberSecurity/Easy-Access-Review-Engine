@@ -7,6 +7,7 @@ reconciliation remain in ``application`` and ``services``.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from copy import deepcopy
 import json
 from pathlib import Path
 import shutil
@@ -15,7 +16,8 @@ import tempfile
 from typing import Any
 
 from access_review_engine.application import import_file_to_repository, load_classification_rules
-from access_review_engine.domain import Finding
+from access_review_engine.domain import Campaign, Finding, GoldenSourceVersion, Snapshot
+from access_review_engine.services import compare_snapshot, open_campaign
 from access_review_engine.storage import Repository
 
 
@@ -29,6 +31,38 @@ class PreviewSyncResult:
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
+
+@dataclass(frozen=True)
+class CampaignPreparation:
+    """In-memory context shared by campaign preview and opening."""
+
+    snapshot: Snapshot
+    golden_version: GoldenSourceVersion | None
+    comparison_states: list[dict[str, object]]
+
+
+def prepare_campaign_review(campaign: Campaign, snapshot: Snapshot, golden_version: GoldenSourceVersion | None) -> CampaignPreparation:
+    """Recompute campaign rows without changing the persisted snapshot."""
+    rows = compare_snapshot(snapshot, golden_version)
+    scope = campaign.scope or {"type": "all"}
+    if scope.get("type") == "providers":
+        providers = {str(value) for value in scope.get("values", [])}
+        rows = [row for row in rows if str(row.get("access_provider")) in providers]
+    elif scope.get("type") not in (None, "all"):
+        raise ValueError("Unsupported campaign scope")
+    prepared = deepcopy(snapshot)
+    prepared.comparison_states = rows
+    return CampaignPreparation(prepared, golden_version, rows)
+
+
+def preview_campaign_review(campaign: Campaign, snapshot: Snapshot, golden_version: GoldenSourceVersion | None, fallback_reviewer: object | None = None) -> dict[str, object]:
+    """Resolve reviewers through the same service path as the real open operation."""
+    preparation = prepare_campaign_review(campaign, snapshot, golden_version)
+    preview_campaign = deepcopy(campaign)
+    preview_campaign.allow_unresolved_reviewers = True
+    _, items = open_campaign(preview_campaign, preparation.snapshot, fallback_reviewer)  # type: ignore[arg-type]
+    unresolved = [{"identity": item.identity_identifier, "identity_provider": item.identity_provider, "access": item.access_name, "access_provider": item.access_provider} for item in items if item.reviewer is None]
+    return {"total_review_items": len(items), "resolved_reviewers": len(items) - len(unresolved), "unresolved_reviewers": len(unresolved), "unresolved": unresolved, "comparison_states": preparation.comparison_states}
 
 
 def list_payloads(
