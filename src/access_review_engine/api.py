@@ -33,7 +33,7 @@ from access_review_engine.web_jobs import create_job, get_events, get_job, updat
 from access_review_engine.web_read_models import projected_rows
 from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import
 from access_review_engine.directory_auth import DirectoryError, authenticate as directory_authenticate, search_accounts as directory_accounts, test_directory, validate_directory
-from access_review_engine.system_admin import LOCAL_SOURCE, authenticate_user, change_password as update_password, ensure_bootstrap_user, init_system, list_idps, list_users, upsert_idp, upsert_user
+from access_review_engine.system_admin import LOCAL_SOURCE, authenticate_user, change_password as update_password, enabled_admins, ensure_bootstrap_user, init_system, list_idps, list_users, reset_password, set_enabled, upsert_idp, upsert_user
 
 
 SESSION_COOKIE = "eare_session"
@@ -128,7 +128,25 @@ def create_app(db_path: str | None = None):
         return result
 
     def current_user(request: Request) -> WebPrincipal | None:
-        return _decode_session(request.cookies.get(SESSION_COOKIE), session_secret)
+        """Decode the session, then confirm the account is still allowed what it claims.
+
+        The cookie is self-contained, so a disabled account or a changed role would otherwise
+        keep its previous rights until the cookie expires.
+        """
+        principal = _decode_session(request.cookies.get(SESSION_COOKIE), session_secret)
+        if principal is None:
+            return None
+        stored = next((item for item in list_users(system_conn) if item.get("username") == principal.username), None)
+        if stored is None or not stored.get("enabled"):
+            return None
+        return WebPrincipal(
+            principal.subject,
+            str(stored.get("role", principal.role)),
+            frozenset(str(scope) for scope in stored.get("scopes", [])),
+            principal.username,
+            str(stored.get("display_name", principal.display_name)),
+            bool(stored.get("must_change_password", False)),
+        )
 
     def _directory_config(name: str, *, require_enabled: bool = True) -> dict[str, Any] | None:
         config = next((item for item in list_idps(system_conn) if item.get("name") == name), None)
@@ -227,12 +245,27 @@ def create_app(db_path: str | None = None):
         _require(current_user(request), ("ADMIN",))
         return {"users": list_users(system_conn), "identity_providers": list_idps(system_conn), "roles": sorted(ROLES)}
 
+    def _guard_admin_access(principal: WebPrincipal, username: str, *, role: str | None = None, enabled: bool = True) -> None:
+        """Refuse a change that would lock the administrator, or EARE itself, out."""
+        target = str(username).strip().lower()
+        stored = _stored_user(target)
+        if stored is None:
+            return
+        losing_admin = str(stored.get("role")) == "ADMIN" and (not enabled or (role is not None and role != "ADMIN"))
+        if not losing_admin:
+            return
+        if target == principal.username:
+            raise HTTPException(status_code=409, detail="You cannot remove your own administrator access. Ask another administrator.")
+        if enabled_admins(system_conn, excluding=target) == 0:
+            raise HTTPException(status_code=409, detail="This is the last administrator who can sign in. Give another user the ADMIN role first.")
+
     @app.post("/api/system/users")
     def system_user_create(request: Request, payload: dict[str, Any] = Body(...)):
-        _require(current_user(request), ("ADMIN",))
+        principal = _require(current_user(request), ("ADMIN",))
         source = str(payload.get("auth_source") or LOCAL_SOURCE).strip() or LOCAL_SOURCE
         if source != LOCAL_SOURCE and _directory_config(source) is None:
             raise HTTPException(status_code=400, detail="This directory is not configured or not enabled")
+        _guard_admin_access(principal, payload.get("username", ""), role=str(payload.get("role", "")).upper() or None, enabled=bool(payload.get("enabled", True)))
         try:
             result = upsert_user(system_conn, payload)
             with Repository(db_path) as repo:
@@ -240,6 +273,41 @@ def create_app(db_path: str | None = None):
             return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/system/users/{username}/disable")
+    def system_user_disable(username: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN",))
+        _guard_admin_access(principal, username, enabled=False)
+        try:
+            result = set_enabled(system_conn, username, False)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        with Repository(db_path) as repo:
+            record_audit(repo, request, "system.user_disabled", "user", result["username"])
+        return result
+
+    @app.post("/api/system/users/{username}/enable")
+    def system_user_enable(username: str, request: Request):
+        _require(current_user(request), ("ADMIN",))
+        try:
+            result = set_enabled(system_conn, username, True)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        with Repository(db_path) as repo:
+            record_audit(repo, request, "system.user_enabled", "user", result["username"])
+        return result
+
+    @app.post("/api/system/users/{username}/reset-password")
+    def system_user_reset_password(username: str, request: Request, payload: dict[str, Any] = Body(...)):
+        _require(current_user(request), ("ADMIN",))
+        try:
+            result = reset_password(system_conn, username, payload.get("password"))
+        except ValueError as exc:
+            status = 404 if str(exc) == "user not found" else 400
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
+        with Repository(db_path) as repo:
+            record_audit(repo, request, "system.user_password_reset", "user", result["username"])
+        return result
 
     def _validated_idp(payload: dict[str, Any]) -> dict[str, Any]:
         candidate = {**payload, "name": str(payload.get("name", "")).strip(), "kind": str(payload.get("kind", "")).upper()}

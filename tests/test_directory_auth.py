@@ -12,7 +12,15 @@ from access_review_engine.directory_auth import (
     test_directory as check_directory,
     validate_directory,
 )
-from access_review_engine.system_admin import authenticate_user, init_system, list_users, upsert_user
+from access_review_engine.system_admin import (
+    authenticate_user,
+    enabled_admins,
+    init_system,
+    list_users,
+    reset_password,
+    set_enabled,
+    upsert_user,
+)
 
 CONFIG = {
     "name": "corp-directory",
@@ -162,3 +170,39 @@ def test_editing_a_user_keeps_a_pending_password_change():
     assert {user["username"]: user for user in list_users(conn)}["bob"]["must_change_password"] is True
     upsert_user(conn, {"username": "bob", "role": "ADMIN", "must_change_password": False})
     assert {user["username"]: user for user in list_users(conn)}["bob"]["must_change_password"] is False
+
+
+def test_disable_and_enable_keep_the_account_and_its_history():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_system(conn)
+    upsert_user(conn, {"username": "bob", "role": "OPERATOR", "password": "a-secure-password"})
+    set_enabled(conn, "bob", False)
+    assert authenticate_user(conn, "bob", "a-secure-password") is None
+    set_enabled(conn, "bob", True)
+    assert authenticate_user(conn, "bob", "a-secure-password")["role"] == "OPERATOR"
+    assert "user not found" in message_of(ValueError, set_enabled, conn, "nobody", False)
+
+
+def test_reset_password_forces_a_change_and_refuses_directory_accounts():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_system(conn)
+    upsert_user(conn, {"username": "bob", "role": "OPERATOR", "password": "a-secure-password"})
+    reset_password(conn, "bob", "another-secure-password")
+    principal = authenticate_user(conn, "bob", "another-secure-password")
+    assert principal["must_change_password"] is True
+    assert "12 characters" in message_of(ValueError, reset_password, conn, "bob", "short")
+    upsert_user(conn, {"username": "alice", "role": "OPERATOR", "auth_source": "corp-directory", "external_id": "uid=alice"})
+    assert "directory" in message_of(ValueError, reset_password, conn, "alice", "another-secure-password")
+
+
+def test_enabled_admins_counts_who_could_still_sign_in():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    init_system(conn)
+    upsert_user(conn, {"username": "root", "role": "ADMIN", "password": "a-secure-password"})
+    upsert_user(conn, {"username": "second", "role": "ADMIN", "password": "a-secure-password"})
+    upsert_user(conn, {"username": "suspended", "role": "ADMIN", "password": "a-secure-password", "enabled": False})
+    assert enabled_admins(conn) == 2
+    assert enabled_admins(conn, excluding="root") == 1

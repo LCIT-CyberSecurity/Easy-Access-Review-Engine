@@ -1662,6 +1662,52 @@ const blankUser = (source = LOCAL_SOURCE): Row => ({
   enabled: true,
   auth_source: source,
 });
+function Confirm({
+  title,
+  intro,
+  confirmLabel,
+  danger,
+  pending,
+  error,
+  disabled,
+  cancel,
+  confirm,
+  children,
+}: {
+  title: string;
+  intro: ReactNode;
+  confirmLabel: string;
+  danger?: boolean;
+  pending?: boolean;
+  error?: string;
+  disabled?: boolean;
+  cancel: () => void;
+  confirm: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="modal-backdrop" onClick={cancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>{title}</h2>
+        {intro}
+        {children}
+        {error && <p className="form-error">{error}</p>}
+        <div className="modal-actions">
+          <button className="button subtle" onClick={cancel}>
+            Cancel
+          </button>
+          <button
+            className={danger ? "button danger" : "button primary"}
+            disabled={pending || disabled}
+            onClick={confirm}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 function UsersPage() {
   const c = useQueryClient(),
     q = useQuery({ queryKey: ["system"], queryFn: () => getJson("system") }),
@@ -1669,6 +1715,9 @@ function UsersPage() {
     [open, setOpen] = useState(false),
     [picking, setPicking] = useState<Row | null>(null),
     [error, setError] = useState(""),
+    [notice, setNotice] = useState(""),
+    [confirming, setConfirming] = useState<{ action: string; user: Row } | null>(null),
+    [newPassword, setNewPassword] = useState(""),
     [form, setForm] = useState<Row>(blankUser()),
     directories = arr(q.data?.identity_providers).filter((r) => r.enabled && s(r.kind) === "LDAP"),
     source = s(form.auth_source, LOCAL_SOURCE),
@@ -1689,12 +1738,35 @@ function UsersPage() {
           ...(password && !fromDirectory ? { must_change_password: true } : {}),
         });
       },
-      onSuccess: async () => {
+      onSuccess: async (d) => {
         setOpen(false);
         setError("");
+        setNotice(`${s(d.display_name, s(d.username))} saved`);
         await c.invalidateQueries({ queryKey: ["system"] });
       },
       onError: (e) => setError(s(e, "Unable to save user")),
+    }),
+    lifecycle = useMutation({
+      mutationFn: ({ action, user }: { action: string; user: Row }) =>
+        postJson(
+          `system/users/${encodeURIComponent(s(user.username))}/${action}`,
+          action === "reset-password" ? { password: newPassword } : undefined,
+        ),
+      onSuccess: async (_d, variables) => {
+        const name = s(variables.user.display_name, s(variables.user.username));
+        setConfirming(null);
+        setNewPassword("");
+        setError("");
+        setNotice(
+          variables.action === "disable"
+            ? `${name} can no longer sign in`
+            : variables.action === "enable"
+              ? `${name} can sign in again`
+              : `New password set for ${name}. They must change it at their next sign-in.`,
+        );
+        await c.invalidateQueries({ queryKey: ["system"] });
+      },
+      onError: (e) => setError(s(e, "Operation failed")),
     }),
     users = arr(q.data?.users).filter(
       (r) =>
@@ -1741,9 +1813,11 @@ function UsersPage() {
           from it.
         </p>
       )}
+      {notice && <p className="muted">{notice}</p>}
+      {error && !open && !confirming && <p className="form-error">{error}</p>}
       <Filter v={search} onChange={setSearch} />
       <Table
-        cols={["User", "Username", "Signs in with", "Role", "Scope", "Status", "Action"]}
+        cols={["User", "Username", "Signs in with", "Role", "Scope", "Status", "Actions"]}
         q={q}
         rows={users.map((r) => [
           s(r.display_name),
@@ -1755,11 +1829,95 @@ function UsersPage() {
             <Status v={r.enabled ? "enabled" : "disabled"} />
             {r.must_change_password ? <span className="muted"> · password change required</span> : null}
           </>,
-          <button className="link-button" onClick={() => edit(r)}>
-            Edit
-          </button>,
+          <div className="row-actions">
+            <button className="link-button" onClick={() => edit(r)}>
+              Edit
+            </button>
+            {s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE && (
+              <button
+                className="link-button"
+                onClick={() => {
+                  setError("");
+                  setNotice("");
+                  setNewPassword("");
+                  setConfirming({ action: "reset-password", user: r });
+                }}
+              >
+                Reset password
+              </button>
+            )}
+            <button
+              className="link-button"
+              onClick={() => {
+                setError("");
+                setNotice("");
+                setConfirming({ action: r.enabled ? "disable" : "enable", user: r });
+              }}
+            >
+              {r.enabled ? "Disable" : "Enable"}
+            </button>
+          </div>,
         ])}
       />
+      {confirming && confirming.action === "disable" && (
+        <Confirm
+          title={`Disable ${s(confirming.user.display_name, s(confirming.user.username))}?`}
+          intro={
+            <>
+              <p>This person can no longer sign in, and any open session stops working immediately.</p>
+              <p className="muted">
+                Their past decisions, their assigned reviews and the audit trail are kept. You can enable the
+                account again at any time.
+              </p>
+            </>
+          }
+          confirmLabel="Disable account"
+          danger
+          pending={lifecycle.isPending}
+          error={error}
+          cancel={() => setConfirming(null)}
+          confirm={() => lifecycle.mutate(confirming)}
+        />
+      )}
+      {confirming && confirming.action === "enable" && (
+        <Confirm
+          title={`Enable ${s(confirming.user.display_name, s(confirming.user.username))}?`}
+          intro={<p>This person can sign in again with their existing credentials.</p>}
+          confirmLabel="Enable account"
+          pending={lifecycle.isPending}
+          error={error}
+          cancel={() => setConfirming(null)}
+          confirm={() => lifecycle.mutate(confirming)}
+        />
+      )}
+      {confirming && confirming.action === "reset-password" && (
+        <Confirm
+          title={`Reset the password of ${s(confirming.user.display_name, s(confirming.user.username))}?`}
+          intro={
+            <p className="muted">
+              Give them this password through a channel they trust. EARE asks them to choose a new one at
+              their next sign-in.
+            </p>
+          }
+          confirmLabel="Reset password"
+          pending={lifecycle.isPending}
+          disabled={newPassword.length < 12}
+          error={error}
+          cancel={() => setConfirming(null)}
+          confirm={() => lifecycle.mutate(confirming)}
+        >
+          <label>
+            New password (12 characters minimum)
+            <input
+              autoFocus
+              type="password"
+              minLength={12}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+          </label>
+        </Confirm>
+      )}
       {picking && (
         <DirectoryPicker
           directory={picking}

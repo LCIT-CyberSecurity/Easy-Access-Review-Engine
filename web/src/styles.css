@@ -50,3 +50,8 @@ main { max-width: 1440px; margin: 0 auto; padding: 40px; } .page-header { displa
 .tabs .text-button { color:var(--text-muted); padding:9px 0 11px; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; }
 .tabs .text-button:hover { color:var(--text-primary); }
 .tabs .text-button.active { color:var(--primary); border-color:var(--primary); font-weight:600; }
+
+.row-actions{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.modal h2{margin-bottom:6px}
+.modal p{color:var(--text-secondary)}
+.modal .form-error{margin-top:10px}

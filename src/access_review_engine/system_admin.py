@@ -105,6 +105,34 @@ def upsert_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any
     record["must_change_password"] = bool(conn.execute("SELECT must_change_password FROM system_users WHERE username = ?", (username,)).fetchone()[0])
     return record
 
+def set_enabled(conn: sqlite3.Connection, username: str, enabled: bool) -> dict[str, Any]:
+    """Suspend or restore an account without losing its history."""
+    normalized = username.strip().lower()
+    if conn.execute("SELECT 1 FROM system_users WHERE username = ?", (normalized,)).fetchone() is None:
+        raise ValueError("user not found")
+    conn.execute("UPDATE system_users SET enabled = ? WHERE username = ?", (int(bool(enabled)), normalized))
+    conn.commit()
+    return {"username": normalized, "enabled": bool(enabled)}
+
+def reset_password(conn: sqlite3.Connection, username: str, password: str) -> dict[str, Any]:
+    """Set a local account password on behalf of its owner, who must then change it."""
+    normalized = username.strip().lower()
+    row = conn.execute("SELECT auth_source FROM system_users WHERE username = ?", (normalized,)).fetchone()
+    if row is None:
+        raise ValueError("user not found")
+    if (row["auth_source"] or LOCAL_SOURCE) != LOCAL_SOURCE:
+        raise ValueError("directory accounts change their password in their directory")
+    if not isinstance(password, str) or len(password) < 12:
+        raise ValueError("password must contain at least 12 characters")
+    conn.execute("UPDATE system_users SET password_hash = ?, must_change_password = 1 WHERE username = ?", (_password_hash(password), normalized))
+    conn.commit()
+    return {"username": normalized, "must_change_password": True}
+
+def enabled_admins(conn: sqlite3.Connection, excluding: str | None = None) -> int:
+    """Count the administrators who could still sign in, to keep at least one."""
+    rows = conn.execute("SELECT username FROM system_users WHERE role = 'ADMIN' AND enabled = 1")
+    return sum(1 for row in rows if row["username"] != (excluding or "").strip().lower())
+
 def change_password(conn: sqlite3.Connection, username: str, password: str) -> dict[str, Any]:
     if not isinstance(password, str) or len(password) < 12:
         raise ValueError("password must contain at least 12 characters")
