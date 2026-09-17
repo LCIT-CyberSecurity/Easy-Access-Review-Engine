@@ -27,7 +27,7 @@ from access_review_engine.application import import_file_to_repository
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import connector_path, load_connector, secret_environment, validate_connector
 from access_review_engine.reporting import write_reports
-from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot
+from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot
 from access_review_engine.storage import Repository, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_read_models import projected_rows
@@ -516,6 +516,92 @@ def create_app(db_path: str | None = None):
             repo.upsert("golden_source_versions", version)
             record_audit(repo, request, "golden_source.version_confirmed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version, "snapshot_id": snapshot_id})
             return {"source": asdict(source), "version": asdict(version), "observed_snapshot_id": snapshot_id, "active_golden_version_id": expected_id}
+    def _golden_context(repo: Repository, name: str):
+        """Return the Golden Source, its versions and the active one."""
+        payload = repo.find_by_name("golden_sources", name)
+        if not payload:
+            raise HTTPException(status_code=404, detail="Golden Source not found")
+        source = hydrate_golden_source(payload)
+        versions = [hydrate_golden_version(row) for row in repo.list_payloads("golden_source_versions") if row.get("golden_source_id") == source.id]
+        active = next((item for item in versions if item.id == source.active_version_id), None) or (max(versions, key=lambda item: item.version) if versions else None)
+        return source, versions, active
+
+    @app.get("/api/golden-sources/{name}/assignments")
+    def golden_assignments(name: str, request: Request, search: str | None = None, limit: int = 25, offset: int = 0):
+        """Read what the Golden Source currently expects, so it can be reviewed in the WebUI."""
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            source, versions, active = _golden_context(repo, name)
+            if active is None:
+                raise HTTPException(status_code=409, detail="Golden Source has no version yet")
+            rows = [asdict(item) for item in sorted(active.assignments, key=lambda item: item.key())]
+            if search:
+                needle = search.casefold()
+                rows = [row for row in rows if needle in " ".join(str(value or "") for value in row.values()).casefold()]
+            bounded = max(1, min(limit, 500))
+            start = max(0, offset)
+            return {
+                "items": rows[start : start + bounded],
+                "total": len(rows),
+                "limit": bounded,
+                "offset": start,
+                "version": active.version,
+                "version_id": active.id,
+                "source_type": active.source_type,
+                "created_at": active.created_at,
+                "created_by": active.created_by,
+                "source_snapshot_id": active.source_snapshot_id,
+                "source_campaign_id": active.source_campaign_id,
+                "comment": active.comment,
+                "versions": [{"id": item.id, "version": item.version, "source_type": item.source_type, "created_at": item.created_at, "assignments": len(item.assignments), "comment": item.comment} for item in sorted(versions, key=lambda item: item.version)],
+            }
+
+    @app.post("/api/golden-sources/{name}/assignments")
+    def golden_edit_assignments(name: str, request: Request, payload: dict[str, Any] = Body(...)):
+        """Add, remove or replace expected assignments, as a new immutable version."""
+        from access_review_engine.domain import GoldenSourceAssignment
+
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+
+        def entry(row: Any) -> GoldenSourceAssignment:
+            if not isinstance(row, dict):
+                raise HTTPException(status_code=400, detail="Each expected access must be an object")
+            missing = [key for key in ("access_provider", "access_name", "identity_provider", "identity_identifier") if not str(row.get(key, "")).strip()]
+            if missing:
+                raise HTTPException(status_code=400, detail="Expected access requires " + ", ".join(missing))
+            return GoldenSourceAssignment(
+                access_provider=str(row["access_provider"]).strip(),
+                access_name=str(row["access_name"]).strip(),
+                identity_provider=str(row["identity_provider"]).strip(),
+                identity_identifier=str(row["identity_identifier"]).strip(),
+                access_native_id=str(row.get("access_native_id") or "") or None,
+                access_permission=str(row.get("access_permission") or "") or None,
+                identity_native_id=str(row.get("identity_native_id") or "") or None,
+            )
+
+        with Repository(db_path) as repo:
+            source, versions, active = _golden_context(repo, name)
+            replace = payload.get("replace")
+            if replace is not None:
+                assignments = {entry(row) for row in replace}
+                origin, comment = "csv", str(payload.get("comment") or "Replaced from the WebUI")
+            else:
+                assignments = set(active.assignments) if active else set()
+                assignments |= {entry(row) for row in payload.get("add", [])}
+                assignments -= {entry(row) for row in payload.get("remove", [])}
+                origin, comment = "manual", str(payload.get("comment") or "Edited in the WebUI")
+            if active is not None and assignments == set(active.assignments):
+                raise HTTPException(status_code=409, detail="This change leaves the Golden Source unchanged")
+            try:
+                version = create_golden_version(source, assignments, origin, versions, parent_version_id=active.id if active else None, comment=comment)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            source.active_version_id = version.id
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+            record_audit(repo, request, "golden_source.version_edited", "golden_source_version", version.id, {"source_id": source.id, "version": version.version, "assignments": len(version.assignments)})
+            return {"version": version.version, "version_id": version.id, "assignments": len(version.assignments)}
+
     @app.get("/api/golden-sources/{name}/export")
     def export_baseline(name: str, request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"))

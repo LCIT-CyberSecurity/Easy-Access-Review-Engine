@@ -1196,71 +1196,166 @@ function CampaignDetail() {
     </>
   );
 }
+const goldenOrigin = (row: Row) => {
+  const kind = s(row.source_type);
+  if (kind === "promoted_campaign") return `Promoted from campaign ${s(row.source_campaign_id, "—")}`;
+  if (kind === "snapshot" || kind === "baseline")
+    return `Adopted from what the systems contained on ${s(row.created_at)}`;
+  if (kind === "csv") return "Imported from a CSV file";
+  if (kind === "manual") return "Edited in the WebUI";
+  if (kind === "from_scratch") return "Started empty";
+  return s(kind, "Unknown origin");
+};
+const blankExpected = (): Row => ({
+  access_provider: "",
+  access_name: "",
+  identity_provider: "",
+  identity_identifier: "",
+  access_permission: "",
+});
 function Golden() {
-  const q = useQuery({ queryKey: ["golden"], queryFn: () => getPage("golden-sources", { limit: 100 }) }),
+  const c = useQueryClient(),
+    q = useQuery({ queryKey: ["golden"], queryFn: () => getPage("golden-sources", { limit: 100 }) }),
     snap = useQuery({ queryKey: ["snap"], queryFn: () => getPage("snapshots", { limit: 100 }) }),
-    versions = useQuery({
-      queryKey: ["golden-versions"],
-      queryFn: () => getPage("golden-source-versions", { limit: 100 }),
-    }),
-    [compare, setCompare] = useState<Row | null>(null),
-    [name, setName] = useState("Main baseline"),
-    [sid, setSid] = useState(""),
     source = arr(q.data?.items)[0],
     sourceName = s(source?.name, ""),
-    active =
-      arr(versions.data?.items).find((v) => s(v.id) === s(source?.active_version_id)) ??
-      arr(versions.data?.items).slice(-1)[0],
+    encoded = encodeURIComponent(sourceName),
+    [compare, setCompare] = useState<Row | null>(null),
+    [notice, setNotice] = useState<{ tone: string; text: string } | null>(null),
+    [name, setName] = useState("Main baseline"),
+    [sid, setSid] = useState(""),
+    [tab, setTab] = useState("expected"),
+    [adding, setAdding] = useState<Row | null>(null),
+    [removing, setRemoving] = useState<Row | null>(null),
+    [search, setSearch] = useState(""),
+    selected = debounce(search),
+    [offset, setOffset] = useState(0),
+    [limit, setLimit] = useState(25),
+    content = useQuery({
+      queryKey: ["golden-assignments", sourceName, selected, limit, offset],
+      queryFn: () => getJson(`golden-sources/${encoded}/assignments`, { search: selected, limit, offset }),
+      enabled: Boolean(sourceName),
+      retry: false,
+    }),
+    expected = arr(content.data?.items),
+    history = arr(content.data?.versions),
+    refresh = async () => {
+      await Promise.all([q.refetch(), c.invalidateQueries({ queryKey: ["golden-assignments"] })]);
+    },
     baseline = useMutation({
       mutationFn: () => postJson("golden-sources/baseline", { name, snapshot_id: sid }),
-      onSuccess: () => {
-        q.refetch();
-        versions.refetch();
+      onSuccess: async (d) => {
+        setNotice({
+          tone: "ok",
+          text: `Baseline created · v${s((d.version as Row | undefined)?.version, "1")}`,
+        });
+        await refresh();
       },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to create the baseline") }),
+    }),
+    edit = useMutation({
+      mutationFn: (body: Row) => postJson(`golden-sources/${encoded}/assignments`, body),
+      onSuccess: async (d) => {
+        setAdding(null);
+        setRemoving(null);
+        setNotice({
+          tone: "ok",
+          text: `Version v${s(d.version)} created · ${s(d.assignments)} expected access(es)`,
+        });
+        await refresh();
+      },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to change the Golden Source") }),
     }),
     compareMutation = useMutation({
-      mutationFn: () => getJson(`golden-sources/${sourceName}/compare`),
-      onSuccess: setCompare,
+      mutationFn: () => getJson(`golden-sources/${encoded}/compare`),
+      onSuccess: (d) => {
+        setCompare(d);
+        setTab("changes");
+        setNotice(null);
+      },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to compare with the systems") }),
     }),
     confirm = useMutation({
       mutationFn: () =>
-        postJson(`golden-sources/${sourceName}/confirm-version`, {
+        postJson(`golden-sources/${encoded}/confirm-version`, {
           observed_snapshot_id: compare?.observed_snapshot_id,
           active_golden_version_id: compare?.active_golden_version_id,
         }),
-      onSuccess: () => {
+      onSuccess: async (d) => {
         setCompare(null);
-        q.refetch();
-        versions.refetch();
+        setTab("expected");
+        setNotice({
+          tone: "ok",
+          text: `Version v${s((d.version as Row | undefined)?.version)} is now the expected state`,
+        });
+        await refresh();
       },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to confirm this version") }),
     }),
-    snapshots = arr(snap.data?.items),
-    changes = arr(compare?.changes);
+    snapshots = [...arr(snap.data?.items)].sort((a, b) => s(a.created_at).localeCompare(s(b.created_at))),
+    latest = snapshots[snapshots.length - 1],
+    changes = arr(compare?.changes),
+    counted = (state: string) => changes.filter((r) => r.status === state).length;
+  useEffect(() => setOffset(0), [selected]);
+  useEffect(() => {
+    if (!sid && latest) setSid(s(latest.id));
+  }, [latest?.id]);
   return (
     <>
-      <Head title="Golden Source" />
+      <Head title="Golden Source">
+        {source && (
+          <div className="button-row">
+            <a className="button subtle" href={`/api/golden-sources/${encoded}/export`}>
+              Export CSV
+            </a>
+            <button
+              className="button primary"
+              onClick={() => compareMutation.mutate()}
+              disabled={compareMutation.isPending}
+            >
+              {compareMutation.isPending ? "Comparing…" : "Compare with the systems"}
+            </button>
+          </div>
+        )}
+      </Head>
+      <p className="muted">
+        The Golden Source is the list of accesses that are <strong>expected</strong>. Everything the systems
+        contain beyond this list is reported as unexpected, and everything missing from the systems is
+        reported as missing.
+      </p>
+      {notice && <p className={notice.tone === "ok" ? "muted" : "form-error"}>{notice.text}</p>}
       {!source ? (
         <section className="panel">
-          <h2>No expected baseline yet</h2>
+          <h2>No expected state yet</h2>
           {snapshots.length ? (
             <>
-              <p>LATEST OBSERVED SNAPSHOT</p>
               <p>
-                Collected: {s(snapshots[snapshots.length - 1].created_at)} · Assignments:{" "}
-                {s(snapshots[snapshots.length - 1].assignment_count, "—")}
+                Start from what the systems contain today: EARE reads the latest collected state and declares
+                it expected. You can then correct it access by access.
+              </p>
+              <p className="muted">
+                Latest collection: {s(latest?.created_at)} ·{" "}
+                {s(
+                  arr(latest?.providers)
+                    .map((x) => s(x.name))
+                    .join(", "),
+                  "source unknown",
+                )}
               </p>
               <div className="admin-form">
                 <label>
-                  Baseline name
+                  Name
                   <input value={name} onChange={(e) => setName(e.target.value)} />
                 </label>
                 <label>
-                  Explicit snapshot
+                  Collected state to adopt
                   <select value={sid} onChange={(e) => setSid(e.target.value)}>
-                    <option value="">Select snapshot</option>
                     {snapshots.map((r) => (
                       <option key={s(r.id)} value={s(r.id)}>
-                        {s(r.created_at)} · {s(r.id)}
+                        {s(r.created_at)} ·{" "}
+                        {arr(r.providers)
+                          .map((x) => s(x.name))
+                          .join(", ")}
                       </option>
                     ))}
                   </select>
@@ -1270,14 +1365,14 @@ function Golden() {
                   disabled={!sid || baseline.isPending}
                   onClick={() => baseline.mutate()}
                 >
-                  Create baseline
+                  Adopt as expected state
                 </button>
               </div>
             </>
           ) : (
             <>
-              <p>No observed snapshot yet.</p>
-              <p>Synchronize a source before creating the expected baseline.</p>
+              <p>Nothing has been collected yet, so there is no state to declare as expected.</p>
+              <p className="muted">Synchronize a source first, then come back here.</p>
               <NavLink className="button subtle" to="/sources">
                 Go to Sources &amp; IdPs
               </NavLink>
@@ -1287,52 +1382,211 @@ function Golden() {
       ) : (
         <>
           <section className="panel">
-            <h2>Golden Source</h2>
-            <p>ACTIVE VERSION · v{s(active?.version, "—")}</p>
+            <h2>{s(source.display_name, sourceName)}</h2>
             <p>
-              Expected assignments:{" "}
-              {s(active?.assignments ? arr(active.assignments).length : active?.assignment_count, "—")}
+              <strong>v{s(content.data?.version, "—")}</strong> · {s(content.data?.total, "0")} expected
+              access(es)
             </p>
-            <p>Origin: Baseline / Campaign promotion</p>
-            <button
-              className="button primary"
-              onClick={() => compareMutation.mutate()}
-              disabled={compareMutation.isPending}
-            >
-              Compare with latest observed
-            </button>
+            <p className="muted">
+              {content.data ? goldenOrigin(content.data as Row) : "Loading…"}
+              {content.data?.comment ? ` · ${s(content.data.comment)}` : ""}
+            </p>
           </section>
-          {compare && (
-            <section className="panel">
-              <h2>Preview diff</h2>
-              <div className="diff-summary">
-                <strong>ADDED {changes.filter((r) => r.status === "added").length}</strong>
-                <strong>REMOVED {changes.filter((r) => r.status === "removed").length}</strong>
-                <strong>UNCHANGED {changes.filter((r) => r.status === "unchanged").length}</strong>
-              </div>
+          <div className="tabs">
+            <button
+              className={tab === "expected" ? "text-button active" : "text-button"}
+              onClick={() => setTab("expected")}
+            >
+              Expected access
+            </button>
+            <button
+              className={tab === "changes" ? "text-button active" : "text-button"}
+              onClick={() => setTab("changes")}
+            >
+              Changes since the last collection
+            </button>
+            <button
+              className={tab === "history" ? "text-button active" : "text-button"}
+              onClick={() => setTab("history")}
+            >
+              Version history
+            </button>
+          </div>
+          {tab === "expected" && (
+            <>
+              <Filter v={search} onChange={setSearch}>
+                <button className="button subtle" onClick={() => setAdding(blankExpected())}>
+                  + Add expected access
+                </button>
+              </Filter>
               <Table
-                cols={["State", "Identity", "Access", "Provider"]}
-                rows={changes.map((r) => [
-                  <Status v={r.status} />,
+                cols={["Identity", "Source", "Access", "Permission", ""]}
+                q={content}
+                rows={expected.map((r) => [
                   s(r.identity_identifier),
-                  s(r.access_name),
                   s(r.access_provider),
+                  s(r.access_name),
+                  s(r.access_permission),
+                  <button className="link-button" onClick={() => setRemoving(r)}>
+                    Remove
+                  </button>,
                 ])}
               />
-              <p className="muted">
-                Compare mutates nothing. Confirm creates the next version using the returned observed and
-                active version IDs.
-              </p>
-              <button
-                className="button primary"
-                onClick={() => confirm.mutate()}
-                disabled={confirm.isPending}
-              >
-                Confirm new version
-              </button>
+              <Pager
+                total={Number(content.data?.total ?? 0)}
+                limit={limit}
+                offset={offset}
+                setOffset={setOffset}
+                setLimit={setLimit}
+              />
+            </>
+          )}
+          {tab === "changes" && (
+            <section className="panel">
+              {!compare ? (
+                <>
+                  <h2>Nothing compared yet</h2>
+                  <p>
+                    Compare the expected state with what the systems contain today. Comparing changes nothing
+                    on its own.
+                  </p>
+                  <button
+                    className="button primary"
+                    onClick={() => compareMutation.mutate()}
+                    disabled={compareMutation.isPending}
+                  >
+                    Compare with the systems
+                  </button>
+                </>
+              ) : (
+                <>
+                  <h2>{counted("added") + counted("removed")} change(s) since the last collection</h2>
+                  <div className="diff-summary">
+                    <strong>{counted("added")} to become expected</strong>
+                    <strong>{counted("removed")} no longer present</strong>
+                    <strong>{counted("unchanged")} unchanged</strong>
+                  </div>
+                  <Table
+                    cols={["Change", "Identity", "Access", "Source"]}
+                    rows={changes
+                      .filter((r) => r.status !== "unchanged")
+                      .map((r) => [
+                        <Status v={r.status === "added" ? "added" : "removed"} />,
+                        s(r.identity_identifier),
+                        s(r.access_name),
+                        s(r.access_provider),
+                      ])}
+                  />
+                  <p className="muted">
+                    Confirming records a new expected version containing exactly what the systems contain
+                    today. The previous version is kept in the history.
+                  </p>
+                  <button
+                    className="button primary"
+                    onClick={() => confirm.mutate()}
+                    disabled={confirm.isPending || counted("added") + counted("removed") === 0}
+                  >
+                    Accept these changes as expected
+                  </button>
+                </>
+              )}
             </section>
           )}
+          {tab === "history" && (
+            <Table
+              cols={["Version", "Origin", "Created", "Expected access"]}
+              q={content}
+              rows={[...history]
+                .reverse()
+                .map((r) => [
+                  <strong>v{s(r.version)}</strong>,
+                  goldenOrigin(r),
+                  s(r.created_at),
+                  s(r.assignments, "0"),
+                ])}
+            />
+          )}
         </>
+      )}
+      {adding && (
+        <Drawer title="Add an expected access" close={() => setAdding(null)}>
+          <p className="muted">
+            Declaring an access expected creates a new version. Nothing changes in the audited systems.
+          </p>
+          <form
+            className="admin-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              edit.mutate({ add: [adding] });
+            }}
+          >
+            <label>
+              Identity
+              <input
+                required
+                placeholder="alice.martin"
+                value={s(adding.identity_identifier, "")}
+                onChange={(e) => setAdding({ ...adding, identity_identifier: e.target.value })}
+              />
+            </label>
+            <label>
+              Identity source
+              <input
+                required
+                placeholder="corp-ad"
+                value={s(adding.identity_provider, "")}
+                onChange={(e) => setAdding({ ...adding, identity_provider: e.target.value })}
+              />
+            </label>
+            <label>
+              Access
+              <input
+                required
+                placeholder="GRP-Finance-RW"
+                value={s(adding.access_name, "")}
+                onChange={(e) => setAdding({ ...adding, access_name: e.target.value })}
+              />
+            </label>
+            <label>
+              Access source
+              <input
+                required
+                placeholder="corp-ad"
+                value={s(adding.access_provider, "")}
+                onChange={(e) => setAdding({ ...adding, access_provider: e.target.value })}
+              />
+            </label>
+            <label>
+              Permission
+              <input
+                value={s(adding.access_permission, "")}
+                onChange={(e) => setAdding({ ...adding, access_permission: e.target.value })}
+              />
+            </label>
+            <button className="button primary" type="submit" disabled={edit.isPending}>
+              Add to the expected state
+            </button>
+          </form>
+        </Drawer>
+      )}
+      {removing && (
+        <Confirm
+          title="Remove this expected access?"
+          intro={
+            <>
+              <p>
+                {s(removing.identity_identifier)} → {s(removing.access_name)} ({s(removing.access_provider)})
+                stops being expected. If the systems still grant it, the next review reports it as unexpected.
+              </p>
+              <p className="muted">A new version is recorded. The current one stays in the history.</p>
+            </>
+          }
+          confirmLabel="Remove from the expected state"
+          danger
+          pending={edit.isPending}
+          cancel={() => setRemoving(null)}
+          confirm={() => edit.mutate({ remove: [removing] })}
+        />
       )}
     </>
   );
