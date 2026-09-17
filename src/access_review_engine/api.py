@@ -32,7 +32,8 @@ from access_review_engine.storage import Repository, hydrate_campaign, hydrate_d
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_read_models import projected_rows
 from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import
-from access_review_engine.system_admin import authenticate_user, change_password as update_password, ensure_bootstrap_user, init_system, list_idps, list_users, upsert_idp, upsert_user
+from access_review_engine.directory_auth import DirectoryError, authenticate as directory_authenticate, search_accounts as directory_accounts, test_directory, validate_directory
+from access_review_engine.system_admin import LOCAL_SOURCE, authenticate_user, change_password as update_password, ensure_bootstrap_user, init_system, list_idps, list_users, upsert_idp, upsert_user
 
 
 SESSION_COOKIE = "eare_session"
@@ -129,6 +130,25 @@ def create_app(db_path: str | None = None):
     def current_user(request: Request) -> WebPrincipal | None:
         return _decode_session(request.cookies.get(SESSION_COOKIE), session_secret)
 
+    def _directory_config(name: str, *, require_enabled: bool = True) -> dict[str, Any] | None:
+        config = next((item for item in list_idps(system_conn) if item.get("name") == name), None)
+        if config is None or (require_enabled and not config.get("enabled")):
+            return None
+        return config
+
+    def _directory_login(source: str, username: str, external_id: str | None, password: str) -> bool:
+        """Verify a directory account against its directory at sign-in time."""
+        config = _directory_config(source)
+        if config is None:
+            return False
+        try:
+            return directory_authenticate(config, username, password, distinguished_name=external_id) is not None
+        except DirectoryError:
+            return False
+
+    def _stored_user(username: str) -> dict[str, Any] | None:
+        return next((item for item in list_users(system_conn) if item.get("username") == str(username).strip().lower()), None)
+
     def record_audit(
         repo: Repository,
         request: Request,
@@ -164,7 +184,7 @@ def create_app(db_path: str | None = None):
         username, password = payload.get("username"), payload.get("password")
         if not isinstance(username, str) or not isinstance(password, str) or not username.strip() or not password:
             raise HTTPException(status_code=400, detail="Username and password are required")
-        principal = authenticate_user(system_conn, username, password)
+        principal = authenticate_user(system_conn, username, password, _directory_login)
         if principal is None:
             raise HTTPException(status_code=401, detail="Invalid credentials")
         response.set_cookie(SESSION_COOKIE, _encode_session(principal, session_secret), httponly=True, secure=os.environ.get("EARE_COOKIE_SECURE") == "1", samesite="strict", max_age=SESSION_TTL_SECONDS, path="/")
@@ -176,6 +196,9 @@ def create_app(db_path: str | None = None):
         if principal is None:
             raise HTTPException(status_code=401, detail="Authentication required")
         password = payload.get("new_password")
+        stored = _stored_user(principal.username)
+        if stored is not None and (stored.get("auth_source") or LOCAL_SOURCE) != LOCAL_SOURCE:
+            raise HTTPException(status_code=400, detail="Directory accounts change their password in their directory")
         try:
             updated = update_password(system_conn, principal.username, password)
         except ValueError as exc:
@@ -207,24 +230,59 @@ def create_app(db_path: str | None = None):
     @app.post("/api/system/users")
     def system_user_create(request: Request, payload: dict[str, Any] = Body(...)):
         _require(current_user(request), ("ADMIN",))
+        source = str(payload.get("auth_source") or LOCAL_SOURCE).strip() or LOCAL_SOURCE
+        if source != LOCAL_SOURCE and _directory_config(source) is None:
+            raise HTTPException(status_code=400, detail="This directory is not configured or not enabled")
         try:
             result = upsert_user(system_conn, payload)
             with Repository(db_path) as repo:
-                record_audit(repo, request, "system.user_upserted", "user", str(result.get("username", "")), {"role": result.get("role", "")})
+                record_audit(repo, request, "system.user_upserted", "user", str(result.get("username", "")), {"role": result.get("role", ""), "auth_source": result.get("auth_source", LOCAL_SOURCE)})
             return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    def _validated_idp(payload: dict[str, Any]) -> dict[str, Any]:
+        candidate = {**payload, "name": str(payload.get("name", "")).strip(), "kind": str(payload.get("kind", "")).upper()}
+        if candidate["kind"] == "LDAP":
+            try:
+                validate_directory(candidate)
+            except DirectoryError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return candidate
 
     @app.post("/api/system/identity-providers")
     def system_idp_create(request: Request, payload: dict[str, Any] = Body(...)):
         _require(current_user(request), ("ADMIN",))
         try:
-            result = upsert_idp(system_conn, payload)
+            result = upsert_idp(system_conn, _validated_idp(payload))
             with Repository(db_path) as repo:
-                record_audit(repo, request, "system.identity_provider_upserted", "identity_provider", str(result.get("name", "")), {"kind": result.get("kind", "")})
+                record_audit(repo, request, "system.identity_provider_upserted", "identity_provider", str(result.get("name", "")), {"kind": result.get("kind", ""), "enabled": result.get("enabled", False)})
             return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/system/identity-providers/test")
+    def system_idp_test(request: Request, payload: dict[str, Any] = Body(...)):
+        """Check a directory configuration before it is saved."""
+        _require(current_user(request), ("ADMIN",))
+        try:
+            return test_directory(_validated_idp(payload))
+        except DirectoryError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/system/identity-providers/{name}/accounts")
+    def system_idp_accounts(name: str, request: Request, search: str = "", limit: int = 25):
+        """List directory accounts an administrator can import as EARE users."""
+        _require(current_user(request), ("ADMIN",))
+        config = _directory_config(name, require_enabled=False)
+        if config is None:
+            raise HTTPException(status_code=404, detail="Directory not found")
+        try:
+            accounts = directory_accounts(config, search, limit)
+        except DirectoryError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        known = {str(user.get("username")) for user in list_users(system_conn)}
+        return {"items": [{**account, "imported": account["login"].lower() in known} for account in accounts], "directory": name}
 
     @app.get("/api/system/sources")
     def system_sources(request: Request):
