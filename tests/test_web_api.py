@@ -85,6 +85,26 @@ if TestClient is not None:
         _login(client, "admin", "admin")
 
 
+    def test_web_source_configuration_is_validated_and_persisted_without_plaintext_secrets(tmp_path):
+        db = tmp_path / "sources.db"
+        app = create_app(str(db))
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        upsert_user(conn, {"username": "admin", "role": "ADMIN", "password": "admin-password"})
+        conn.close()
+        client = TestClient(app)
+        _login(client, "admin", "admin-password")
+        payload = {"provider": "corp-ad", "type": "active_directory", "connection": {"server": "dc01.example.test"}, "collection": {"timeout": 60, "allow_partial": False}, "credentials": {"password_env": "LDAP_PASSWORD"}}
+        saved = client.post("/api/system/sources", json=payload)
+        assert saved.status_code == 200
+        assert client.get("/api/system/sources").json()["sources"][0]["provider"] == "corp-ad"
+        assert (tmp_path / "connectors" / "corp-ad.yaml").is_file()
+        assert "password: secret" not in (tmp_path / "connectors" / "corp-ad.yaml").read_text().lower()
+        invalid = client.post("/api/system/sources", json={**payload, "credentials": {"password": "secret"}})
+        assert invalid.status_code == 400
+
+
     def test_campaign_promotion_rejects_missing_golden_reference_when_multiple_sources_exist():
         db = Path(tempfile.mkstemp(prefix="eare-promotion-", suffix=".db")[1])
         app = create_app(str(db))

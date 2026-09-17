@@ -12,6 +12,7 @@ import secrets
 import sqlite3
 import tempfile
 import time
+import yaml
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from access_review_engine.application import import_file_to_repository
 from access_review_engine.collector_runner import RunnerError, run_exporter
-from access_review_engine.config_loader import load_connector, secret_environment
+from access_review_engine.config_loader import connector_path, load_connector, secret_environment, validate_connector
 from access_review_engine.reporting import write_reports
 from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot
 from access_review_engine.storage import Repository, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
@@ -98,6 +99,32 @@ def create_app(db_path: str | None = None):
     init_system(system_conn)
     ensure_bootstrap_user(system_conn)
     session_secret = os.environ.get("EARE_SESSION_SECRET", "").encode() or secrets.token_bytes(32)
+    connector_directory = Path(db_path).resolve().parent / "connectors"
+
+    def _load_web_connector(provider: str) -> dict[str, Any]:
+        try:
+            return load_connector(provider, connector_path(provider, connector_directory))
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    def _validate_web_connector(payload: dict[str, Any]) -> dict[str, Any]:
+        candidate = dict(payload)
+        provider = str(candidate.get("provider", "")).strip().lower()
+        candidate["provider"] = provider
+        try:
+            validate_connector(candidate, provider)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        candidate.pop("_path", None)
+        return candidate
+
+    def _public_connector(payload: dict[str, Any]) -> dict[str, Any]:
+        result = dict(payload)
+        result.pop("_path", None)
+        credentials = result.get("credentials")
+        if isinstance(credentials, dict):
+            result["credentials"] = {key: value for key, value in credentials.items() if key.endswith("_env")}
+        return result
 
     def current_user(request: Request) -> WebPrincipal | None:
         return _decode_session(request.cookies.get(SESSION_COOKIE), session_secret)
@@ -198,6 +225,48 @@ def create_app(db_path: str | None = None):
             return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/system/sources")
+    def system_sources(request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        connector_directory.mkdir(parents=True, exist_ok=True)
+        sources = []
+        for path in sorted(connector_directory.glob("*.yaml")):
+            try:
+                sources.append(_public_connector(load_connector(path.stem, path)))
+            except ValueError:
+                continue
+        return {"sources": sources}
+
+    @app.post("/api/system/sources")
+    def system_source_save(request: Request, payload: dict[str, Any] = Body(...)):
+        _require(current_user(request), ("ADMIN",))
+        candidate = _validate_web_connector(payload)
+        path = connector_path(str(candidate["provider"]), connector_directory)
+        connector_directory.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(candidate, sort_keys=False), encoding="utf-8")
+        with Repository(db_path) as repo:
+            record_audit(repo, request, "source.configuration_saved", "provider", str(candidate["provider"]), {"type": candidate["type"]})
+        return _public_connector(load_connector(str(candidate["provider"]), path))
+
+    @app.post("/api/system/sources/test")
+    def system_source_test(request: Request, payload: dict[str, Any] = Body(...)):
+        _require(current_user(request), ("ADMIN",))
+        candidate = _validate_web_connector(payload)
+        try:
+            secret_environment(candidate)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        candidate["_check_only"] = True
+        with tempfile.TemporaryDirectory(prefix="eare-source-check-") as directory:
+            output = Path(directory) / "connection-check.zip"
+            try:
+                result = run_exporter(candidate, output)
+            except (RunnerError, ValueError) as exc:
+                raise HTTPException(status_code=502, detail="Source connection test failed") from exc
+        if result.returncode:
+            raise HTTPException(status_code=502, detail="Source connection test failed")
+        return {"status": "healthy", "provider": candidate["provider"], "message": "Connection test succeeded"}
 
     @app.post("/api/golden-sources/baseline")
     def create_baseline(request: Request, payload: dict[str, Any] | None = Body(default=None)):
@@ -572,7 +641,7 @@ def create_app(db_path: str | None = None):
     def sync(provider: str, request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
         def operation(job_id: str) -> dict[str, Any]:
-            config = load_connector(provider)
+            config = _load_web_connector(provider)
             secrets_config = secret_environment(config)
             if secrets_config.get("password_file"):
                 config.setdefault("credentials", {})["password_file"] = secrets_config["password_file"]
@@ -598,7 +667,7 @@ def create_app(db_path: str | None = None):
             artifact = Path(db_path).with_name(f".eare-preview-{provider}-{job_id}.zip")
             try:
                 update_progress(db_path, job_id, "Collecting read-only source data")
-                config = load_connector(provider)
+                config = _load_web_connector(provider)
                 secrets_config = secret_environment(config)
                 if secrets_config.get("password_file"):
                     config.setdefault("credentials", {})["password_file"] = secrets_config["password_file"]
