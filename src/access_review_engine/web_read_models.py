@@ -26,16 +26,30 @@ def review_item_view(repo: Repository, row: dict[str, Any], *, latest_decisions:
     return result
 
 
-def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None) -> dict[str, object]:
+def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, campaign: str | None = None) -> dict[str, object]:
     with Repository(db_path) as repo:
         raw = repo.list_payloads(table)
         latest_decisions = _latest_decisions(repo.list_payloads("decisions"))
         rows = [review_item_view(repo, item, latest_decisions=latest_decisions) for item in raw] if table == "review_items" else [dict(item) for item in raw]
+        if table == "remediation_actions":
+            review_items = {str(item.get("id")): item for item in repo.list_payloads("review_items")}
+            for row in rows:
+                review_item = review_items.get(str(row.get("review_item_id")), {})
+                for key in ("campaign_id", "identity_identifier", "identity_provider", "access_name", "access_provider", "target"):
+                    if key not in row and key in review_item:
+                        row[key] = review_item[key]
+                decision = latest_decisions.get(str(row.get("review_item_id")))
+                if decision is not None and "decision" not in row:
+                    row["decision"] = decision.get("value")
         if table == "review_items" and reviewer_username is not None:
             rows = [row for row in rows if (row.get("reviewer") or {}).get("identity") == reviewer_username]
-        if table == "remediation_actions" and allowed_providers is not None:
+        if campaign and table == "review_items":
+            rows = [row for row in rows if row.get("campaign_id") == campaign]
+        if campaign and table == "remediation_actions":
             items = {str(item.get("id")): item for item in repo.list_payloads("review_items")}
-            rows = [row for row in rows if items.get(str(row.get("review_item_id")), {}).get("access_provider") in allowed_providers]
+            rows = [row for row in rows if items.get(str(row.get("review_item_id")), {}).get("campaign_id") == campaign]
+        if table == "remediation_actions" and allowed_providers is not None:
+            rows = [row for row in rows if row.get("access_provider") in allowed_providers]
         if table == "providers":
             snapshots = repo.list_payloads("snapshots")
             snapshot = snapshots[-1] if snapshots else None
@@ -78,7 +92,7 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             needle = search.casefold()
             rows = [row for row in rows if needle in _search_text(row).casefold()]
         if status:
-            rows = [row for row in rows if row.get("status") == status or row.get("decision") == status]
+            rows = [row for row in rows if row.get("status") == status or row.get("decision") == status or (table == "identities" and row.get("type") == status)]
         if provider:
             rows = [row for row in rows if provider in {row.get("provider"), row.get("identity_provider"), row.get("access_provider")}]
         rows.sort(key=lambda item: str(item.get("identifier", item.get("name", item.get("id", "")))).casefold())

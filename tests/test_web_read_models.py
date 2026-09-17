@@ -79,3 +79,28 @@ def test_source_summary_uses_latest_snapshot_data(tmp_path):
     assert source["group_count"] == 1
     assert source["access_count"] == 1
     assert source["latest_snapshot"] == "snapshot-1"
+
+
+def test_remediation_actions_include_review_context_and_campaign_filter(tmp_path):
+    db = tmp_path / "web.db"
+    with Repository(db) as repo:
+        repo.upsert("review_items", {"id": "review-1", "campaign_id": "campaign-a", "identity_identifier": "alice", "identity_provider": "ad", "access_name": "Finance", "access_provider": "finance", "target": "prod"})
+        repo.insert_append_only("remediation_actions", {"id": "action-1", "review_item_id": "review-1", "action": "revoke", "status": "pending"})
+
+    result = projected_rows(str(db), "remediation_actions", limit=10, offset=0, campaign="campaign-a")
+
+    assert result["total"] == 1
+    assert result["items"][0]["identity_identifier"] == "alice"
+    assert result["items"][0]["access_name"] == "Finance"
+    assert result["items"][0]["campaign_id"] == "campaign-a"
+
+
+def test_identity_type_can_be_used_as_status_filter(tmp_path):
+    db = tmp_path / "web.db"
+    with Repository(db) as repo:
+        repo.upsert("identities", {"id": "identity-1", "provider": "ad", "identifier": "alice", "type": "user", "status": "active"})
+        repo.upsert("identities", {"id": "identity-2", "provider": "ad", "identifier": "engineering", "type": "group", "status": "active"})
+
+    result = projected_rows(str(db), "identities", limit=10, offset=0, status="group")
+
+    assert [item["id"] for item in result["items"]] == ["identity-2"]

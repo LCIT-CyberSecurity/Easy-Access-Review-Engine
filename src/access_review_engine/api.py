@@ -147,11 +147,11 @@ def create_app(db_path: str | None = None):
     def health():
         return {"status": "ok"}
 
-    def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None):
-        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider)
+    def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None):
+        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign)
 
-    def scoped_page(principal: WebPrincipal, table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None):
-        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=principal.scopes if principal.role == "BUSINESS_ADMIN" else None)
+    def scoped_page(principal: WebPrincipal, table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None):
+        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=principal.scopes if principal.role == "BUSINESS_ADMIN" else None)
 
     def require_table_access(principal: WebPrincipal, table: str) -> None:
         if principal.role == "BUSINESS_ADMIN" and table != "remediation_actions":
@@ -570,10 +570,10 @@ def create_app(db_path: str | None = None):
 
     tables = {"providers": "providers", "imports": "imports", "identities": "identities", "accesses": "accesses", "assignments": "access_assignments", "golden-sources": "golden_sources", "golden-source-versions": "golden_source_versions", "snapshots": "snapshots", "campaigns": "campaigns", "review-items": "review_items", "decisions": "decisions", "remediation-actions": "remediation_actions"}
     for path, table in tables.items():
-        def route(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, _table: str = table):
+        def route(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, campaign: str | None = None, _table: str = table):
             principal = _require(current_user(request))
             require_table_access(principal, _table)
-            return scoped_page(principal, _table, limit, offset, search, status, provider)
+            return scoped_page(principal, _table, limit, offset, search, status, provider, campaign)
         app.get(f"/api/{path}")(route)
 
     @app.get("/api/findings")
