@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getRows, postDecision } from './client'
+import { getJson, getRows, postDecision } from './client'
 
 describe('API client', () => {
   it('does not fabricate data when the API is unavailable', async () => {
@@ -21,4 +21,10 @@ describe('API client', () => {
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ value: 'approve', comment: 'Reviewed' }) }),
     )
   })
+})
+
+it('reads structured endpoints without assuming an items array', async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ identity: { identifier: 'alice' }, accesses: [], effective_accesses: [], paths: [] }) })
+  vi.stubGlobal('fetch', fetchMock)
+  await expect(getJson('identities/alice/accesses')).resolves.toMatchObject({ identity: { identifier: 'alice' } })
 })

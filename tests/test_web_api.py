@@ -83,3 +83,23 @@ if TestClient is not None:
     def test_default_admin_bootstrap_login():
         client = _client()
         _login(client, "admin", "admin")
+
+
+    def test_campaign_promotion_rejects_missing_golden_reference_when_multiple_sources_exist():
+        db = Path(tempfile.mkstemp(prefix="eare-promotion-", suffix=".db")[1])
+        app = create_app(str(db))
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        upsert_user(conn, {"username": "operator", "role": "OPERATOR", "password": "operator-password"})
+        conn.close()
+        with Repository(db) as repo:
+            for source_id, version_id, name in (("source-a", "version-a", "A"), ("source-b", "version-b", "B")):
+                repo.upsert("golden_sources", {"id": source_id, "name": name, "display_name": name, "active_version_id": version_id})
+                repo.upsert("golden_source_versions", {"id": version_id, "golden_source_id": source_id, "version": 1, "source_type": "snapshot", "checksum": version_id, "assignments": []})
+            repo.upsert("campaigns", {"id": "closed-campaign", "name": "Closed", "snapshot_id": "snapshot-1", "status": "closed", "scope": {"type": "all"}, "golden_source_version_id": None})
+        client = TestClient(app)
+        _login(client, "operator", "operator-password")
+        response = client.post("/api/campaigns/closed-campaign/promote")
+        assert response.status_code == 409
+        assert response.json()["detail"] == "Campaign has no unambiguous Golden Source reference."

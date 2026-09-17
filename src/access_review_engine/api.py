@@ -437,10 +437,14 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=409, detail="A Golden Source is required")
             version_payloads = repo.list_payloads("golden_source_versions")
             selected_version = next((row for row in version_payloads if row.get("id") == campaign.golden_source_version_id), None)
+            if selected_version is None:
+                raise HTTPException(status_code=409, detail="Campaign has no unambiguous Golden Source reference.")
             source_payload = next(
                 (row for row in source_payloads if row.get("id") == selected_version.get("golden_source_id")),
                 None,
-            ) if selected_version else source_payloads[0]
+            )
+            if source_payload is None:
+                raise HTTPException(status_code=409, detail="Campaign Golden Source reference is invalid.")
             source = hydrate_golden_source(source_payload)
             versions = [hydrate_golden_version(row) for row in version_payloads if row.get("golden_source_id") == source.id]
             previous = max(versions, key=lambda item: item.version) if versions else None
@@ -533,7 +537,7 @@ def create_app(db_path: str | None = None):
         hydrated = hydrate_snapshot(snapshot)
         evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
         effective = [asdict(item) for item in evaluation.effective_accesses if item.identity_provider == identity.get("provider") and item.identity_identifier == identity.get("identifier")]
-        return {"identity": identity, "accesses": assignments, "effective_accesses": effective, "paths": [asdict(path) for item in effective for path in item["paths"]]}
+        return {"identity": identity, "accesses": assignments, "effective_accesses": effective, "paths": [path for item in effective for path in item.get("paths", [])]}
 
     @app.get("/api/accesses/{provider}/{access_name}/holders")
     def access_holders(provider: str, access_name: str, request: Request):
@@ -543,7 +547,7 @@ def create_app(db_path: str | None = None):
         hydrated = hydrate_snapshot(snapshot)
         evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
         effective = [asdict(item) for item in evaluation.effective_accesses if item.access_provider == provider and item.access_name == access_name]
-        return {"access": {"provider": provider, "name": access_name}, "holders": rows, "effective_holders": effective, "paths": [asdict(path) for item in effective for path in item["paths"]]}
+        return {"access": {"provider": provider, "name": access_name}, "holders": rows, "effective_holders": effective, "paths": [path for item in effective for path in item.get("paths", [])]}
 
     @app.post("/api/sources/{provider}/sync", status_code=202)
     def sync(provider: str, request: Request):
