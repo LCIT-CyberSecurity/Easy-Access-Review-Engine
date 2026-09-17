@@ -59,3 +59,4 @@ main { max-width: 1440px; margin: 0 auto; padding: 40px; } .page-header { displa
 .admin-form input[type="checkbox"], label.checkbox input[type="checkbox"] { width:16px; height:16px; min-height:0; flex:0 0 auto; margin:0; accent-color:var(--primary); }
 .field-note { flex-basis:100%; margin:-6px 0 0; color:var(--text-muted); font-size:12px; }
 .status-row { display:flex; align-items:center; gap:12px; flex-basis:100%; }
+.cell-sub { display:block; margin-top:2px; color:var(--text-muted); font-size:12px; line-height:16px; max-width:52ch; }

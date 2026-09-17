@@ -42,6 +42,33 @@ const s = (v: unknown, f = "—") =>
     Array.isArray(v) ? v.filter((x): x is Row => !!x && typeof x === "object") : [],
   vals = (v: unknown) => (Array.isArray(v) ? v.map(String) : []),
   pct = (v: unknown) => Math.max(0, Math.min(100, Number(v) || 0));
+// The collectors store structured references; the WebUI must read them as a sentence.
+const refText = (v: unknown): string => {
+  if (typeof v === "string") return v;
+  const row = (v ?? null) as Row | null;
+  return row ? s(row.display_name, s(row.identifier, s(row.name, ""))) : "";
+};
+const permissionText = (v: unknown): string => refText(v);
+const targetText = (v: unknown): string => {
+  const target = (v ?? null) as Row | null;
+  if (!target) return "";
+  return [refText(target.resource), refText(target.component), refText(target.service)]
+    .filter(Boolean)
+    .join(" · ");
+};
+/** What this access lets someone do, in words: the collected description, or permission on target. */
+const describeAccess = (row: Row): string => {
+  const described = s(row.description, "");
+  if (described) return described;
+  const permission = permissionText(row.permission),
+    target = targetText(row.target);
+  if (permission && target) return `${permission} on ${target}`;
+  return permission || target || "";
+};
+const describeIdentity = (row: Row): string =>
+  [s(row.display_name, ""), s(row.description, ""), s(row.email, "")].filter(Boolean).join(" · ");
+const Sub = ({ children }: { children: ReactNode }) =>
+  children ? <span className="cell-sub">{children}</span> : null;
 function App() {
   const q = useQuery({ queryKey: ["session"], queryFn: getSession, retry: false });
   return q.isLoading ? (
@@ -488,10 +515,13 @@ function Identities() {
         cols={["Identity", "Type", "Source / IdP", "Status", "Accesses", "Findings"]}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) => [
-          <button className="link-button" onClick={() => setSelected(r)}>
-            {s(r.identifier)}
-          </button>,
-          s(r.type),
+          <>
+            <button className="link-button" onClick={() => setSelected(r)}>
+              {s(r.identifier)}
+            </button>
+            <Sub>{describeIdentity(r)}</Sub>
+          </>,
+          s(r.type).replaceAll("_", " "),
           s(r.provider),
           <Status v={r.status} />,
           s(r.access_count, "0"),
@@ -523,20 +553,37 @@ function IdentityDrawer({ identity, close }: { identity: Row; close: () => void 
   return (
     <Drawer title={s(identity.identifier)} close={close}>
       <h4>IDENTITY</h4>
-      <p>Status: {s(identity.status)}</p>
+      <p>{describeIdentity(identity) || "No description provided by the source."}</p>
+      <p>
+        {s(identity.type).replaceAll("_", " ")} · {s(identity.provider)} · <Status v={identity.status} />
+      </p>
+      {identity.account_owner ? (
+        <p>Account owner: {s((identity.account_owner as Row | undefined)?.identity)}</p>
+      ) : null}
       <h4>ACCESSES</h4>
       <Table
         cols={["Access", "Source", "Permission", "Mode", "State"]}
         q={q}
         rows={rows.map((r) => [
-          <button
-            className="link-button"
-            onClick={() => setAccess({ provider: r.access_provider ?? r.provider, name: r.access_name })}
-          >
-            {s(r.access_name)}
-          </button>,
+          <>
+            <button
+              className="link-button"
+              onClick={() =>
+                setAccess({
+                  provider: r.access_provider ?? r.provider,
+                  name: r.access_name,
+                  permission: r.permission,
+                  target: r.target,
+                  description: r.description,
+                })
+              }
+            >
+              {s(r.access_name)}
+            </button>
+            <Sub>{describeAccess(r)}</Sub>
+          </>,
           s(r.access_provider ?? r.provider),
-          s(r.permission),
+          permissionText(r.permission) || "—",
           s(r.mode),
           <Status v={r.classification ?? "observed"} />,
         ])}
@@ -561,15 +608,24 @@ function Accesses() {
         />
       </Filter>
       <Table
-        cols={["Access", "Source / application", "Permission", "Target", "Holders", "Findings"]}
+        cols={[
+          "Access",
+          "What it allows",
+          "Source / application",
+          "Permission",
+          "Target",
+          "Holders",
+          "Findings",
+        ]}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) => [
           <button className="link-button" onClick={() => setSelected(r)}>
-            {s(r.name)}
+            {s(r.display_name, s(r.name))}
           </button>,
+          <Sub>{describeAccess(r)}</Sub>,
           s(r.provider),
-          s(r.permission),
-          s(r.target),
+          permissionText(r.permission) || "—",
+          targetText(r.target) || "—",
           s(r.assignment_count, "0"),
           s(r.finding_count, "0"),
         ])}
@@ -601,9 +657,21 @@ function AccessDrawer({ access, close }: { access: Row; close: () => void }) {
       </div>
       {tab === "overview" ? (
         <>
-          <p>Permission: {s(access.permission)}</p>
-          <p>Target: {s(access.target)}</p>
-          <p>Holder count: {arr(q.data?.holders).length + arr(q.data?.effective_holders).length}</p>
+          <h4>WHAT THIS ACCESS ALLOWS</h4>
+          <p>{describeAccess(access) || "The source provided no description for this access."}</p>
+          <h4>DETAILS</h4>
+          <p>Source / application: {s(access.provider)}</p>
+          <p>Permission: {permissionText(access.permission) || "—"}</p>
+          <p>Target: {targetText(access.target) || "—"}</p>
+          <p>
+            Owner:{" "}
+            {refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, "—")}
+          </p>
+          <h4>WHO HOLDS IT</h4>
+          <p>
+            {arr(q.data?.holders).length} direct · {arr(q.data?.effective_holders).length} effective
+            (inherited included)
+          </p>
         </>
       ) : (
         <Table
@@ -866,11 +934,12 @@ function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
 }
 function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
   return (
-    <Drawer title="Remediation action" close={close}>
+    <Drawer title={`${s(row.action, s(row.decision))} · ${s(row.access_name)}`} close={close}>
       <h4>WHAT TO DO</h4>
       <p>Identity: {s(row.identity_identifier)}</p>
       <p>Access: {s(row.access_name)}</p>
-      <p>Application / target: {s(row.target, s(row.access_name))}</p>
+      <p>{describeAccess(row) || "No description provided by the source."}</p>
+      <p>Application / target: {targetText(row.target) || s(row.access_name)}</p>
       <h4>WHY</h4>
       <p>Campaign: {s(row.campaign_id)}</p>
       <p>Decision: {s(row.decision)}</p>
