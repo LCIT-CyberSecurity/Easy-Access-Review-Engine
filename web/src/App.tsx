@@ -517,9 +517,9 @@ function Identities() {
         rows={(x.q.data?.items ?? []).map((r) => [
           <>
             <button className="link-button" onClick={() => setSelected(r)}>
-              {s(r.identifier)}
+              {s(r.display_name, s(r.identifier))}
             </button>
-            <Sub>{describeIdentity(r)}</Sub>
+            <Sub>{[s(r.description, ""), s(r.email, "")].filter(Boolean).join(" · ")}</Sub>
           </>,
           s(r.type).replaceAll("_", " "),
           s(r.provider),
@@ -723,9 +723,9 @@ function Reviews() {
           .sort((a, b) => Number(!a.decision) - Number(!b.decision))
           .map((r) => [
             <button className="link-button" onClick={() => setSelected(r)}>
-              {s(r.identity_identifier)}
+              {s(r.identity_display_name, s(r.identity_identifier))}
             </button>,
-            s(r.access_name),
+            s(r.access_display_name, s(r.access_name)),
             <Status v={r.classification} />,
             <Status v={r.decision ?? "pending"} />,
           ])}
@@ -773,9 +773,16 @@ function ReviewDrawer({
     },
     onError: () => setReason("Decision failed"),
   });
-  const paths = arr(item.paths);
+  const paths = arr(item.paths),
+    who = s(item.identity_display_name, s(item.identity_identifier)),
+    what = s(item.access_display_name, s(item.access_name));
   return (
-    <Drawer title="Review item" close={close}>
+    <Drawer title={`${who} → ${what}`} close={close}>
+      <p className="muted">
+        {s(item.access_provider)} · {s(item.identity_identifier)} · {s(item.access_name)}
+      </p>
+      <h4>WHAT THIS ACCESS ALLOWS</h4>
+      <p>{describeAccess(item) || "The source provided no description for this access."}</p>
       <h4>WHY</h4>
       {item.direct ? (
         <p>
@@ -880,9 +887,9 @@ function List({ path, title }: { path: string; title: string }) {
             ? [
                 <Status v={r.classification} />,
                 <button className="link-button" onClick={() => setSelected(r)}>
-                  {s(r.identity_identifier)}
+                  {s((r.identity as Row | undefined)?.display_name, s(r.identity_identifier))}
                 </button>,
-                s(r.access_name),
+                s((r.access as Row | undefined)?.display_name, s(r.access_name)),
                 s(r.access_provider),
                 s(r.campaign_id),
                 s(r.observed),
@@ -890,10 +897,10 @@ function List({ path, title }: { path: string; title: string }) {
               ]
             : [
                 <button className="link-button" onClick={() => setSelected(r)}>
-                  {s(r.identity_identifier)}
+                  {s(r.identity_display_name, s(r.identity_identifier))}
                 </button>,
                 s(r.action, s(r.decision)),
-                s(r.access_name, s(r.target)),
+                s(r.access_display_name, s(r.access_name)),
                 s(r.campaign_id),
                 <Status v={r.status} />,
               ],
@@ -925,8 +932,9 @@ function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
         Observed: {s(row.observed)} · Expected: {s(row.expected)}
       </p>
       <h4>CONTEXT</h4>
-      <p>Identity: {s(row.identity_identifier)}</p>
-      <p>Access: {s(row.access_name)}</p>
+      <p>Identity: {s((row.identity as Row | undefined)?.display_name, s(row.identity_identifier))}</p>
+      <p>Access: {s((row.access as Row | undefined)?.display_name, s(row.access_name))}</p>
+      <p className="muted">{describeAccess((row.access as Row) ?? row)}</p>
       <p>Source: {s(row.access_provider)}</p>
       {row.campaign_id != null ? <p>Campaign: {s(row.campaign_id)}</p> : null}
     </Drawer>
@@ -936,8 +944,8 @@ function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
   return (
     <Drawer title={`${s(row.action, s(row.decision))} · ${s(row.access_name)}`} close={close}>
       <h4>WHAT TO DO</h4>
-      <p>Identity: {s(row.identity_identifier)}</p>
-      <p>Access: {s(row.access_name)}</p>
+      <p>Identity: {s(row.identity_display_name, s(row.identity_identifier))}</p>
+      <p>Access: {s(row.access_display_name, s(row.access_name))}</p>
       <p>{describeAccess(row) || "No description provided by the source."}</p>
       <p>Application / target: {targetText(row.target) || s(row.access_name)}</p>
       <h4>WHY</h4>
@@ -1234,9 +1242,9 @@ function CampaignDetail() {
           cols={["Identity", "Access", "Classification", "Decision"]}
           rows={reviews.map((r) => [
             <button className="link-button" onClick={() => setSelected(r)}>
-              {s(r.identity_identifier)}
+              {s(r.identity_display_name, s(r.identity_identifier))}
             </button>,
-            s(r.access_name),
+            s(r.access_display_name, s(r.access_name)),
             <Status v={r.classification} />,
             <Status v={r.decision ?? "pending"} />,
           ])}

@@ -15,11 +15,32 @@ def _latest_decisions(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any
     return latest
 
 
-def review_item_view(repo: Repository, row: dict[str, Any], *, latest_decisions: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+def _display_names(repo: Repository) -> tuple[dict[tuple[str, str], str], dict[tuple[str, str], str]]:
+    """Map identities and accesses to the names people recognise.
+
+    Collectors identify objects by a stable native id, so screens must not show that id.
+    """
+    identities = {
+        (str(row.get("provider")), str(row.get("identifier"))): str(row.get("display_name") or row.get("identifier") or "")
+        for row in repo.list_payloads("identities")
+    }
+    accesses = {
+        (str(row.get("provider")), str(row.get("name"))): str(row.get("display_name") or row.get("name") or "")
+        for row in repo.list_payloads("accesses")
+    }
+    return identities, accesses
+
+
+def review_item_view(repo: Repository, row: dict[str, Any], *, latest_decisions: dict[str, dict[str, Any]] | None = None, names: tuple[dict[tuple[str, str], str], dict[tuple[str, str], str]] | None = None) -> dict[str, Any]:
     decision = (latest_decisions if latest_decisions is not None else _latest_decisions(repo.list_payloads("decisions"))).get(str(row.get("id")))
+    identity_names, access_names = names if names is not None else _display_names(repo)
     result = dict(row)
-    result["identity"] = {"provider": row.get("identity_provider"), "identifier": row.get("identity_identifier"), "status": row.get("identity_status")}
-    result["access"] = {"provider": row.get("access_provider"), "name": row.get("access_name"), "permission": row.get("permission"), "target": row.get("target")}
+    identity_key = (str(row.get("identity_provider")), str(row.get("identity_identifier")))
+    access_key = (str(row.get("access_provider")), str(row.get("access_name")))
+    result["identity_display_name"] = identity_names.get(identity_key) or row.get("identity_identifier")
+    result["access_display_name"] = access_names.get(access_key) or row.get("access_name")
+    result["identity"] = {"provider": row.get("identity_provider"), "identifier": row.get("identity_identifier"), "status": row.get("identity_status"), "display_name": result["identity_display_name"]}
+    result["access"] = {"provider": row.get("access_provider"), "name": row.get("access_name"), "display_name": result["access_display_name"], "permission": row.get("permission"), "target": row.get("target")}
     result["latest_decision"] = decision
     result["decision_state"] = "decided" if decision else "pending"
     result["decision"] = decision.get("value") if decision else None
@@ -30,14 +51,18 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
     with Repository(db_path) as repo:
         raw = repo.list_payloads(table)
         latest_decisions = _latest_decisions(repo.list_payloads("decisions"))
-        rows = [review_item_view(repo, item, latest_decisions=latest_decisions) for item in raw] if table == "review_items" else [dict(item) for item in raw]
+        names = _display_names(repo) if table in {"review_items", "remediation_actions"} else None
+        rows = [review_item_view(repo, item, latest_decisions=latest_decisions, names=names) for item in raw] if table == "review_items" else [dict(item) for item in raw]
         if table == "remediation_actions":
             review_items = {str(item.get("id")): item for item in repo.list_payloads("review_items")}
+            identity_names, access_names = names or ({}, {})
             for row in rows:
                 review_item = review_items.get(str(row.get("review_item_id")), {})
-                for key in ("campaign_id", "identity_identifier", "identity_provider", "access_name", "access_provider", "target"):
+                for key in ("campaign_id", "identity_identifier", "identity_provider", "access_name", "access_provider", "target", "permission", "description"):
                     if key not in row and key in review_item:
                         row[key] = review_item[key]
+                row.setdefault("identity_display_name", identity_names.get((str(row.get("identity_provider")), str(row.get("identity_identifier")))) or row.get("identity_identifier"))
+                row.setdefault("access_display_name", access_names.get((str(row.get("access_provider")), str(row.get("access_name")))) or row.get("access_name"))
                 decision = latest_decisions.get(str(row.get("review_item_id")))
                 if decision is not None and "decision" not in row:
                     row["decision"] = decision.get("value")

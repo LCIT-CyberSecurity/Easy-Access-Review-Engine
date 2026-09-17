@@ -29,6 +29,10 @@ def escape_filter(value: str) -> str:
     return "".join(replacements.get(character, character) for character in value)
 
 
+def _start_tls(settings: dict[str, Any]) -> bool:
+    return str(settings.get("start_tls", "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def settings_of(config: dict[str, Any]) -> dict[str, Any]:
     settings = config.get("settings")
     return dict(settings) if isinstance(settings, dict) else {}
@@ -43,6 +47,10 @@ def validate_directory(config: dict[str, Any]) -> None:
     settings = settings_of(config)
     if not str(settings.get("base_dn", "")).strip():
         raise DirectoryError("The directory requires a base DN")
+    # A bind carries the person's own password: refuse to send it over a plaintext connection.
+    endpoint = str(config.get("endpoint", "")).strip().lower()
+    if not endpoint.startswith(("ldaps://", "ldapi://")) and not _start_tls(settings):
+        raise DirectoryError("Use ldaps:// or enable StartTLS: signing in over plain LDAP would send passwords in clear")
     bind_dn = str(settings.get("bind_dn", "")).strip()
     password_env = str(settings.get("bind_password_env", "")).strip()
     if bind_dn and not password_env:
@@ -94,7 +102,7 @@ def _base_command(config: dict[str, Any], settings: dict[str, Any], timeout: int
         "-l",
         str(timeout),
     ]
-    if str(settings.get("start_tls", "")).lower() in {"1", "true", "yes"}:
+    if _start_tls(settings):
         command.append("-ZZ")
     return command
 

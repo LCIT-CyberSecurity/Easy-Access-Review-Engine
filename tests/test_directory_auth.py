@@ -25,7 +25,7 @@ from access_review_engine.system_admin import (
 CONFIG = {
     "name": "corp-directory",
     "kind": "LDAP",
-    "endpoint": "ldap://ldap.example.test",
+    "endpoint": "ldaps://ldap.example.test",
     "enabled": True,
     "settings": {"base_dn": "dc=example,dc=test", "login_attribute": "uid"},
 }
@@ -206,3 +206,9 @@ def test_enabled_admins_counts_who_could_still_sign_in():
     upsert_user(conn, {"username": "suspended", "role": "ADMIN", "password": "a-secure-password", "enabled": False})
     assert enabled_admins(conn) == 2
     assert enabled_admins(conn, excluding="root") == 1
+
+
+def test_plaintext_directories_are_refused_because_a_bind_sends_the_password():
+    assert "ldaps://" in message_of(DirectoryError, validate_directory, {**CONFIG, "endpoint": "ldap://ldap.example.test"})
+    validate_directory({**CONFIG, "endpoint": "ldaps://ldap.example.test"})
+    validate_directory({**CONFIG, "settings": {**CONFIG["settings"], "start_tls": True}})

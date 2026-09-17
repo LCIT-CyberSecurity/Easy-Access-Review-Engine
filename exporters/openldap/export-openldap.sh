@@ -151,12 +151,12 @@ elif [[ -n "$LDAP_PASSWORD_FILE" ]]; then
 fi
 export -n LDAP_PASSWORD 2>/dev/null || true
 
-cmd=(ldapsearch -LLL -H "$LDAP_URI" -b "$BASE_DN" -s "$SEARCH_SCOPE" -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "$SEARCH_TIMEOUT_SECONDS" -E "pr=${PAGE_SIZE}/noprompt")
+cmd=(ldapsearch -LLL -x -H "$LDAP_URI" -b "$BASE_DN" -s "$SEARCH_SCOPE" -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "$SEARCH_TIMEOUT_SECONDS" -E "pr=${PAGE_SIZE}/noprompt")
 if [[ "$START_TLS" == "1" ]]; then
   cmd+=(-ZZ)
 fi
 if [[ -n "$BIND_DN" ]]; then
-  cmd+=(-x -D "$BIND_DN" -y "$password_file")
+  cmd+=(-D "$BIND_DN" -y "$password_file")
 fi
 cmd+=("$LDAP_FILTER" "${LDIF_ATTRIBUTES[@]}")
 
@@ -166,9 +166,9 @@ if command -v timeout >/dev/null 2>&1; then
 fi
 
 if [[ "${CHECK_ONLY}" == "1" ]]; then
-  check_cmd=(ldapsearch -LLL -H "${LDAP_URI}" -b "${BASE_DN}" -s base -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "${SEARCH_TIMEOUT_SECONDS}")
+  check_cmd=(ldapsearch -LLL -x -H "${LDAP_URI}" -b "${BASE_DN}" -s base -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "${SEARCH_TIMEOUT_SECONDS}")
   if [[ "${START_TLS}" == "1" ]]; then check_cmd+=(-ZZ); fi
-  if [[ -n "${BIND_DN}" ]]; then check_cmd+=(-x -D "${BIND_DN}" -y "${password_file}"); fi
+  if [[ -n "${BIND_DN}" ]]; then check_cmd+=(-D "${BIND_DN}" -y "${password_file}"); fi
   check_cmd+=("(objectClass=*)" dn)
   set +e
   "${runner[@]}" "${check_cmd[@]}" >/dev/null 2>"${tmp}/ldapsearch.stderr"

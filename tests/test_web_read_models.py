@@ -120,3 +120,19 @@ def test_hydrated_identity_owner_is_usable_by_the_comparison():
     assert identity.account_owner == OwnerRef(provider="corp", identity="alice")
     owner = Identity(provider="corp", identifier="alice", type="user_account", status="active")
     assert owner_findings(identity, {("corp", "alice"): owner}) == []
+
+
+def test_review_items_carry_the_names_people_recognise(tmp_path):
+    """LDAP collectors identify objects by native id; screens must show the readable name."""
+    db = tmp_path / "names.db"
+    with Repository(db) as repo:
+        repo.insert_append_only("identities", {"id": "i1", "provider": "crm-ldap", "identifier": "entry:uuid-1", "display_name": "Alice Martin", "type": "user_account", "status": "active"})
+        repo.insert_append_only("accesses", {"id": "a1", "provider": "crm-ldap", "name": "group:uuid-9:member", "display_name": "CRM-Support:member"})
+        repo.insert_append_only("review_items", {"id": "review-1", "campaign_id": "campaign-a", "identity_provider": "crm-ldap", "identity_identifier": "entry:uuid-1", "access_provider": "crm-ldap", "access_name": "group:uuid-9:member", "findings": []})
+        repo.insert_append_only("remediation_actions", {"id": "action-1", "review_item_id": "review-1", "action": "revoke", "status": "pending"})
+    row = projected_rows(str(db), "review_items", limit=10, offset=0)["items"][0]
+    assert row["identity_display_name"] == "Alice Martin"
+    assert row["access_display_name"] == "CRM-Support:member"
+    assert row["identity"]["display_name"] == "Alice Martin"
+    action = projected_rows(str(db), "remediation_actions", limit=10, offset=0)["items"][0]
+    assert action["identity_display_name"] == "Alice Martin"
