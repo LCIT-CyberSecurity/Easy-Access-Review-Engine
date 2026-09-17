@@ -1,65 +1,1816 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Navigate, NavLink, Route, Routes, useParams } from 'react-router-dom'
-import { AlertTriangle, Check, ChevronRight, Database, FileDown, KeyRound, LayoutDashboard, LogOut, Menu, Search, Settings, ShieldCheck, Users, X } from 'lucide-react'
-import { changePassword, getJson, getPage, getSession, login, logout, postDecision, postJson, type Principal, type Row } from './api/client'
-import { campaignCtas, currentStateLabels, pageCount, pageLabel, roleHome } from './projections'
-const s=(v:unknown,f='—')=>v instanceof Error?v.message:v==null||v===''?f:typeof v==='string'||typeof v==='number'?String(v):JSON.stringify(v), arr=(v:unknown):Row[]=>Array.isArray(v)?v.filter((x):x is Row=>!!x&&typeof x==='object'):[], vals=(v:unknown)=>Array.isArray(v)?v.map(String):[], pct=(v:unknown)=>Math.max(0,Math.min(100,Number(v)||0))
-function App(){const q=useQuery({queryKey:['session'],queryFn:getSession,retry:false});return q.isLoading?<div className="loading-page">Loading EARE…</div>:q.isError?<Login/>:q.data!.must_change_password?<PasswordChange/>:<Shell principal={q.data!}/>}
-function PasswordChange(){const c=useQueryClient(),[p,setP]=useState(''),[confirm,setConfirm]=useState(''),[e,setE]=useState('');const m=useMutation({mutationFn:()=>changePassword(p),onSuccess:x=>c.setQueryData(['session'],x),onError:x=>setE(s(x,'Unable to change password'))});return <div className="login-page"><form className="login-card" onSubmit={x=>{x.preventDefault();if(p!==confirm){setE('Passwords do not match');return}m.mutate()}}><h1>Change your password</h1><p>Set a new password before continuing.</p><label>New password<input required minLength={12} type="password" value={p} onChange={x=>setP(x.target.value)}/></label><label>Confirm password<input required minLength={12} type="password" value={confirm} onChange={x=>setConfirm(x.target.value)}/></label>{e&&<p className="form-error">{e}</p>}<button className="button primary" disabled={m.isPending}>Change password</button></form></div>}
-function Login(){const c=useQueryClient(),[u,setU]=useState(''),[p,setP]=useState(''),[e,setE]=useState('');const m=useMutation({mutationFn:()=>login(u,p),onSuccess:x=>c.setQueryData(['session'],x),onError:x=>setE(s(x,'Unable to sign in'))});return <div className="login-page"><form className="login-card" onSubmit={x=>{x.preventDefault();m.mutate()}}><h1>Sign in to EARE</h1><label>Username<input required value={u} onChange={x=>setU(x.target.value)}/></label><label>Password<input required type="password" value={p} onChange={x=>setP(x.target.value)}/></label>{e&&<p className="form-error">{e}</p>}<button className="button primary">Sign in</button></form></div>}
-const navSections = [
-  { heading: null, items: [
-    { to: "/", label: "Overview", icon: LayoutDashboard, roles: ["ADMIN", "OPERATOR"] },
-    { to: "/reviews", label: "My Reviews", icon: Check, roles: ["ADMIN", "OPERATOR", "GROUP_OWNER"] },
-    { to: "/actions?view=my", label: "My Actions", icon: Check, roles: ["ADMIN", "OPERATOR", "BUSINESS_ADMIN"] },
-  ]},
-  { heading: "ACCESS & REFERENCE", items: [
-    { to: "/identities", label: "Identities", icon: Users, roles: ["ADMIN", "OPERATOR"] },
-    { to: "/accesses", label: "Access", icon: KeyRound, roles: ["ADMIN", "OPERATOR"] },
-    { to: "/golden", label: "Golden Source", icon: ShieldCheck, roles: ["ADMIN", "OPERATOR"] },
-  ]},
-  { heading: "AUDIT", items: [
-    { to: "/campaigns", label: "Campaigns", icon: Check, roles: ["ADMIN", "OPERATOR"] },
-    { to: "/findings", label: "Findings", icon: AlertTriangle, roles: ["ADMIN", "OPERATOR"] },
-    { to: "/actions", label: "Actions", icon: Check, roles: ["ADMIN", "OPERATOR", "BUSINESS_ADMIN"] },
-    { to: "/reports", label: "Reports", icon: FileDown, roles: ["ADMIN", "OPERATOR"] },
-  ]},
-  { heading: "SYSTEM", items: [
-    { to: "/sources", label: "Sources & IdPs", icon: Database, roles: ["ADMIN", "OPERATOR"] },
-    { to: "/system/users", label: "Users & permissions", icon: Users, roles: ["ADMIN"] },
-    { to: "/system/authentication", label: "Authentication", icon: Settings, roles: ["ADMIN"] },
-    { to: "/system/audit", label: "Audit trail", icon: FileDown, roles: ["ADMIN"] },
-  ]},
-]
-function Shell({principal}:{principal:Principal}){const[c,setC]=useState(false),q=useQueryClient();return <div className="app-shell"><aside className={c?'sidebar open':'sidebar'}><div className="brand"><span className="brand-mark">E</span><span>EARE</span></div><nav>{navSections.map(section=>{const items=section.items.filter(x=>x.roles.includes(principal.role));return items.length?<div className="nav-section" key={section.heading??"product"}>{section.heading&&<div className="nav-heading">{section.heading}</div>}{items.map(({to,label,icon:I})=><NavLink key={to} to={to} end={to==='/' } onClick={()=>setC(false)} className={({isActive})=>isActive?'nav-link active':'nav-link'}><I size={17}/>{label}</NavLink>)}</div>:null})}</nav><div className="sidebar-footer"><span className="health-dot"/>API connected</div></aside><div className="page"><header className="topbar"><button className="icon-button mobile-menu" onClick={()=>setC(!c)}><Menu/></button><span className="crumb">Workspace <ChevronRight size={14}/> Access governance</span><div className="top-actions"><span className="user-name">{principal.display_name}<span>{principal.role}</span></span><button className="icon-button" aria-label="Sign out" onClick={async()=>{await logout();q.removeQueries({queryKey:['session']})}}><LogOut/></button></div></header><main><Routes><Route path="/" element={<Home/>}/><Route path="/reviews" element={<Reviews/>}/><Route path="/identities" element={<Identities/>}/><Route path="/accesses" element={<Accesses/>}/><Route path="/golden" element={<Golden/>}/><Route path="/campaigns" element={<Campaigns/>}/><Route path="/campaigns/new" element={<CampaignNew/>}/><Route path="/campaigns/:id" element={<CampaignDetail/>}/><Route path="/findings" element={<List path="findings" title="Findings"/>}/><Route path="/actions" element={<List path="remediation-actions" title="Actions"/>}/><Route path="/reports" element={<Reports/>}/><Route path="/sources" element={<Sources/>}/><Route path="/system/users" element={<UsersPage/>}/><Route path="/system/authentication" element={<Auth/>}/><Route path="/system/audit" element={<AuditTrail/>}/><Route path="*" element={<Navigate to={roleHome(principal.role)}/>}/></Routes></main></div></div>}
-function Head({title,children}:{title:string,children?:ReactNode}){return <div className="page-header"><div><div className="eyebrow">EARE</div><h1>{title}</h1></div>{children}</div>};function Status({v}:{v:unknown}){return <span className="status">{s(v,'unknown').replaceAll('_',' ')}</span>};function Filter({v,onChange,children}:{v:string,onChange:(v:string)=>void,children?:ReactNode}){return <div className="filterbar"><div className="search"><Search/><input placeholder="Search" value={v} onChange={e=>onChange(e.target.value)}/></div>{children}</div>};function SelectFilter({value,onChange,options,placeholder}:{value:string,onChange:(v:string)=>void,options:string[],placeholder:string}){return <select className="filter-button" value={value} onChange={e=>onChange(e.target.value)}><option value="">{placeholder}</option>{options.map(x=><option key={x} value={x}>{x.replaceAll('_',' ')}</option>)}</select>};function debounce(v:string){const[d,setD]=useState(v);useEffect(()=>{const x=setTimeout(()=>setD(v),300);return()=>clearTimeout(x)},[v]);return d};
-function Pager({total,limit,offset,setOffset,setLimit}:{total:number,limit:number,offset:number,setOffset:(n:number)=>void,setLimit:(n:number)=>void}){const pages=pageCount(total,limit),p=Math.floor(offset/limit)+1;return <div className="pagination"><span>{pageLabel(total,limit,offset)}</span><button className="button subtle" disabled={p<=1} onClick={()=>setOffset(offset-limit)}>Previous</button><span>Page {p} / {pages}</span><button className="button subtle" disabled={p>=pages} onClick={()=>setOffset(offset+limit)}>Next</button><select value={limit} onChange={e=>{setLimit(+e.target.value);setOffset(0)}}><option>25</option><option>50</option><option>100</option></select></div>}
-function Table({cols,rows,q,onRow}:{cols:string[],rows:ReactNode[][],q?:any,onRow?:(i:number)=>void}){if(q?.isLoading)return <div className="empty">Loading…</div>;if(q?.isError)return <div className="empty">{s(q.error)} <button onClick={()=>q.refetch()}>Retry</button></div>;return <div className="table-wrap"><table><thead><tr>{cols.map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{rows.length?rows.map((r,i)=><tr className={onRow?'clickable':''} onClick={()=>onRow?.(i)} key={i}>{r.map((x,j)=><td key={j}>{x}</td>)}</tr>):<tr><td colSpan={cols.length}>No records match this view.</td></tr>}</tbody></table></div>}
-function Drawer({title,close,children}:{title:string,close:()=>void,children:ReactNode}){return <div className="drawer-backdrop" onClick={close}><aside className="drawer" onClick={e=>e.stopPropagation()}><div className="drawer-head"><h2>{title}</h2><button className="icon-button" onClick={close}><X/></button></div><div className="drawer-body">{children}</div></aside></div>}
-function Home(){const q=useQuery({queryKey:['dashboard'],queryFn:()=>getJson('dashboard')});const m=(q.data?.metrics??{}) as Row;return <><Head title="Overview"/><div className="metrics">{[['Campaigns',m.campaigns],['Reviews remaining',m.pending_reviews],['Actions',m.remediation_actions],['Findings',m.findings]].map(x=><div className="metric" key={String(x[0])}><strong>{s(x[1],'0')}</strong><small>{String(x[0])}</small></div>)}</div></>}
-function useList(path:string,extra:Row={}){const[search,setSearch]=useState(''),[offset,setOffset]=useState(0),[limit,setLimit]=useState(25),selected=debounce(search);const q=useQuery({queryKey:[path,selected,limit,offset,extra],queryFn:()=>getPage(path,{...extra,search:selected,limit,offset})});useEffect(()=>setOffset(0),[selected]);return{q,search,setSearch,offset,setOffset,limit,setLimit}}
-function Identities(){const[provider,setProvider]=useState(''),[status,setStatus]=useState(''),x=useList('identities',{provider,status}),[selected,setSelected]=useState<Row|null>(null);return <><Head title="Identities"/><Filter v={x.search} onChange={x.setSearch}><SelectFilter value={provider} onChange={setProvider} options={['active_directory','openldap']} placeholder="Source / IdP"/><SelectFilter value={status} onChange={setStatus} options={['active','disabled','group','user']} placeholder="Status / type"/></Filter><Table cols={['Identity','Type','Source / IdP','Status','Accesses','Findings']} q={x.q} rows={(x.q.data?.items??[]).map(r=>[<button className="link-button" onClick={()=>setSelected(r)}>{s(r.identifier)}</button>,s(r.type),s(r.provider),<Status v={r.status}/>,s(r.access_count,'0'),s(r.finding_count,'0')])}/><Pager total={x.q.data?.total??0} limit={x.limit} offset={x.offset} setOffset={x.setOffset} setLimit={x.setLimit}/>{selected&&<IdentityDrawer identity={selected} close={()=>setSelected(null)}/>}</>}
-function IdentityDrawer({identity,close}:{identity:Row,close:()=>void}){const q=useQuery({queryKey:['identity-accesses',identity.id],queryFn:()=>getJson(`identities/${encodeURIComponent(s(identity.id,s(identity.identifier)))}/accesses`)}),[access,setAccess]=useState<Row|null>(null),rows: Row[]=[...arr(q.data?.accesses).map(r=>({...r,mode:'Direct'})),...arr(q.data?.effective_accesses).map(r=>({...r,mode:'Effective'}))];return <Drawer title={s(identity.identifier)} close={close}><h4>IDENTITY</h4><p>Status: {s(identity.status)}</p><h4>ACCESSES</h4><Table cols={['Access','Source','Permission','Mode','State']} q={q} rows={rows.map(r=>[<button className="link-button" onClick={()=>setAccess({provider:r.access_provider??r.provider,name:r.access_name})}>{s(r.access_name)}</button>,s(r.access_provider??r.provider),s(r.permission),s(r.mode),<Status v={r.classification??'observed'}/>])}/>{access&&<AccessDrawer access={access} close={()=>setAccess(null)}/>}</Drawer>}
-function Accesses(){const[provider,setProvider]=useState(''),x=useList('accesses',{provider}),[selected,setSelected]=useState<Row|null>(null);return <><Head title="Access"/><Filter v={x.search} onChange={x.setSearch}><SelectFilter value={provider} onChange={setProvider} options={['active_directory','openldap']} placeholder="Source / application"/></Filter><Table cols={['Access','Source / application','Permission','Target','Holders','Findings']} q={x.q} rows={(x.q.data?.items??[]).map(r=>[<button className="link-button" onClick={()=>setSelected(r)}>{s(r.name)}</button>,s(r.provider),s(r.permission),s(r.target),s(r.assignment_count,'0'),s(r.finding_count,'0')])}/><Pager total={x.q.data?.total??0} limit={x.limit} offset={x.offset} setOffset={x.setOffset} setLimit={x.setLimit}/>{selected&&<AccessDrawer access={selected} close={()=>setSelected(null)}/>}</>}
-function AccessDrawer({access,close}:{access:Row,close:()=>void}){const[tab,setTab]=useState('overview'),provider=s(access.provider),name=s(access.name??access.access_name),q=useQuery({queryKey:['holders',provider,name],queryFn:()=>getJson(`accesses/${encodeURIComponent(provider)}/${encodeURIComponent(name)}/holders`)});return <Drawer title={name} close={close}><div className="tabs"><button onClick={()=>setTab('overview')}>Overview</button><button onClick={()=>setTab('holders')}>Holders</button></div>{tab==='overview'?<><p>Permission: {s(access.permission)}</p><p>Target: {s(access.target)}</p><p>Holder count: {arr(q.data?.holders).length+arr(q.data?.effective_holders).length}</p></>:<Table cols={['Identity','Direct / Effective','Why']} q={q} rows={[...arr(q.data?.holders).map(r=>({...r,mode:'Direct'})),...arr(q.data?.effective_holders).map(r=>({...r,mode:'Effective'}))].map((r: Row)=>[s(r.identity_identifier),s(r.mode),r.mode==='Direct'?'Direct grant':'Effective provenance'])}/>}</Drawer>}
-function Reviews(){const campaigns=useQuery({queryKey:['review-campaigns'],queryFn:()=>getPage('campaigns',{limit:100})}),[decision,setDecision]=useState(''),[campaign,setCampaign]=useState(''),x=useList('review-items',{status:decision,campaign}),[selected,setSelected]=useState<Row|null>(null);return <><Head title="My Reviews"/><Filter v={x.search} onChange={x.setSearch}><SelectFilter value={campaign} onChange={setCampaign} options={arr(campaigns.data?.items).map(r=>s(r.id))} placeholder="Campaign"/><SelectFilter value={decision} onChange={setDecision} options={['pending','approve','revoke','not_applicable']} placeholder="Decision"/></Filter><Table cols={['Identity','Access','Classification','Latest decision']} q={x.q} rows={[...(x.q.data?.items??[])].sort((a,b)=>Number(!a.decision)-Number(!b.decision)).map(r=>[<button className="link-button" onClick={()=>setSelected(r)}>{s(r.identity_identifier)}</button>,s(r.access_name),<Status v={r.classification}/>,<Status v={r.decision??'pending'}/>])}/><Pager total={x.q.data?.total??0} limit={x.limit} offset={x.offset} setOffset={x.setOffset} setLimit={x.setLimit}/>{selected&&<ReviewDrawer item={selected} items={x.q.data?.items??[]} close={()=>setSelected(null)} next={setSelected}/>}</>}
-function ReviewDrawer({item,items,close,next}:{item:Row,items:Row[],close:()=>void,next:(x:Row|null)=>void}) {
-  const c=useQueryClient(), [reason,setReason]=useState(''), [pending,setPending]=useState<string|null>(null)
-  const m=useMutation({mutationFn:(v:string)=>postDecision(s(item.id),v,v==='approve'?undefined:reason.trim()),onSuccess:async()=>{await c.invalidateQueries({queryKey:['review-items']});const i=items.findIndex(r=>r.id===item.id);next(items.slice(i+1).find(r=>!r.decision)||null);setPending(null);setReason('')},onError:()=>setReason('Decision failed')})
-  const paths=arr(item.paths)
-  return <Drawer title="Review item" close={close}><h4>WHY</h4>{item.direct?<p><strong>Direct grant</strong></p>:paths.length?<>{paths.map((p,i)=><p className="path" key={i}>{arr(p.steps??p.access_chain).map((z,j)=><span key={j}>{j?' → ':''}{s(z.name??z.identifier??z)}</span>)}</p>)}</>:<p>Provenance not available</p>}<h4>CURRENT STATE</h4>{currentStateLabels(Boolean(item.observed),Boolean(item.expected)).map(v=><p key={v}>{v}</p>)}<h4>CLASSIFICATION</h4><Status v={item.classification}/>{pending&&<div className="reason-form"><label>Reason *<textarea autoFocus value={reason} onChange={e=>setReason(e.target.value)}/></label><button onClick={()=>{setPending(null);setReason('')}}>Cancel</button><button disabled={!reason.trim()||m.isPending} onClick={()=>m.mutate(pending)}>Confirm {pending==='revoke'?'revoke':'N/A'}</button></div>}{reason==='Decision failed'&&<p className="form-error">Decision failed</p>}{!pending&&<div className="drawer-footer"><button onClick={()=>setPending('not_applicable')}>N/A</button><button onClick={()=>setPending('revoke')}>Revoke</button><button className="button primary" onClick={()=>m.mutate('approve')}>Approve</button></div>}</Drawer>
+import { useEffect, useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Navigate, NavLink, Route, Routes, useParams } from "react-router-dom";
+import {
+  AlertTriangle,
+  Check,
+  ChevronRight,
+  Database,
+  FileDown,
+  KeyRound,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  Search,
+  Settings,
+  ShieldCheck,
+  Users,
+  X,
+} from "lucide-react";
+import {
+  changePassword,
+  getJson,
+  getPage,
+  getSession,
+  login,
+  logout,
+  postDecision,
+  postJson,
+  type Principal,
+  type Row,
+} from "./api/client";
+import { campaignCtas, currentStateLabels, pageCount, pageLabel, roleHome } from "./projections";
+const s = (v: unknown, f = "—") =>
+    v instanceof Error
+      ? v.message
+      : v == null || v === ""
+        ? f
+        : typeof v === "string" || typeof v === "number"
+          ? String(v)
+          : JSON.stringify(v),
+  arr = (v: unknown): Row[] =>
+    Array.isArray(v) ? v.filter((x): x is Row => !!x && typeof x === "object") : [],
+  vals = (v: unknown) => (Array.isArray(v) ? v.map(String) : []),
+  pct = (v: unknown) => Math.max(0, Math.min(100, Number(v) || 0));
+function App() {
+  const q = useQuery({ queryKey: ["session"], queryFn: getSession, retry: false });
+  return q.isLoading ? (
+    <div className="loading-page">Loading EARE…</div>
+  ) : q.isError ? (
+    <Login />
+  ) : q.data!.must_change_password ? (
+    <PasswordChange />
+  ) : (
+    <Shell principal={q.data!} />
+  );
 }
-function List({path,title}:{path:string,title:string}){const campaigns=useQuery({queryKey:[path,'campaigns'],queryFn:()=>getPage('campaigns',{limit:100})}),findings=path==='findings',[provider,setProvider]=useState(''),[status,setStatus]=useState(''),[campaign,setCampaign]=useState(''),x=useList(path,{provider,status,campaign}),[selected,setSelected]=useState<Row|null>(null);return <><Head title={title}/><Filter v={x.search} onChange={x.setSearch}><SelectFilter value={provider} onChange={setProvider} options={['active_directory','openldap']} placeholder="Source"/><SelectFilter value={status} onChange={setStatus} options={findings?['unexpected','missing','expected_and_observed']:['pending','exported']} placeholder="Status"/><SelectFilter value={campaign} onChange={setCampaign} options={arr(campaigns.data?.items).map(r=>s(r.id))} placeholder="Campaign"/></Filter><Table cols={findings?['Classification','Identity','Access','Source','Campaign','Observed','Expected']:['Identity','Requested action','Access / Application','Campaign','Status']} q={x.q} rows={(x.q.data?.items??[]).map(r=>findings?[<Status v={r.classification}/>,<button className="link-button" onClick={()=>setSelected(r)}>{s(r.identity_identifier)}</button>,s(r.access_name),s(r.access_provider),s(r.campaign_id),s(r.observed),s(r.expected)]:[<button className="link-button" onClick={()=>setSelected(r)}>{s(r.identity_identifier)}</button>,s(r.action,s(r.decision)),s(r.access_name,s(r.target)),s(r.campaign_id),<Status v={r.status}/>])}/><Pager total={x.q.data?.total??0} limit={x.limit} offset={x.offset} setOffset={x.setOffset} setLimit={x.setLimit}/>{selected&&(findings?<FindingDrawer row={selected} close={()=>setSelected(null)}/>:<ActionDrawer row={selected} close={()=>setSelected(null)}/>)}</>}
-function FindingDrawer({row,close}:{row:Row,close:()=>void}){return <Drawer title="Finding" close={close}><h4>WHAT HAPPENED</h4><p>{s(vals(row.findings).join(', '),s(row.classification,'No classification'))}</p><h4>CURRENT STATE</h4><p>Observed: {s(row.observed)} · Expected: {s(row.expected)}</p><h4>CONTEXT</h4><p>Identity: {s(row.identity_identifier)}</p><p>Access: {s(row.access_name)}</p><p>Source: {s(row.access_provider)}</p>{row.campaign_id != null ? <p>Campaign: {s(row.campaign_id)}</p> : null}</Drawer>}
-function ActionDrawer({row,close}:{row:Row,close:()=>void}){return <Drawer title="Remediation action" close={close}><h4>WHAT TO DO</h4><p>Identity: {s(row.identity_identifier)}</p><p>Access: {s(row.access_name)}</p><p>Application / target: {s(row.target,s(row.access_name))}</p><h4>WHY</h4><p>Campaign: {s(row.campaign_id)}</p><p>Decision: {s(row.decision)}</p><p>Comment: {s(row.comment)}</p><h4>STATUS</h4><Status v={row.status}/></Drawer>}
-function Campaigns(){const x=useList('campaigns');return <><Head title="Campaigns"><a className="button primary" href="/campaigns/new">+ New campaign</a></Head><Filter v={x.search} onChange={x.setSearch}/><Table cols={['Campaign','Scope','Status','Progress','Pending','Due date']} q={x.q} rows={(x.q.data?.items??[]).map(r=>[<NavLink to={'/campaigns/'+s(r.id)}>{s(r.name)}</NavLink>,s((r.scope as Row|undefined)?.type,'all'),<Status v={r.status}/>,<div className="table-progress"><div><span style={{width:`${pct(r.progress)}%`}}/></div>{pct(r.progress)}%</div>,s(r.pending,'0'),s(r.due_at)])}/><Pager total={x.q.data?.total??0} limit={x.limit} offset={x.offset} setOffset={x.setOffset} setLimit={x.setLimit}/></>}
-function CampaignNew(){const snap=useQuery({queryKey:['snapshots'],queryFn:()=>getPage('snapshots',{limit:100})}),gold=useQuery({queryKey:['golden-versions'],queryFn:()=>getPage('golden-source-versions',{limit:100})}),[form,setForm]=useState<Row>({name:'',snapshot_id:'',golden_source_version_id:'',due_at:'',scope_type:'all'}),[preview,setPreview]=useState<Row|null>(null),[allow,setAllow]=useState(false),previewM=useMutation({mutationFn:()=>postJson('campaigns/preview',{...form,scope:{type:s(form.scope_type,'all'),...(form.scope_type==='providers'?{values:vals(form.providers)}:{})}}),onSuccess:setPreview}),create=useMutation({mutationFn:async(open:boolean)=>{const {scope_type,providers,...fields}=form;const payload={...fields,scope:{type:s(scope_type,'all'),...(scope_type==='providers'?{values:vals(providers)}:{})},allow_unresolved_reviewers:allow};const d=await postJson('campaigns',payload);if(open&&d.id)await postJson('campaigns/'+s(d.id)+'/open',{allow_unresolved_reviewers:allow});return d},onSuccess:d=>{if(d.id)window.location.href='/campaigns/'+s(d.id)}}),snapshots=arr(snap.data?.items),versions=arr(gold.data?.items);useEffect(()=>{if(!form.snapshot_id&&snapshots.length)setForm(x=>({...x,snapshot_id:s(snapshots[snapshots.length-1].id)}));if(!form.golden_source_version_id&&versions.length)setForm(x=>({...x,golden_source_version_id:s(versions[versions.length-1].id)}))},[snapshots.length,versions.length]);return <><Head title="New campaign"><NavLink className="button subtle" to="/campaigns">Cancel</NavLink></Head><section className="panel"><h2>Campaign setup</h2><form className="admin-form" onSubmit={e=>{e.preventDefault();previewM.mutate()}}><label>Name<input required value={s(form.name,'')} onChange={e=>setForm({...form,name:e.target.value})}/></label><label>Scope<select value={s(form.scope_type,'all')} onChange={e=>setForm({...form,scope_type:e.target.value})}><option value="all">All</option><option value="providers">Provider(s)</option></select></label><label>Snapshot<select required value={s(form.snapshot_id,'')} onChange={e=>setForm({...form,snapshot_id:e.target.value})}><option value="">Select snapshot</option>{snapshots.map(r=><option key={s(r.id)} value={s(r.id)}>{s(r.created_at)} · {s(r.assignment_count,'assignments unavailable')}</option>)}</select></label><label>Golden Source version<select value={s(form.golden_source_version_id,'')} onChange={e=>setForm({...form,golden_source_version_id:e.target.value||undefined})}><option value="">None</option>{versions.map(r=><option key={s(r.id)} value={s(r.id)}>v{s(r.version)} · {s(r.id)}</option>)}</select></label><label>Due date<input type="date" value={s(form.due_at,'')} onChange={e=>setForm({...form,due_at:e.target.value||undefined})}/></label><button className="button primary" type="submit" disabled={previewM.isPending}>Preview campaign</button></form></section>{preview&&<section className="panel"><h2>Campaign preview</h2><div className="metrics"><div className="metric"><strong>{s(preview.total_review_items,'0')}</strong><small>Review items</small></div><div className="metric"><strong>{s(preview.resolved_reviewers,'0')}</strong><small>Reviewers resolved</small></div><div className="metric"><strong>{s(preview.unresolved_reviewers,'0')}</strong><small>Unresolved</small></div></div>{Number(preview.unresolved_reviewers)>0&&<label><input type="checkbox" checked={allow} onChange={e=>setAllow(e.target.checked)}/> Allow unresolved reviewers</label>}<div className="button-row"><button className="button subtle" disabled={!allow&&Number(preview.unresolved_reviewers)>0||create.isPending} onClick={()=>create.mutate(false)}>Save as draft</button><button className="button primary" disabled={!allow&&Number(preview.unresolved_reviewers)>0||create.isPending} onClick={()=>create.mutate(true)}>Open campaign</button></div></section>}</>}
-function CampaignDetail(){const{id=''}=useParams(),q=useQuery({queryKey:['campaign',id],queryFn:()=>getJson('campaigns/'+id)}),c=q.data?.campaign as Row|undefined,[tab,setTab]=useState('overview'),[selected,setSelected]=useState<Row|null>(null),[selectedFinding,setSelectedFinding]=useState<Row|null>(null),m=useMutation({mutationFn:(a:string)=>postJson('campaigns/'+id+'/'+a),onSuccess:()=>q.refetch()}),reviews=arr(q.data?.reviews),findings=arr(q.data?.findings),status=s(c?.status),pending=reviews.filter(r=>!r.decision).length,ctas=campaignCtas(status,pending);if(!c)return <div className="empty">{q.isLoading?'Loading...':'Campaign not found'}</div>;return <><Head title={s(c.name)}><div className="button-row"><NavLink to="/campaigns">Back</NavLink>{ctas.map(a=><button className="button subtle" key={a} disabled={a==='close-disabled'} onClick={()=>m.mutate(a.replace('-disabled',''))}>{a}</button>)}</div></Head><div className="tabs"><button className={tab==='overview'?'text-button active':'text-button'} onClick={()=>setTab('overview')}>Overview</button><button className={tab==='reviews'?'text-button active':'text-button'} onClick={()=>setTab('reviews')}>Reviews</button><button className={tab==='findings'?'text-button active':'text-button'} onClick={()=>setTab('findings')}>Findings</button></div>{tab==='overview'&&<section className="panel"><h2>Campaign overview</h2><p>Status: <Status v={c.status}/></p><p>Progress: {pct(c.progress)}%</p><p>Snapshot: {s(c.snapshot_id)}</p><p>Golden version: {s(c.golden_source_version_id)}</p><p>Scope: {s((c.scope as Row|undefined)?.type,'all')}</p><p>Review items: {reviews.length} - Pending: {pending}</p></section>}{tab==='reviews'&&<Table cols={['Identity','Access','Classification','Decision']} rows={reviews.map(r=>[<button className="link-button" onClick={()=>setSelected(r)}>{s(r.identity_identifier)}</button>,s(r.access_name),<Status v={r.classification}/>,<Status v={r.decision??'pending'}/>])}/>} {tab==='findings'&&<Table cols={['Finding','Campaign']} rows={findings.map(f=>[<button className="link-button" onClick={()=>setSelectedFinding({classification:'campaign finding',findings:[f],campaign_id:id})}>{s(f)}</button>,s(c.name)])}/>} {selected&&<ReviewDrawer item={selected} items={reviews} close={()=>setSelected(null)} next={setSelected}/>} {selectedFinding&&<FindingDrawer row={selectedFinding} close={()=>setSelectedFinding(null)}/>}</>}
-function Golden(){const q=useQuery({queryKey:['golden'],queryFn:()=>getPage('golden-sources',{limit:100})}),snap=useQuery({queryKey:['snap'],queryFn:()=>getPage('snapshots',{limit:100})}),versions=useQuery({queryKey:['golden-versions'],queryFn:()=>getPage('golden-source-versions',{limit:100})}),[compare,setCompare]=useState<Row|null>(null),[name,setName]=useState('Main baseline'),[sid,setSid]=useState(''),source=arr(q.data?.items)[0],sourceName=s(source?.name,''),active=arr(versions.data?.items).find(v=>s(v.id)===s(source?.active_version_id))??arr(versions.data?.items).slice(-1)[0],baseline=useMutation({mutationFn:()=>postJson('golden-sources/baseline',{name,snapshot_id:sid}),onSuccess:()=>{q.refetch();versions.refetch()}}),compareMutation=useMutation({mutationFn:()=>getJson(`golden-sources/${sourceName}/compare`),onSuccess:setCompare}),confirm=useMutation({mutationFn:()=>postJson(`golden-sources/${sourceName}/confirm-version`,{observed_snapshot_id:compare?.observed_snapshot_id,active_golden_version_id:compare?.active_golden_version_id}),onSuccess:()=>{setCompare(null);q.refetch();versions.refetch()}}),snapshots=arr(snap.data?.items),changes=arr(compare?.changes);return <><Head title="Golden Source"/>{!source?<section className="panel"><h2>No expected baseline yet</h2>{snapshots.length?<><p>LATEST OBSERVED SNAPSHOT</p><p>Collected: {s(snapshots[snapshots.length-1].created_at)} · Assignments: {s(snapshots[snapshots.length-1].assignment_count,'—')}</p><div className="admin-form"><label>Baseline name<input value={name} onChange={e=>setName(e.target.value)}/></label><label>Explicit snapshot<select value={sid} onChange={e=>setSid(e.target.value)}><option value="">Select snapshot</option>{snapshots.map(r=><option key={s(r.id)} value={s(r.id)}>{s(r.created_at)} · {s(r.id)}</option>)}</select></label><button className="button primary" disabled={!sid||baseline.isPending} onClick={()=>baseline.mutate()}>Create baseline</button></div></>:<><p>No observed snapshot yet.</p><p>Synchronize a source before creating the expected baseline.</p><NavLink className="button subtle" to="/sources">Go to Sources &amp; IdPs</NavLink></>}</section>:<><section className="panel"><h2>Golden Source</h2><p>ACTIVE VERSION · v{s(active?.version,'—')}</p><p>Expected assignments: {s(active?.assignments ? arr(active.assignments).length : active?.assignment_count,'—')}</p><p>Origin: Baseline / Campaign promotion</p><button className="button primary" onClick={()=>compareMutation.mutate()} disabled={compareMutation.isPending}>Compare with latest observed</button></section>{compare&&<section className="panel"><h2>Preview diff</h2><div className="diff-summary"><strong>ADDED {changes.filter(r=>r.status==='added').length}</strong><strong>REMOVED {changes.filter(r=>r.status==='removed').length}</strong><strong>UNCHANGED {changes.filter(r=>r.status==='unchanged').length}</strong></div><Table cols={['State','Identity','Access','Provider']} rows={changes.map(r=>[<Status v={r.status}/>,s(r.identity_identifier),s(r.access_name),s(r.access_provider)])}/><p className="muted">Compare mutates nothing. Confirm creates the next version using the returned observed and active version IDs.</p><button className="button primary" onClick={()=>confirm.mutate()} disabled={confirm.isPending}>Confirm new version</button></section>}</>}</>}
-function Sources(){const q=useQuery({queryKey:['providers'],queryFn:()=>getPage('providers',{limit:100})}),cfg=useQuery({queryKey:['source-configs'],queryFn:()=>getJson('system/sources')}),[job,setJob]=useState(''),[kind,setKind]=useState('preview'),[error,setError]=useState(''),[editing,setEditing]=useState<Row|null>(null),start=useMutation({mutationFn:(x:{p:string,a:string})=>postJson(`sources/${x.p}/${x.a}`),onSuccess:d=>{setError('');setJob(s(d.id))},onError:e=>setError(s(e,'Unable to start source operation'))}),save=useMutation({mutationFn:(body:Row)=>postJson('system/sources',body),onSuccess:async()=>{setEditing(null);setError('');await cfg.refetch();await q.refetch()},onError:e=>setError(s(e,'Unable to save source configuration'))}),test=useMutation({mutationFn:(body:Row)=>postJson('system/sources/test',body),onSuccess:d=>setError(s(d.message,'Connection test succeeded')),onError:e=>setError(s(e,'Source connection test failed'))}),jq=useQuery({queryKey:['job',job],queryFn:()=>getJson(`jobs/${job}`),enabled:!!job,refetchInterval:1500 as const}),configs=arr(cfg.data?.sources),observed=arr(q.data?.items),sources=configs.map(c=>({...c,...(observed.find(o=>s(o.name)===s(c.provider))||{})}));const blank=()=>({provider:'',type:'active_directory',connection:{server:''},collection:{timeout:300,allow_partial:false},credentials:{username_env:'',password_env:''}});const edit=(source?:Row)=>{setError('');setEditing(source?JSON.parse(JSON.stringify(source)):blank())};const update=(key:string,value:unknown)=>setEditing(x=>x?({...x,[key]:value}):x);const updateNested=(section:string,key:string,value:unknown)=>setEditing(x=>x?({...x,[section]:{...(x[section] as Row||{}),[key]:value}}):x);return <><Head title="Sources & IdPs"><button className="button primary" onClick={()=>edit()}>+ Add source</button></Head><p>Connect and monitor the identity and access systems EARE audits. Secrets remain referenced through environment variables and are never stored in the WebUI.</p>{!cfg.isLoading&&!configs.length&&<section className="panel"><h2>No collection source is configured.</h2><p>Use <strong>+ Add source</strong> to configure Active Directory or OpenLDAP.</p></section>}<div className="source-grid">{sources.map(r=><div className="source-card" key={s(r.provider)}><div className="source-top"><Status v={r.health}/><span>{s(r.last_sync,'Never synced')}</span></div><h2>{s(r.display_name,s(r.provider))}</h2><p>{s(r.type).toUpperCase()} · {s(r.provider)}</p><div className="source-stats"><div><strong>{s(r.identity_count,'0')}</strong><span>Identities</span></div><div><strong>{s(r.group_count,'0')}</strong><span>Groups</span></div><div><strong>{s(r.access_count,'0')}</strong><span>Accesses</span></div></div><div className="source-foot"><button className="button subtle" onClick={()=>edit(configs.find(c=>s(c.provider)===s(r.provider)))}>Configure</button><button className="button subtle" onClick={()=>{setKind('preview');start.mutate({p:s(r.provider),a:'preview'})}}>Preview</button><button className="button primary" onClick={()=>{setKind('sync');start.mutate({p:s(r.provider),a:'sync'})}}>Synchronize</button></div></div>)}</div>{error&&<p className="form-error">{error}</p>}{job&&<section className="panel job-panel"><h2>{kind==='preview'?'Preview impact':'Synchronization'}</h2><p>Collecting… Analysing… Ready when the job completes.</p><Status v={jq.data?.status}/><p>{s(jq.data?.progress)}</p>{jq.data?.result ? <pre>{JSON.stringify(jq.data.result,null,2)}</pre> : null}{jq.isError&&<p className="form-error">{s(jq.error)}</p>}</section>}{editing&&<Drawer title={editing.id?'Configure source':'Add source'} close={()=>setEditing(null)}><form className="admin-form" onSubmit={e=>{e.preventDefault();save.mutate(editing)}}><h4>SOURCE</h4><label>Provider name<input required pattern="[a-z0-9-]+" disabled={Boolean(editing.id)} value={s(editing.provider,'')} onChange={e=>update('provider',e.target.value)}/></label><label>Type<select value={s(editing.type)} onChange={e=>update('type',e.target.value)}><option value="active_directory">Active Directory</option><option value="openldap">OpenLDAP</option></select></label><h4>CONNECTION</h4>{editing.type==='active_directory'?<label>Server<input required value={s((editing.connection as Row|undefined)?.server,'')} onChange={e=>updateNested('connection','server',e.target.value)}/></label>:<><label>LDAP URI<input required value={s((editing.connection as Row|undefined)?.uri,'')} onChange={e=>updateNested('connection','uri',e.target.value)}/></label><label>Base DN<input required value={s((editing.connection as Row|undefined)?.base_dn,'')} onChange={e=>updateNested('connection','base_dn',e.target.value)}/></label><label>Bind DN<input value={s((editing.connection as Row|undefined)?.bind_dn,'')} onChange={e=>updateNested('connection','bind_dn',e.target.value)}/></label></>}<h4>SECRET REFERENCES</h4><label>Username environment variable<input placeholder="LDAP_USERNAME" value={s((editing.credentials as Row|undefined)?.username_env,'')} onChange={e=>updateNested('credentials','username_env',e.target.value||undefined)}/></label><label>Password environment variable<input placeholder="LDAP_PASSWORD" value={s((editing.credentials as Row|undefined)?.password_env,'')} onChange={e=>updateNested('credentials','password_env',e.target.value||undefined)}/></label><div className="button-row"><button type="button" className="button subtle" disabled={test.isPending} onClick={()=>test.mutate(editing)}>Test connection</button><button type="submit" className="button primary" disabled={save.isPending}>Save</button></div></form></Drawer>}</>}
-function AuditTrail(){const[page,setPage]=useState(0),limit=25,q=useQuery({queryKey:['audit-events',page],queryFn:()=>getPage('audit-events',{limit,offset:page*limit})});return <><Head title="Audit trail"/><p className="muted">Immutable trace of sensitive EARE governance operations.</p><Table cols={['When','Actor','Event','Object','Details']} q={q} rows={arr(q.data?.items).map(r=>[s(r.created_at),s(r.actor),s(r.event_type),s(r.object_type)+' / '+s(r.object_id),s(r.details)])}/><Pager total={q.data?.total??0} limit={limit} offset={page*limit} setOffset={n=>setPage(Math.max(0,Math.floor(n/limit)))} setLimit={()=>{}}/></>}
-function Reports(){const q=useQuery({queryKey:['reports'],queryFn:()=>getPage('campaigns',{limit:100})}),[campaign,setCampaign]=useState('');const campaigns=arr(q.data?.items),selected=campaigns.find(r=>s(r.id)===campaign)||campaigns[0];return <><Head title="Reports"/><div className="filterbar"><select className="filter-button" value={s(selected?.id,'')} onChange={e=>setCampaign(e.target.value)}><option value="">Select campaign</option>{campaigns.map(r=><option key={s(r.id)} value={s(r.id)}>{s(r.name)}</option>)}</select></div>{selected?<section className="panel"><h2>{s(selected.name)} reports</h2><div className="report-list"><div className="report-row"><strong>Campaign review report</strong><a href={`/api/reports/${s(selected.id)}/html`}>HTML</a></div><div className="report-row"><strong>Campaign results</strong><a href={`/api/reports/${s(selected.id)}/csv`}>CSV</a></div><div className="report-row"><strong>Campaign evidence</strong><a href={`/api/reports/${s(selected.id)}/json`}>JSON</a></div></div></section>:<div className="empty">No campaign available.</div>}</>}
-function UsersPage(){const c=useQueryClient(),q=useQuery({queryKey:['system'],queryFn:()=>getJson('system')}),[search,setSearch]=useState(''),[open,setOpen]=useState(false),[error,setError]=useState(''),[form,setForm]=useState<Row>({username:'',display_name:'',role:'OPERATOR',scopes:'',password:'',enabled:true}),m=useMutation({mutationFn:()=>postJson('system/users',{...form,scopes:String(form.scopes||'').split(',').map(x=>x.trim()).filter(Boolean),password:String(form.password||'')||undefined,must_change_password:Boolean(form.password)}),onSuccess:async()=>{setOpen(false);setError('');await c.invalidateQueries({queryKey:['system']})},onError:e=>setError(s(e,'Unable to save user'))}),users=arr(q.data?.users).filter(r=>!search||[r.username,r.display_name,r.role].map(String).join(' ').toLowerCase().includes(search.toLowerCase()));const edit=(r?:Row)=>{setError('');setForm(r?{...r,scopes:vals(r.scopes).join(', '),password:''}:{username:'',display_name:'',role:'OPERATOR',scopes:'',password:'',enabled:true});setOpen(true)};return <><Head title="Users & permissions"><button className="button primary" onClick={()=>edit()}>+ New user</button></Head><Filter v={search} onChange={setSearch}/><Table cols={['User','Username','Role','Scope','Status','Action']} q={q} rows={users.map(r=>[s(r.display_name),s(r.username),<Status v={r.role}/>,s(vals(r.scopes).join(', '),'All'),<Status v={r.enabled?'enabled':'disabled'}/>,<button className="link-button" onClick={()=>edit(r)}>Edit</button>])}/>{open&&<Drawer title={form.id?'Edit user':'New user'} close={()=>setOpen(false)}><form className="admin-form" onSubmit={e=>{e.preventDefault();m.mutate()}}><h4>ACCOUNT</h4><label>Username<input required disabled={Boolean(form.id)} value={s(form.username,'')} onChange={e=>setForm({...form,username:e.target.value})}/></label><label>Display name<input required value={s(form.display_name,'')} onChange={e=>setForm({...form,display_name:e.target.value})}/></label><h4>PERMISSIONS</h4><label>Role<select value={s(form.role)} onChange={e=>setForm({...form,role:e.target.value})}><option>ADMIN</option><option>OPERATOR</option><option>GROUP_OWNER</option><option>BUSINESS_ADMIN</option></select></label><label>Scopes<input placeholder="provider-a, provider-b" value={s(form.scopes,'')} onChange={e=>setForm({...form,scopes:e.target.value})}/></label><h4>AUTHENTICATION</h4><label>{form.id?'Set new password':'Password'}<input required={!form.id} minLength={12} type="password" value={s(form.password,'')} onChange={e=>setForm({...form,password:e.target.value})}/></label><label><input type="checkbox" checked={Boolean(form.enabled)} onChange={e=>setForm({...form,enabled:e.target.checked})}/> Enabled</label>{error&&<p className="form-error">{error}</p>}<button className="button primary" type="submit" disabled={m.isPending}>Save user</button></form></Drawer>}</>}
-function Auth(){return <><Head title="Authentication"/><section className="panel"><h2>Local accounts</h2><Status v="ACTIVE"/><p>Username + password authentication is currently active.</p><h2>External SSO</h2><Status v="NOT_YET_ACTIVE"/><p>LDAP / OIDC / SAML provider configuration does not currently enable application sign-in.</p></section></>}
-export default App
+function PasswordChange() {
+  const c = useQueryClient(),
+    [p, setP] = useState(""),
+    [confirm, setConfirm] = useState(""),
+    [e, setE] = useState("");
+  const m = useMutation({
+    mutationFn: () => changePassword(p),
+    onSuccess: (x) => c.setQueryData(["session"], x),
+    onError: (x) => setE(s(x, "Unable to change password")),
+  });
+  return (
+    <div className="login-page">
+      <form
+        className="login-card"
+        onSubmit={(x) => {
+          x.preventDefault();
+          if (p !== confirm) {
+            setE("Passwords do not match");
+            return;
+          }
+          m.mutate();
+        }}
+      >
+        <h1>Change your password</h1>
+        <p>Set a new password before continuing.</p>
+        <label>
+          New password
+          <input required minLength={12} type="password" value={p} onChange={(x) => setP(x.target.value)} />
+        </label>
+        <label>
+          Confirm password
+          <input
+            required
+            minLength={12}
+            type="password"
+            value={confirm}
+            onChange={(x) => setConfirm(x.target.value)}
+          />
+        </label>
+        {e && <p className="form-error">{e}</p>}
+        <button className="button primary" disabled={m.isPending}>
+          Change password
+        </button>
+      </form>
+    </div>
+  );
+}
+function Login() {
+  const c = useQueryClient(),
+    [u, setU] = useState(""),
+    [p, setP] = useState(""),
+    [e, setE] = useState("");
+  const m = useMutation({
+    mutationFn: () => login(u, p),
+    onSuccess: (x) => c.setQueryData(["session"], x),
+    onError: (x) => setE(s(x, "Unable to sign in")),
+  });
+  return (
+    <div className="login-page">
+      <form
+        className="login-card"
+        onSubmit={(x) => {
+          x.preventDefault();
+          m.mutate();
+        }}
+      >
+        <h1>Sign in to EARE</h1>
+        <label>
+          Username
+          <input required value={u} onChange={(x) => setU(x.target.value)} />
+        </label>
+        <label>
+          Password
+          <input required type="password" value={p} onChange={(x) => setP(x.target.value)} />
+        </label>
+        {e && <p className="form-error">{e}</p>}
+        <button className="button primary">Sign in</button>
+      </form>
+    </div>
+  );
+}
+const navSections = [
+  {
+    heading: null,
+    items: [
+      { to: "/", label: "Overview", icon: LayoutDashboard, roles: ["ADMIN", "OPERATOR"] },
+      { to: "/reviews", label: "My Reviews", icon: Check, roles: ["ADMIN", "OPERATOR", "GROUP_OWNER"] },
+      {
+        to: "/actions?view=my",
+        label: "My Actions",
+        icon: Check,
+        roles: ["ADMIN", "OPERATOR", "BUSINESS_ADMIN"],
+      },
+    ],
+  },
+  {
+    heading: "ACCESS & REFERENCE",
+    items: [
+      { to: "/identities", label: "Identities", icon: Users, roles: ["ADMIN", "OPERATOR"] },
+      { to: "/accesses", label: "Access", icon: KeyRound, roles: ["ADMIN", "OPERATOR"] },
+      { to: "/golden", label: "Golden Source", icon: ShieldCheck, roles: ["ADMIN", "OPERATOR"] },
+    ],
+  },
+  {
+    heading: "AUDIT",
+    items: [
+      { to: "/campaigns", label: "Campaigns", icon: Check, roles: ["ADMIN", "OPERATOR"] },
+      { to: "/findings", label: "Findings", icon: AlertTriangle, roles: ["ADMIN", "OPERATOR"] },
+      { to: "/actions", label: "Actions", icon: Check, roles: ["ADMIN", "OPERATOR", "BUSINESS_ADMIN"] },
+      { to: "/reports", label: "Reports", icon: FileDown, roles: ["ADMIN", "OPERATOR"] },
+    ],
+  },
+  {
+    heading: "SYSTEM",
+    items: [
+      { to: "/sources", label: "Sources & IdPs", icon: Database, roles: ["ADMIN", "OPERATOR"] },
+      { to: "/system/users", label: "Users & permissions", icon: Users, roles: ["ADMIN"] },
+      { to: "/system/authentication", label: "Authentication", icon: Settings, roles: ["ADMIN"] },
+      { to: "/system/audit", label: "Audit trail", icon: FileDown, roles: ["ADMIN"] },
+    ],
+  },
+];
+function Shell({ principal }: { principal: Principal }) {
+  const [c, setC] = useState(false),
+    q = useQueryClient();
+  return (
+    <div className="app-shell">
+      <aside className={c ? "sidebar open" : "sidebar"}>
+        <div className="brand">
+          <span className="brand-mark">E</span>
+          <span>EARE</span>
+        </div>
+        <nav>
+          {navSections.map((section) => {
+            const items = section.items.filter((x) => x.roles.includes(principal.role));
+            return items.length ? (
+              <div className="nav-section" key={section.heading ?? "product"}>
+                {section.heading && <div className="nav-heading">{section.heading}</div>}
+                {items.map(({ to, label, icon: I }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={to === "/"}
+                    onClick={() => setC(false)}
+                    className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+                  >
+                    <I size={17} />
+                    {label}
+                  </NavLink>
+                ))}
+              </div>
+            ) : null;
+          })}
+        </nav>
+        <div className="sidebar-footer">
+          <span className="health-dot" />
+          API connected
+        </div>
+      </aside>
+      <div className="page">
+        <header className="topbar">
+          <button className="icon-button mobile-menu" onClick={() => setC(!c)}>
+            <Menu />
+          </button>
+          <span className="crumb">
+            Workspace <ChevronRight size={14} /> Access governance
+          </span>
+          <div className="top-actions">
+            <span className="user-name">
+              {principal.display_name}
+              <span>{principal.role}</span>
+            </span>
+            <button
+              className="icon-button"
+              aria-label="Sign out"
+              onClick={async () => {
+                await logout();
+                q.removeQueries({ queryKey: ["session"] });
+              }}
+            >
+              <LogOut />
+            </button>
+          </div>
+        </header>
+        <main>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/reviews" element={<Reviews />} />
+            <Route path="/identities" element={<Identities />} />
+            <Route path="/accesses" element={<Accesses />} />
+            <Route path="/golden" element={<Golden />} />
+            <Route path="/campaigns" element={<Campaigns />} />
+            <Route path="/campaigns/new" element={<CampaignNew />} />
+            <Route path="/campaigns/:id" element={<CampaignDetail />} />
+            <Route path="/findings" element={<List path="findings" title="Findings" />} />
+            <Route path="/actions" element={<List path="remediation-actions" title="Actions" />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/sources" element={<Sources />} />
+            <Route path="/system/users" element={<UsersPage />} />
+            <Route path="/system/authentication" element={<Auth />} />
+            <Route path="/system/audit" element={<AuditTrail />} />
+            <Route path="*" element={<Navigate to={roleHome(principal.role)} />} />
+          </Routes>
+        </main>
+      </div>
+    </div>
+  );
+}
+function Head({ title, children }: { title: string; children?: ReactNode }) {
+  return (
+    <div className="page-header">
+      <div>
+        <div className="eyebrow">EARE</div>
+        <h1>{title}</h1>
+      </div>
+      {children}
+    </div>
+  );
+}
+function Status({ v }: { v: unknown }) {
+  return <span className="status">{s(v, "unknown").replaceAll("_", " ")}</span>;
+}
+function Filter({
+  v,
+  onChange,
+  children,
+}: {
+  v: string;
+  onChange: (v: string) => void;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="filterbar">
+      <div className="search">
+        <Search />
+        <input placeholder="Search" value={v} onChange={(e) => onChange(e.target.value)} />
+      </div>
+      {children}
+    </div>
+  );
+}
+function SelectFilter({
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  placeholder: string;
+}) {
+  return (
+    <select className="filter-button" value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{placeholder}</option>
+      {options.map((x) => (
+        <option key={x} value={x}>
+          {x.replaceAll("_", " ")}
+        </option>
+      ))}
+    </select>
+  );
+}
+function debounce(v: string) {
+  const [d, setD] = useState(v);
+  useEffect(() => {
+    const x = setTimeout(() => setD(v), 300);
+    return () => clearTimeout(x);
+  }, [v]);
+  return d;
+}
+function Pager({
+  total,
+  limit,
+  offset,
+  setOffset,
+  setLimit,
+}: {
+  total: number;
+  limit: number;
+  offset: number;
+  setOffset: (n: number) => void;
+  setLimit: (n: number) => void;
+}) {
+  const pages = pageCount(total, limit),
+    p = Math.floor(offset / limit) + 1;
+  return (
+    <div className="pagination">
+      <span>{pageLabel(total, limit, offset)}</span>
+      <button className="button subtle" disabled={p <= 1} onClick={() => setOffset(offset - limit)}>
+        Previous
+      </button>
+      <span>
+        Page {p} / {pages}
+      </span>
+      <button className="button subtle" disabled={p >= pages} onClick={() => setOffset(offset + limit)}>
+        Next
+      </button>
+      <select
+        value={limit}
+        onChange={(e) => {
+          setLimit(+e.target.value);
+          setOffset(0);
+        }}
+      >
+        <option>25</option>
+        <option>50</option>
+        <option>100</option>
+      </select>
+    </div>
+  );
+}
+function Table({
+  cols,
+  rows,
+  q,
+  onRow,
+}: {
+  cols: string[];
+  rows: ReactNode[][];
+  q?: any;
+  onRow?: (i: number) => void;
+}) {
+  if (q?.isLoading) return <div className="empty">Loading…</div>;
+  if (q?.isError)
+    return (
+      <div className="empty">
+        {s(q.error)} <button onClick={() => q.refetch()}>Retry</button>
+      </div>
+    );
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            {cols.map((x) => (
+              <th key={x}>{x}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length ? (
+            rows.map((r, i) => (
+              <tr className={onRow ? "clickable" : ""} onClick={() => onRow?.(i)} key={i}>
+                {r.map((x, j) => (
+                  <td key={j}>{x}</td>
+                ))}
+              </tr>
+            ))
+          ) : (
+            <tr>
+              <td colSpan={cols.length}>No records match this view.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+function Drawer({ title, close, children }: { title: string; close: () => void; children: ReactNode }) {
+  return (
+    <div className="drawer-backdrop" onClick={close}>
+      <aside className="drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="drawer-head">
+          <h2>{title}</h2>
+          <button className="icon-button" onClick={close}>
+            <X />
+          </button>
+        </div>
+        <div className="drawer-body">{children}</div>
+      </aside>
+    </div>
+  );
+}
+function Home() {
+  const q = useQuery({ queryKey: ["dashboard"], queryFn: () => getJson("dashboard") });
+  const m = (q.data?.metrics ?? {}) as Row;
+  return (
+    <>
+      <Head title="Overview" />
+      <div className="metrics">
+        {[
+          ["Campaigns", m.campaigns],
+          ["Reviews remaining", m.pending_reviews],
+          ["Actions", m.remediation_actions],
+          ["Findings", m.findings],
+        ].map((x) => (
+          <div className="metric" key={String(x[0])}>
+            <strong>{s(x[1], "0")}</strong>
+            <small>{String(x[0])}</small>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+function useList(path: string, extra: Row = {}) {
+  const [search, setSearch] = useState(""),
+    [offset, setOffset] = useState(0),
+    [limit, setLimit] = useState(25),
+    selected = debounce(search);
+  const q = useQuery({
+    queryKey: [path, selected, limit, offset, extra],
+    queryFn: () => getPage(path, { ...extra, search: selected, limit, offset }),
+  });
+  useEffect(() => setOffset(0), [selected]);
+  return { q, search, setSearch, offset, setOffset, limit, setLimit };
+}
+function Identities() {
+  const [provider, setProvider] = useState(""),
+    [status, setStatus] = useState(""),
+    x = useList("identities", { provider, status }),
+    [selected, setSelected] = useState<Row | null>(null);
+  return (
+    <>
+      <Head title="Identities" />
+      <Filter v={x.search} onChange={x.setSearch}>
+        <SelectFilter
+          value={provider}
+          onChange={setProvider}
+          options={["active_directory", "openldap"]}
+          placeholder="Source / IdP"
+        />
+        <SelectFilter
+          value={status}
+          onChange={setStatus}
+          options={["active", "disabled", "group", "user"]}
+          placeholder="Status / type"
+        />
+      </Filter>
+      <Table
+        cols={["Identity", "Type", "Source / IdP", "Status", "Accesses", "Findings"]}
+        q={x.q}
+        rows={(x.q.data?.items ?? []).map((r) => [
+          <button className="link-button" onClick={() => setSelected(r)}>
+            {s(r.identifier)}
+          </button>,
+          s(r.type),
+          s(r.provider),
+          <Status v={r.status} />,
+          s(r.access_count, "0"),
+          s(r.finding_count, "0"),
+        ])}
+      />
+      <Pager
+        total={x.q.data?.total ?? 0}
+        limit={x.limit}
+        offset={x.offset}
+        setOffset={x.setOffset}
+        setLimit={x.setLimit}
+      />
+      {selected && <IdentityDrawer identity={selected} close={() => setSelected(null)} />}
+    </>
+  );
+}
+function IdentityDrawer({ identity, close }: { identity: Row; close: () => void }) {
+  const q = useQuery({
+      queryKey: ["identity-accesses", identity.id],
+      queryFn: () =>
+        getJson(`identities/${encodeURIComponent(s(identity.id, s(identity.identifier)))}/accesses`),
+    }),
+    [access, setAccess] = useState<Row | null>(null),
+    rows: Row[] = [
+      ...arr(q.data?.accesses).map((r) => ({ ...r, mode: "Direct" })),
+      ...arr(q.data?.effective_accesses).map((r) => ({ ...r, mode: "Effective" })),
+    ];
+  return (
+    <Drawer title={s(identity.identifier)} close={close}>
+      <h4>IDENTITY</h4>
+      <p>Status: {s(identity.status)}</p>
+      <h4>ACCESSES</h4>
+      <Table
+        cols={["Access", "Source", "Permission", "Mode", "State"]}
+        q={q}
+        rows={rows.map((r) => [
+          <button
+            className="link-button"
+            onClick={() => setAccess({ provider: r.access_provider ?? r.provider, name: r.access_name })}
+          >
+            {s(r.access_name)}
+          </button>,
+          s(r.access_provider ?? r.provider),
+          s(r.permission),
+          s(r.mode),
+          <Status v={r.classification ?? "observed"} />,
+        ])}
+      />
+      {access && <AccessDrawer access={access} close={() => setAccess(null)} />}
+    </Drawer>
+  );
+}
+function Accesses() {
+  const [provider, setProvider] = useState(""),
+    x = useList("accesses", { provider }),
+    [selected, setSelected] = useState<Row | null>(null);
+  return (
+    <>
+      <Head title="Access" />
+      <Filter v={x.search} onChange={x.setSearch}>
+        <SelectFilter
+          value={provider}
+          onChange={setProvider}
+          options={["active_directory", "openldap"]}
+          placeholder="Source / application"
+        />
+      </Filter>
+      <Table
+        cols={["Access", "Source / application", "Permission", "Target", "Holders", "Findings"]}
+        q={x.q}
+        rows={(x.q.data?.items ?? []).map((r) => [
+          <button className="link-button" onClick={() => setSelected(r)}>
+            {s(r.name)}
+          </button>,
+          s(r.provider),
+          s(r.permission),
+          s(r.target),
+          s(r.assignment_count, "0"),
+          s(r.finding_count, "0"),
+        ])}
+      />
+      <Pager
+        total={x.q.data?.total ?? 0}
+        limit={x.limit}
+        offset={x.offset}
+        setOffset={x.setOffset}
+        setLimit={x.setLimit}
+      />
+      {selected && <AccessDrawer access={selected} close={() => setSelected(null)} />}
+    </>
+  );
+}
+function AccessDrawer({ access, close }: { access: Row; close: () => void }) {
+  const [tab, setTab] = useState("overview"),
+    provider = s(access.provider),
+    name = s(access.name ?? access.access_name),
+    q = useQuery({
+      queryKey: ["holders", provider, name],
+      queryFn: () => getJson(`accesses/${encodeURIComponent(provider)}/${encodeURIComponent(name)}/holders`),
+    });
+  return (
+    <Drawer title={name} close={close}>
+      <div className="tabs">
+        <button onClick={() => setTab("overview")}>Overview</button>
+        <button onClick={() => setTab("holders")}>Holders</button>
+      </div>
+      {tab === "overview" ? (
+        <>
+          <p>Permission: {s(access.permission)}</p>
+          <p>Target: {s(access.target)}</p>
+          <p>Holder count: {arr(q.data?.holders).length + arr(q.data?.effective_holders).length}</p>
+        </>
+      ) : (
+        <Table
+          cols={["Identity", "Direct / Effective", "Why"]}
+          q={q}
+          rows={[
+            ...arr(q.data?.holders).map((r) => ({ ...r, mode: "Direct" })),
+            ...arr(q.data?.effective_holders).map((r) => ({ ...r, mode: "Effective" })),
+          ].map((r: Row) => [
+            s(r.identity_identifier),
+            s(r.mode),
+            r.mode === "Direct" ? "Direct grant" : "Effective provenance",
+          ])}
+        />
+      )}
+    </Drawer>
+  );
+}
+function Reviews() {
+  const campaigns = useQuery({
+      queryKey: ["review-campaigns"],
+      queryFn: () => getPage("campaigns", { limit: 100 }),
+    }),
+    [decision, setDecision] = useState(""),
+    [campaign, setCampaign] = useState(""),
+    x = useList("review-items", { status: decision, campaign }),
+    [selected, setSelected] = useState<Row | null>(null);
+  return (
+    <>
+      <Head title="My Reviews" />
+      <Filter v={x.search} onChange={x.setSearch}>
+        <SelectFilter
+          value={campaign}
+          onChange={setCampaign}
+          options={arr(campaigns.data?.items).map((r) => s(r.id))}
+          placeholder="Campaign"
+        />
+        <SelectFilter
+          value={decision}
+          onChange={setDecision}
+          options={["pending", "approve", "revoke", "not_applicable"]}
+          placeholder="Decision"
+        />
+      </Filter>
+      <Table
+        cols={["Identity", "Access", "Classification", "Latest decision"]}
+        q={x.q}
+        rows={[...(x.q.data?.items ?? [])]
+          .sort((a, b) => Number(!a.decision) - Number(!b.decision))
+          .map((r) => [
+            <button className="link-button" onClick={() => setSelected(r)}>
+              {s(r.identity_identifier)}
+            </button>,
+            s(r.access_name),
+            <Status v={r.classification} />,
+            <Status v={r.decision ?? "pending"} />,
+          ])}
+      />
+      <Pager
+        total={x.q.data?.total ?? 0}
+        limit={x.limit}
+        offset={x.offset}
+        setOffset={x.setOffset}
+        setLimit={x.setLimit}
+      />
+      {selected && (
+        <ReviewDrawer
+          item={selected}
+          items={x.q.data?.items ?? []}
+          close={() => setSelected(null)}
+          next={setSelected}
+        />
+      )}
+    </>
+  );
+}
+function ReviewDrawer({
+  item,
+  items,
+  close,
+  next,
+}: {
+  item: Row;
+  items: Row[];
+  close: () => void;
+  next: (x: Row | null) => void;
+}) {
+  const c = useQueryClient(),
+    [reason, setReason] = useState(""),
+    [pending, setPending] = useState<string | null>(null);
+  const m = useMutation({
+    mutationFn: (v: string) => postDecision(s(item.id), v, v === "approve" ? undefined : reason.trim()),
+    onSuccess: async () => {
+      await c.invalidateQueries({ queryKey: ["review-items"] });
+      const i = items.findIndex((r) => r.id === item.id);
+      next(items.slice(i + 1).find((r) => !r.decision) || null);
+      setPending(null);
+      setReason("");
+    },
+    onError: () => setReason("Decision failed"),
+  });
+  const paths = arr(item.paths);
+  return (
+    <Drawer title="Review item" close={close}>
+      <h4>WHY</h4>
+      {item.direct ? (
+        <p>
+          <strong>Direct grant</strong>
+        </p>
+      ) : paths.length ? (
+        <>
+          {paths.map((p, i) => (
+            <p className="path" key={i}>
+              {arr(p.steps ?? p.access_chain).map((z, j) => (
+                <span key={j}>
+                  {j ? " → " : ""}
+                  {s(z.name ?? z.identifier ?? z)}
+                </span>
+              ))}
+            </p>
+          ))}
+        </>
+      ) : (
+        <p>Provenance not available</p>
+      )}
+      <h4>CURRENT STATE</h4>
+      {currentStateLabels(Boolean(item.observed), Boolean(item.expected)).map((v) => (
+        <p key={v}>{v}</p>
+      ))}
+      <h4>CLASSIFICATION</h4>
+      <Status v={item.classification} />
+      {pending && (
+        <div className="reason-form">
+          <label>
+            Reason *<textarea autoFocus value={reason} onChange={(e) => setReason(e.target.value)} />
+          </label>
+          <button
+            onClick={() => {
+              setPending(null);
+              setReason("");
+            }}
+          >
+            Cancel
+          </button>
+          <button disabled={!reason.trim() || m.isPending} onClick={() => m.mutate(pending)}>
+            Confirm {pending === "revoke" ? "revoke" : "N/A"}
+          </button>
+        </div>
+      )}
+      {reason === "Decision failed" && <p className="form-error">Decision failed</p>}
+      {!pending && (
+        <div className="drawer-footer">
+          <button onClick={() => setPending("not_applicable")}>N/A</button>
+          <button onClick={() => setPending("revoke")}>Revoke</button>
+          <button className="button primary" onClick={() => m.mutate("approve")}>
+            Approve
+          </button>
+        </div>
+      )}
+    </Drawer>
+  );
+}
+function List({ path, title }: { path: string; title: string }) {
+  const campaigns = useQuery({
+      queryKey: [path, "campaigns"],
+      queryFn: () => getPage("campaigns", { limit: 100 }),
+    }),
+    findings = path === "findings",
+    [provider, setProvider] = useState(""),
+    [status, setStatus] = useState(""),
+    [campaign, setCampaign] = useState(""),
+    x = useList(path, { provider, status, campaign }),
+    [selected, setSelected] = useState<Row | null>(null);
+  return (
+    <>
+      <Head title={title} />
+      <Filter v={x.search} onChange={x.setSearch}>
+        <SelectFilter
+          value={provider}
+          onChange={setProvider}
+          options={["active_directory", "openldap"]}
+          placeholder="Source"
+        />
+        <SelectFilter
+          value={status}
+          onChange={setStatus}
+          options={findings ? ["unexpected", "missing", "expected_and_observed"] : ["pending", "exported"]}
+          placeholder="Status"
+        />
+        <SelectFilter
+          value={campaign}
+          onChange={setCampaign}
+          options={arr(campaigns.data?.items).map((r) => s(r.id))}
+          placeholder="Campaign"
+        />
+      </Filter>
+      <Table
+        cols={
+          findings
+            ? ["Classification", "Identity", "Access", "Source", "Campaign", "Observed", "Expected"]
+            : ["Identity", "Requested action", "Access / Application", "Campaign", "Status"]
+        }
+        q={x.q}
+        rows={(x.q.data?.items ?? []).map((r) =>
+          findings
+            ? [
+                <Status v={r.classification} />,
+                <button className="link-button" onClick={() => setSelected(r)}>
+                  {s(r.identity_identifier)}
+                </button>,
+                s(r.access_name),
+                s(r.access_provider),
+                s(r.campaign_id),
+                s(r.observed),
+                s(r.expected),
+              ]
+            : [
+                <button className="link-button" onClick={() => setSelected(r)}>
+                  {s(r.identity_identifier)}
+                </button>,
+                s(r.action, s(r.decision)),
+                s(r.access_name, s(r.target)),
+                s(r.campaign_id),
+                <Status v={r.status} />,
+              ],
+        )}
+      />
+      <Pager
+        total={x.q.data?.total ?? 0}
+        limit={x.limit}
+        offset={x.offset}
+        setOffset={x.setOffset}
+        setLimit={x.setLimit}
+      />
+      {selected &&
+        (findings ? (
+          <FindingDrawer row={selected} close={() => setSelected(null)} />
+        ) : (
+          <ActionDrawer row={selected} close={() => setSelected(null)} />
+        ))}
+    </>
+  );
+}
+function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
+  return (
+    <Drawer title="Finding" close={close}>
+      <h4>WHAT HAPPENED</h4>
+      <p>{s(vals(row.findings).join(", "), s(row.classification, "No classification"))}</p>
+      <h4>CURRENT STATE</h4>
+      <p>
+        Observed: {s(row.observed)} · Expected: {s(row.expected)}
+      </p>
+      <h4>CONTEXT</h4>
+      <p>Identity: {s(row.identity_identifier)}</p>
+      <p>Access: {s(row.access_name)}</p>
+      <p>Source: {s(row.access_provider)}</p>
+      {row.campaign_id != null ? <p>Campaign: {s(row.campaign_id)}</p> : null}
+    </Drawer>
+  );
+}
+function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
+  return (
+    <Drawer title="Remediation action" close={close}>
+      <h4>WHAT TO DO</h4>
+      <p>Identity: {s(row.identity_identifier)}</p>
+      <p>Access: {s(row.access_name)}</p>
+      <p>Application / target: {s(row.target, s(row.access_name))}</p>
+      <h4>WHY</h4>
+      <p>Campaign: {s(row.campaign_id)}</p>
+      <p>Decision: {s(row.decision)}</p>
+      <p>Comment: {s(row.comment)}</p>
+      <h4>STATUS</h4>
+      <Status v={row.status} />
+    </Drawer>
+  );
+}
+function Campaigns() {
+  const x = useList("campaigns");
+  return (
+    <>
+      <Head title="Campaigns">
+        <a className="button primary" href="/campaigns/new">
+          + New campaign
+        </a>
+      </Head>
+      <Filter v={x.search} onChange={x.setSearch} />
+      <Table
+        cols={["Campaign", "Scope", "Status", "Progress", "Pending", "Due date"]}
+        q={x.q}
+        rows={(x.q.data?.items ?? []).map((r) => [
+          <NavLink to={"/campaigns/" + s(r.id)}>{s(r.name)}</NavLink>,
+          s((r.scope as Row | undefined)?.type, "all"),
+          <Status v={r.status} />,
+          <div className="table-progress">
+            <div>
+              <span style={{ width: `${pct(r.progress)}%` }} />
+            </div>
+            {pct(r.progress)}%
+          </div>,
+          s(r.pending, "0"),
+          s(r.due_at),
+        ])}
+      />
+      <Pager
+        total={x.q.data?.total ?? 0}
+        limit={x.limit}
+        offset={x.offset}
+        setOffset={x.setOffset}
+        setLimit={x.setLimit}
+      />
+    </>
+  );
+}
+function CampaignNew() {
+  const snap = useQuery({ queryKey: ["snapshots"], queryFn: () => getPage("snapshots", { limit: 100 }) }),
+    gold = useQuery({
+      queryKey: ["golden-versions"],
+      queryFn: () => getPage("golden-source-versions", { limit: 100 }),
+    }),
+    [form, setForm] = useState<Row>({
+      name: "",
+      snapshot_id: "",
+      golden_source_version_id: "",
+      due_at: "",
+      scope_type: "all",
+    }),
+    [preview, setPreview] = useState<Row | null>(null),
+    [allow, setAllow] = useState(false),
+    previewM = useMutation({
+      mutationFn: () =>
+        postJson("campaigns/preview", {
+          ...form,
+          scope: {
+            type: s(form.scope_type, "all"),
+            ...(form.scope_type === "providers" ? { values: vals(form.providers) } : {}),
+          },
+        }),
+      onSuccess: setPreview,
+    }),
+    create = useMutation({
+      mutationFn: async (open: boolean) => {
+        const { scope_type, providers, ...fields } = form;
+        const payload = {
+          ...fields,
+          scope: {
+            type: s(scope_type, "all"),
+            ...(scope_type === "providers" ? { values: vals(providers) } : {}),
+          },
+          allow_unresolved_reviewers: allow,
+        };
+        const d = await postJson("campaigns", payload);
+        if (open && d.id)
+          await postJson("campaigns/" + s(d.id) + "/open", { allow_unresolved_reviewers: allow });
+        return d;
+      },
+      onSuccess: (d) => {
+        if (d.id) window.location.href = "/campaigns/" + s(d.id);
+      },
+    }),
+    snapshots = arr(snap.data?.items),
+    versions = arr(gold.data?.items);
+  useEffect(() => {
+    if (!form.snapshot_id && snapshots.length)
+      setForm((x) => ({ ...x, snapshot_id: s(snapshots[snapshots.length - 1].id) }));
+    if (!form.golden_source_version_id && versions.length)
+      setForm((x) => ({ ...x, golden_source_version_id: s(versions[versions.length - 1].id) }));
+  }, [snapshots.length, versions.length]);
+  return (
+    <>
+      <Head title="New campaign">
+        <NavLink className="button subtle" to="/campaigns">
+          Cancel
+        </NavLink>
+      </Head>
+      <section className="panel">
+        <h2>Campaign setup</h2>
+        <form
+          className="admin-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            previewM.mutate();
+          }}
+        >
+          <label>
+            Name
+            <input
+              required
+              value={s(form.name, "")}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </label>
+          <label>
+            Scope
+            <select
+              value={s(form.scope_type, "all")}
+              onChange={(e) => setForm({ ...form, scope_type: e.target.value })}
+            >
+              <option value="all">All</option>
+              <option value="providers">Provider(s)</option>
+            </select>
+          </label>
+          <label>
+            Snapshot
+            <select
+              required
+              value={s(form.snapshot_id, "")}
+              onChange={(e) => setForm({ ...form, snapshot_id: e.target.value })}
+            >
+              <option value="">Select snapshot</option>
+              {snapshots.map((r) => (
+                <option key={s(r.id)} value={s(r.id)}>
+                  {s(r.created_at)} · {s(r.assignment_count, "assignments unavailable")}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Golden Source version
+            <select
+              value={s(form.golden_source_version_id, "")}
+              onChange={(e) => setForm({ ...form, golden_source_version_id: e.target.value || undefined })}
+            >
+              <option value="">None</option>
+              {versions.map((r) => (
+                <option key={s(r.id)} value={s(r.id)}>
+                  v{s(r.version)} · {s(r.id)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Due date
+            <input
+              type="date"
+              value={s(form.due_at, "")}
+              onChange={(e) => setForm({ ...form, due_at: e.target.value || undefined })}
+            />
+          </label>
+          <button className="button primary" type="submit" disabled={previewM.isPending}>
+            Preview campaign
+          </button>
+        </form>
+      </section>
+      {preview && (
+        <section className="panel">
+          <h2>Campaign preview</h2>
+          <div className="metrics">
+            <div className="metric">
+              <strong>{s(preview.total_review_items, "0")}</strong>
+              <small>Review items</small>
+            </div>
+            <div className="metric">
+              <strong>{s(preview.resolved_reviewers, "0")}</strong>
+              <small>Reviewers resolved</small>
+            </div>
+            <div className="metric">
+              <strong>{s(preview.unresolved_reviewers, "0")}</strong>
+              <small>Unresolved</small>
+            </div>
+          </div>
+          {Number(preview.unresolved_reviewers) > 0 && (
+            <label>
+              <input type="checkbox" checked={allow} onChange={(e) => setAllow(e.target.checked)} /> Allow
+              unresolved reviewers
+            </label>
+          )}
+          <div className="button-row">
+            <button
+              className="button subtle"
+              disabled={(!allow && Number(preview.unresolved_reviewers) > 0) || create.isPending}
+              onClick={() => create.mutate(false)}
+            >
+              Save as draft
+            </button>
+            <button
+              className="button primary"
+              disabled={(!allow && Number(preview.unresolved_reviewers) > 0) || create.isPending}
+              onClick={() => create.mutate(true)}
+            >
+              Open campaign
+            </button>
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+function CampaignDetail() {
+  const { id = "" } = useParams(),
+    q = useQuery({ queryKey: ["campaign", id], queryFn: () => getJson("campaigns/" + id) }),
+    c = q.data?.campaign as Row | undefined,
+    [tab, setTab] = useState("overview"),
+    [selected, setSelected] = useState<Row | null>(null),
+    [selectedFinding, setSelectedFinding] = useState<Row | null>(null),
+    m = useMutation({
+      mutationFn: (a: string) => postJson("campaigns/" + id + "/" + a),
+      onSuccess: () => q.refetch(),
+    }),
+    reviews = arr(q.data?.reviews),
+    findings = arr(q.data?.findings),
+    status = s(c?.status),
+    pending = reviews.filter((r) => !r.decision).length,
+    ctas = campaignCtas(status, pending);
+  if (!c) return <div className="empty">{q.isLoading ? "Loading..." : "Campaign not found"}</div>;
+  return (
+    <>
+      <Head title={s(c.name)}>
+        <div className="button-row">
+          <NavLink to="/campaigns">Back</NavLink>
+          {ctas.map((a) => (
+            <button
+              className="button subtle"
+              key={a}
+              disabled={a === "close-disabled"}
+              onClick={() => m.mutate(a.replace("-disabled", ""))}
+            >
+              {a}
+            </button>
+          ))}
+        </div>
+      </Head>
+      <div className="tabs">
+        <button
+          className={tab === "overview" ? "text-button active" : "text-button"}
+          onClick={() => setTab("overview")}
+        >
+          Overview
+        </button>
+        <button
+          className={tab === "reviews" ? "text-button active" : "text-button"}
+          onClick={() => setTab("reviews")}
+        >
+          Reviews
+        </button>
+        <button
+          className={tab === "findings" ? "text-button active" : "text-button"}
+          onClick={() => setTab("findings")}
+        >
+          Findings
+        </button>
+      </div>
+      {tab === "overview" && (
+        <section className="panel">
+          <h2>Campaign overview</h2>
+          <p>
+            Status: <Status v={c.status} />
+          </p>
+          <p>Progress: {pct(c.progress)}%</p>
+          <p>Snapshot: {s(c.snapshot_id)}</p>
+          <p>Golden version: {s(c.golden_source_version_id)}</p>
+          <p>Scope: {s((c.scope as Row | undefined)?.type, "all")}</p>
+          <p>
+            Review items: {reviews.length} - Pending: {pending}
+          </p>
+        </section>
+      )}
+      {tab === "reviews" && (
+        <Table
+          cols={["Identity", "Access", "Classification", "Decision"]}
+          rows={reviews.map((r) => [
+            <button className="link-button" onClick={() => setSelected(r)}>
+              {s(r.identity_identifier)}
+            </button>,
+            s(r.access_name),
+            <Status v={r.classification} />,
+            <Status v={r.decision ?? "pending"} />,
+          ])}
+        />
+      )}{" "}
+      {tab === "findings" && (
+        <Table
+          cols={["Finding", "Campaign"]}
+          rows={findings.map((f) => [
+            <button
+              className="link-button"
+              onClick={() =>
+                setSelectedFinding({ classification: "campaign finding", findings: [f], campaign_id: id })
+              }
+            >
+              {s(f)}
+            </button>,
+            s(c.name),
+          ])}
+        />
+      )}{" "}
+      {selected && (
+        <ReviewDrawer item={selected} items={reviews} close={() => setSelected(null)} next={setSelected} />
+      )}{" "}
+      {selectedFinding && <FindingDrawer row={selectedFinding} close={() => setSelectedFinding(null)} />}
+    </>
+  );
+}
+function Golden() {
+  const q = useQuery({ queryKey: ["golden"], queryFn: () => getPage("golden-sources", { limit: 100 }) }),
+    snap = useQuery({ queryKey: ["snap"], queryFn: () => getPage("snapshots", { limit: 100 }) }),
+    versions = useQuery({
+      queryKey: ["golden-versions"],
+      queryFn: () => getPage("golden-source-versions", { limit: 100 }),
+    }),
+    [compare, setCompare] = useState<Row | null>(null),
+    [name, setName] = useState("Main baseline"),
+    [sid, setSid] = useState(""),
+    source = arr(q.data?.items)[0],
+    sourceName = s(source?.name, ""),
+    active =
+      arr(versions.data?.items).find((v) => s(v.id) === s(source?.active_version_id)) ??
+      arr(versions.data?.items).slice(-1)[0],
+    baseline = useMutation({
+      mutationFn: () => postJson("golden-sources/baseline", { name, snapshot_id: sid }),
+      onSuccess: () => {
+        q.refetch();
+        versions.refetch();
+      },
+    }),
+    compareMutation = useMutation({
+      mutationFn: () => getJson(`golden-sources/${sourceName}/compare`),
+      onSuccess: setCompare,
+    }),
+    confirm = useMutation({
+      mutationFn: () =>
+        postJson(`golden-sources/${sourceName}/confirm-version`, {
+          observed_snapshot_id: compare?.observed_snapshot_id,
+          active_golden_version_id: compare?.active_golden_version_id,
+        }),
+      onSuccess: () => {
+        setCompare(null);
+        q.refetch();
+        versions.refetch();
+      },
+    }),
+    snapshots = arr(snap.data?.items),
+    changes = arr(compare?.changes);
+  return (
+    <>
+      <Head title="Golden Source" />
+      {!source ? (
+        <section className="panel">
+          <h2>No expected baseline yet</h2>
+          {snapshots.length ? (
+            <>
+              <p>LATEST OBSERVED SNAPSHOT</p>
+              <p>
+                Collected: {s(snapshots[snapshots.length - 1].created_at)} · Assignments:{" "}
+                {s(snapshots[snapshots.length - 1].assignment_count, "—")}
+              </p>
+              <div className="admin-form">
+                <label>
+                  Baseline name
+                  <input value={name} onChange={(e) => setName(e.target.value)} />
+                </label>
+                <label>
+                  Explicit snapshot
+                  <select value={sid} onChange={(e) => setSid(e.target.value)}>
+                    <option value="">Select snapshot</option>
+                    {snapshots.map((r) => (
+                      <option key={s(r.id)} value={s(r.id)}>
+                        {s(r.created_at)} · {s(r.id)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="button primary"
+                  disabled={!sid || baseline.isPending}
+                  onClick={() => baseline.mutate()}
+                >
+                  Create baseline
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p>No observed snapshot yet.</p>
+              <p>Synchronize a source before creating the expected baseline.</p>
+              <NavLink className="button subtle" to="/sources">
+                Go to Sources &amp; IdPs
+              </NavLink>
+            </>
+          )}
+        </section>
+      ) : (
+        <>
+          <section className="panel">
+            <h2>Golden Source</h2>
+            <p>ACTIVE VERSION · v{s(active?.version, "—")}</p>
+            <p>
+              Expected assignments:{" "}
+              {s(active?.assignments ? arr(active.assignments).length : active?.assignment_count, "—")}
+            </p>
+            <p>Origin: Baseline / Campaign promotion</p>
+            <button
+              className="button primary"
+              onClick={() => compareMutation.mutate()}
+              disabled={compareMutation.isPending}
+            >
+              Compare with latest observed
+            </button>
+          </section>
+          {compare && (
+            <section className="panel">
+              <h2>Preview diff</h2>
+              <div className="diff-summary">
+                <strong>ADDED {changes.filter((r) => r.status === "added").length}</strong>
+                <strong>REMOVED {changes.filter((r) => r.status === "removed").length}</strong>
+                <strong>UNCHANGED {changes.filter((r) => r.status === "unchanged").length}</strong>
+              </div>
+              <Table
+                cols={["State", "Identity", "Access", "Provider"]}
+                rows={changes.map((r) => [
+                  <Status v={r.status} />,
+                  s(r.identity_identifier),
+                  s(r.access_name),
+                  s(r.access_provider),
+                ])}
+              />
+              <p className="muted">
+                Compare mutates nothing. Confirm creates the next version using the returned observed and
+                active version IDs.
+              </p>
+              <button
+                className="button primary"
+                onClick={() => confirm.mutate()}
+                disabled={confirm.isPending}
+              >
+                Confirm new version
+              </button>
+            </section>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+function Sources() {
+  const q = useQuery({ queryKey: ["providers"], queryFn: () => getPage("providers", { limit: 100 }) }),
+    cfg = useQuery({ queryKey: ["source-configs"], queryFn: () => getJson("system/sources") }),
+    [job, setJob] = useState(""),
+    [kind, setKind] = useState("preview"),
+    [error, setError] = useState(""),
+    [editing, setEditing] = useState<Row | null>(null),
+    start = useMutation({
+      mutationFn: (x: { p: string; a: string }) => postJson(`sources/${x.p}/${x.a}`),
+      onSuccess: (d) => {
+        setError("");
+        setJob(s(d.id));
+      },
+      onError: (e) => setError(s(e, "Unable to start source operation")),
+    }),
+    save = useMutation({
+      mutationFn: (body: Row) => postJson("system/sources", body),
+      onSuccess: async () => {
+        setEditing(null);
+        setError("");
+        await cfg.refetch();
+        await q.refetch();
+      },
+      onError: (e) => setError(s(e, "Unable to save source configuration")),
+    }),
+    test = useMutation({
+      mutationFn: (body: Row) => postJson("system/sources/test", body),
+      onSuccess: (d) => setError(s(d.message, "Connection test succeeded")),
+      onError: (e) => setError(s(e, "Source connection test failed")),
+    }),
+    jq = useQuery({
+      queryKey: ["job", job],
+      queryFn: () => getJson(`jobs/${job}`),
+      enabled: !!job,
+      refetchInterval: 1500 as const,
+    }),
+    configs = arr(cfg.data?.sources),
+    observed = arr(q.data?.items),
+    sources = configs.map((c) => ({ ...c, ...(observed.find((o) => s(o.name) === s(c.provider)) || {}) }));
+  const blank = () => ({
+    provider: "",
+    type: "active_directory",
+    connection: { server: "" },
+    collection: { timeout: 300, allow_partial: false },
+    credentials: { username_env: "", password_env: "" },
+  });
+  const edit = (source?: Row) => {
+    setError("");
+    setEditing(source ? JSON.parse(JSON.stringify(source)) : blank());
+  };
+  const update = (key: string, value: unknown) => setEditing((x) => (x ? { ...x, [key]: value } : x));
+  const updateNested = (section: string, key: string, value: unknown) =>
+    setEditing((x) => (x ? { ...x, [section]: { ...((x[section] as Row) || {}), [key]: value } } : x));
+  return (
+    <>
+      <Head title="Sources & IdPs">
+        <button className="button primary" onClick={() => edit()}>
+          + Add source
+        </button>
+      </Head>
+      <p>
+        Connect and monitor the identity and access systems EARE audits. Secrets remain referenced through
+        environment variables and are never stored in the WebUI.
+      </p>
+      {!cfg.isLoading && !configs.length && (
+        <section className="panel">
+          <h2>No collection source is configured.</h2>
+          <p>
+            Use <strong>+ Add source</strong> to configure Active Directory or OpenLDAP.
+          </p>
+        </section>
+      )}
+      <div className="source-grid">
+        {sources.map((r) => (
+          <div className="source-card" key={s(r.provider)}>
+            <div className="source-top">
+              <Status v={r.health} />
+              <span>{s(r.last_sync, "Never synced")}</span>
+            </div>
+            <h2>{s(r.display_name, s(r.provider))}</h2>
+            <p>
+              {s(r.type).toUpperCase()} · {s(r.provider)}
+            </p>
+            <div className="source-stats">
+              <div>
+                <strong>{s(r.identity_count, "0")}</strong>
+                <span>Identities</span>
+              </div>
+              <div>
+                <strong>{s(r.group_count, "0")}</strong>
+                <span>Groups</span>
+              </div>
+              <div>
+                <strong>{s(r.access_count, "0")}</strong>
+                <span>Accesses</span>
+              </div>
+            </div>
+            <div className="source-foot">
+              <button
+                className="button subtle"
+                onClick={() => edit(configs.find((c) => s(c.provider) === s(r.provider)))}
+              >
+                Configure
+              </button>
+              <button
+                className="button subtle"
+                onClick={() => {
+                  setKind("preview");
+                  start.mutate({ p: s(r.provider), a: "preview" });
+                }}
+              >
+                Preview
+              </button>
+              <button
+                className="button primary"
+                onClick={() => {
+                  setKind("sync");
+                  start.mutate({ p: s(r.provider), a: "sync" });
+                }}
+              >
+                Synchronize
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {error && <p className="form-error">{error}</p>}
+      {job && (
+        <section className="panel job-panel">
+          <h2>{kind === "preview" ? "Preview impact" : "Synchronization"}</h2>
+          <p>Collecting… Analysing… Ready when the job completes.</p>
+          <Status v={jq.data?.status} />
+          <p>{s(jq.data?.progress)}</p>
+          {jq.data?.result ? <pre>{JSON.stringify(jq.data.result, null, 2)}</pre> : null}
+          {jq.isError && <p className="form-error">{s(jq.error)}</p>}
+        </section>
+      )}
+      {editing && (
+        <Drawer title={editing.id ? "Configure source" : "Add source"} close={() => setEditing(null)}>
+          <form
+            className="admin-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              save.mutate(editing);
+            }}
+          >
+            <h4>SOURCE</h4>
+            <label>
+              Provider name
+              <input
+                required
+                pattern="[a-z0-9-]+"
+                disabled={Boolean(editing.id)}
+                value={s(editing.provider, "")}
+                onChange={(e) => update("provider", e.target.value)}
+              />
+            </label>
+            <label>
+              Type
+              <select value={s(editing.type)} onChange={(e) => update("type", e.target.value)}>
+                <option value="active_directory">Active Directory</option>
+                <option value="openldap">OpenLDAP</option>
+              </select>
+            </label>
+            <h4>CONNECTION</h4>
+            {editing.type === "active_directory" ? (
+              <label>
+                Server
+                <input
+                  required
+                  value={s((editing.connection as Row | undefined)?.server, "")}
+                  onChange={(e) => updateNested("connection", "server", e.target.value)}
+                />
+              </label>
+            ) : (
+              <>
+                <label>
+                  LDAP URI
+                  <input
+                    required
+                    value={s((editing.connection as Row | undefined)?.uri, "")}
+                    onChange={(e) => updateNested("connection", "uri", e.target.value)}
+                  />
+                </label>
+                <label>
+                  Base DN
+                  <input
+                    required
+                    value={s((editing.connection as Row | undefined)?.base_dn, "")}
+                    onChange={(e) => updateNested("connection", "base_dn", e.target.value)}
+                  />
+                </label>
+                <label>
+                  Bind DN
+                  <input
+                    value={s((editing.connection as Row | undefined)?.bind_dn, "")}
+                    onChange={(e) => updateNested("connection", "bind_dn", e.target.value)}
+                  />
+                </label>
+              </>
+            )}
+            <h4>SECRET REFERENCES</h4>
+            <label>
+              Username environment variable
+              <input
+                placeholder="LDAP_USERNAME"
+                value={s((editing.credentials as Row | undefined)?.username_env, "")}
+                onChange={(e) => updateNested("credentials", "username_env", e.target.value || undefined)}
+              />
+            </label>
+            <label>
+              Password environment variable
+              <input
+                placeholder="LDAP_PASSWORD"
+                value={s((editing.credentials as Row | undefined)?.password_env, "")}
+                onChange={(e) => updateNested("credentials", "password_env", e.target.value || undefined)}
+              />
+            </label>
+            <div className="button-row">
+              <button
+                type="button"
+                className="button subtle"
+                disabled={test.isPending}
+                onClick={() => test.mutate(editing)}
+              >
+                Test connection
+              </button>
+              <button type="submit" className="button primary" disabled={save.isPending}>
+                Save
+              </button>
+            </div>
+          </form>
+        </Drawer>
+      )}
+    </>
+  );
+}
+function AuditTrail() {
+  const [page, setPage] = useState(0),
+    limit = 25,
+    q = useQuery({
+      queryKey: ["audit-events", page],
+      queryFn: () => getPage("audit-events", { limit, offset: page * limit }),
+    });
+  return (
+    <>
+      <Head title="Audit trail" />
+      <p className="muted">Immutable trace of sensitive EARE governance operations.</p>
+      <Table
+        cols={["When", "Actor", "Event", "Object", "Details"]}
+        q={q}
+        rows={arr(q.data?.items).map((r) => [
+          s(r.created_at),
+          s(r.actor),
+          s(r.event_type),
+          s(r.object_type) + " / " + s(r.object_id),
+          s(r.details),
+        ])}
+      />
+      <Pager
+        total={q.data?.total ?? 0}
+        limit={limit}
+        offset={page * limit}
+        setOffset={(n) => setPage(Math.max(0, Math.floor(n / limit)))}
+        setLimit={() => {}}
+      />
+    </>
+  );
+}
+function Reports() {
+  const q = useQuery({ queryKey: ["reports"], queryFn: () => getPage("campaigns", { limit: 100 }) }),
+    [campaign, setCampaign] = useState("");
+  const campaigns = arr(q.data?.items),
+    selected = campaigns.find((r) => s(r.id) === campaign) || campaigns[0];
+  return (
+    <>
+      <Head title="Reports" />
+      <div className="filterbar">
+        <select
+          className="filter-button"
+          value={s(selected?.id, "")}
+          onChange={(e) => setCampaign(e.target.value)}
+        >
+          <option value="">Select campaign</option>
+          {campaigns.map((r) => (
+            <option key={s(r.id)} value={s(r.id)}>
+              {s(r.name)}
+            </option>
+          ))}
+        </select>
+      </div>
+      {selected ? (
+        <section className="panel">
+          <h2>{s(selected.name)} reports</h2>
+          <div className="report-list">
+            <div className="report-row">
+              <strong>Campaign review report</strong>
+              <a href={`/api/reports/${s(selected.id)}/html`}>HTML</a>
+            </div>
+            <div className="report-row">
+              <strong>Campaign results</strong>
+              <a href={`/api/reports/${s(selected.id)}/csv`}>CSV</a>
+            </div>
+            <div className="report-row">
+              <strong>Campaign evidence</strong>
+              <a href={`/api/reports/${s(selected.id)}/json`}>JSON</a>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <div className="empty">No campaign available.</div>
+      )}
+    </>
+  );
+}
+function UsersPage() {
+  const c = useQueryClient(),
+    q = useQuery({ queryKey: ["system"], queryFn: () => getJson("system") }),
+    [search, setSearch] = useState(""),
+    [open, setOpen] = useState(false),
+    [error, setError] = useState(""),
+    [form, setForm] = useState<Row>({
+      username: "",
+      display_name: "",
+      role: "OPERATOR",
+      scopes: "",
+      password: "",
+      enabled: true,
+    }),
+    m = useMutation({
+      mutationFn: () =>
+        postJson("system/users", {
+          ...form,
+          scopes: String(form.scopes || "")
+            .split(",")
+            .map((x) => x.trim())
+            .filter(Boolean),
+          password: String(form.password || "") || undefined,
+          must_change_password: Boolean(form.password),
+        }),
+      onSuccess: async () => {
+        setOpen(false);
+        setError("");
+        await c.invalidateQueries({ queryKey: ["system"] });
+      },
+      onError: (e) => setError(s(e, "Unable to save user")),
+    }),
+    users = arr(q.data?.users).filter(
+      (r) =>
+        !search ||
+        [r.username, r.display_name, r.role]
+          .map(String)
+          .join(" ")
+          .toLowerCase()
+          .includes(search.toLowerCase()),
+    );
+  const edit = (r?: Row) => {
+    setError("");
+    setForm(
+      r
+        ? { ...r, scopes: vals(r.scopes).join(", "), password: "" }
+        : { username: "", display_name: "", role: "OPERATOR", scopes: "", password: "", enabled: true },
+    );
+    setOpen(true);
+  };
+  return (
+    <>
+      <Head title="Users & permissions">
+        <button className="button primary" onClick={() => edit()}>
+          + New user
+        </button>
+      </Head>
+      <Filter v={search} onChange={setSearch} />
+      <Table
+        cols={["User", "Username", "Role", "Scope", "Status", "Action"]}
+        q={q}
+        rows={users.map((r) => [
+          s(r.display_name),
+          s(r.username),
+          <Status v={r.role} />,
+          s(vals(r.scopes).join(", "), "All"),
+          <Status v={r.enabled ? "enabled" : "disabled"} />,
+          <button className="link-button" onClick={() => edit(r)}>
+            Edit
+          </button>,
+        ])}
+      />
+      {open && (
+        <Drawer title={form.id ? "Edit user" : "New user"} close={() => setOpen(false)}>
+          <form
+            className="admin-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              m.mutate();
+            }}
+          >
+            <h4>ACCOUNT</h4>
+            <label>
+              Username
+              <input
+                required
+                disabled={Boolean(form.id)}
+                value={s(form.username, "")}
+                onChange={(e) => setForm({ ...form, username: e.target.value })}
+              />
+            </label>
+            <label>
+              Display name
+              <input
+                required
+                value={s(form.display_name, "")}
+                onChange={(e) => setForm({ ...form, display_name: e.target.value })}
+              />
+            </label>
+            <h4>PERMISSIONS</h4>
+            <label>
+              Role
+              <select value={s(form.role)} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                <option>ADMIN</option>
+                <option>OPERATOR</option>
+                <option>GROUP_OWNER</option>
+                <option>BUSINESS_ADMIN</option>
+              </select>
+            </label>
+            <label>
+              Scopes
+              <input
+                placeholder="provider-a, provider-b"
+                value={s(form.scopes, "")}
+                onChange={(e) => setForm({ ...form, scopes: e.target.value })}
+              />
+            </label>
+            <h4>AUTHENTICATION</h4>
+            <label>
+              {form.id ? "Set new password" : "Password"}
+              <input
+                required={!form.id}
+                minLength={12}
+                type="password"
+                value={s(form.password, "")}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+              />
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(form.enabled)}
+                onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
+              />{" "}
+              Enabled
+            </label>
+            {error && <p className="form-error">{error}</p>}
+            <button className="button primary" type="submit" disabled={m.isPending}>
+              Save user
+            </button>
+          </form>
+        </Drawer>
+      )}
+    </>
+  );
+}
+function Auth() {
+  return (
+    <>
+      <Head title="Authentication" />
+      <section className="panel">
+        <h2>Local accounts</h2>
+        <Status v="ACTIVE" />
+        <p>Username + password authentication is currently active.</p>
+        <h2>External SSO</h2>
+        <Status v="NOT_YET_ACTIVE" />
+        <p>LDAP / OIDC / SAML provider configuration does not currently enable application sign-in.</p>
+      </section>
+    </>
+  );
+}
+export default App;
