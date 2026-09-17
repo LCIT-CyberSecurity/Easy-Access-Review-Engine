@@ -12,16 +12,18 @@ ROLES = {"ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN"}
 
 def init_system(conn: sqlite3.Connection) -> None:
     conn.executescript("""
-    CREATE TABLE IF NOT EXISTS system_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, password_hash TEXT, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS system_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, password_hash TEXT, must_change_password INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS identity_provider_configs (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, endpoint TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, settings TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
     """)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(system_users)")}
     if "password_hash" not in columns:
         conn.execute("ALTER TABLE system_users ADD COLUMN password_hash TEXT")
+    if "must_change_password" not in columns:
+        conn.execute("ALTER TABLE system_users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
 def list_users(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    return [{**dict(row), "scopes": json.loads(row["scopes"])} for row in conn.execute("SELECT id, username, display_name, role, scopes, enabled, created_at FROM system_users ORDER BY username")]
+    return [{**dict(row), "scopes": json.loads(row["scopes"]), "must_change_password": bool(row["must_change_password"])} for row in conn.execute("SELECT id, username, display_name, role, scopes, enabled, must_change_password, created_at FROM system_users ORDER BY username")]
 
 def _password_hash(password: str, salt: bytes | None = None) -> str:
     salt = salt or secrets.token_bytes(16)
@@ -43,10 +45,10 @@ def _password_matches(password: str, encoded: str | None) -> bool:
 
 
 def authenticate_user(conn: sqlite3.Connection, username: str, password: str) -> dict[str, Any] | None:
-    row = conn.execute("SELECT id, username, display_name, role, scopes, enabled, password_hash FROM system_users WHERE username = ?", (username.strip().lower(),)).fetchone()
+    row = conn.execute("SELECT id, username, display_name, role, scopes, enabled, password_hash, must_change_password FROM system_users WHERE username = ?", (username.strip().lower(),)).fetchone()
     if row is None or not row["enabled"] or not _password_matches(password, row["password_hash"]):
         return None
-    return {"subject": row["id"], "username": row["username"], "display_name": row["display_name"], "role": row["role"], "scopes": json.loads(row["scopes"])}
+    return {"subject": row["id"], "username": row["username"], "display_name": row["display_name"], "role": row["role"], "scopes": json.loads(row["scopes"]), "must_change_password": bool(row["must_change_password"])}
 
 
 def ensure_bootstrap_user(conn: sqlite3.Connection) -> None:
@@ -56,8 +58,8 @@ def ensure_bootstrap_user(conn: sqlite3.Connection) -> None:
         password = os.environ.get("EARE_ADMIN_PASSWORD") or "admin"
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            "INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (username, username, username, "ADMIN", json.dumps(["*"]), 1, _password_hash(password), now),
+            "INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, must_change_password, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (username, username, username, "ADMIN", json.dumps(["*"]), 1, _password_hash(password), 1, now),
         )
         conn.commit()
 
@@ -72,11 +74,21 @@ def upsert_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any
     password = data.get("password")
     if password is not None and (not isinstance(password, str) or len(password) < 12):
         raise ValueError("password must contain at least 12 characters")
-    record = {"id": username, "username": username, "display_name": str(data.get("display_name") or username), "role": role, "scopes": scopes, "enabled": bool(data.get("enabled", True)), "created_at": datetime.now(timezone.utc).isoformat()}
+    record = {"id": username, "username": username, "display_name": str(data.get("display_name") or username), "role": role, "scopes": scopes, "enabled": bool(data.get("enabled", True)), "must_change_password": bool(data.get("must_change_password", False)), "created_at": datetime.now(timezone.utc).isoformat()}
     password_hash = _password_hash(password) if isinstance(password, str) else None
-    conn.execute("""INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, created_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET display_name=excluded.display_name, role=excluded.role, scopes=excluded.scopes, enabled=excluded.enabled, password_hash=COALESCE(excluded.password_hash, system_users.password_hash)""", (record["id"], record["username"], record["display_name"], record["role"], json.dumps(scopes), int(record["enabled"]), password_hash, record["created_at"]))
+    conn.execute("""INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, must_change_password, created_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET display_name=excluded.display_name, role=excluded.role, scopes=excluded.scopes, enabled=excluded.enabled, password_hash=COALESCE(excluded.password_hash, system_users.password_hash), must_change_password=excluded.must_change_password""", (record["id"], record["username"], record["display_name"], record["role"], json.dumps(scopes), int(record["enabled"]), password_hash, int(record["must_change_password"]), record["created_at"]))
     conn.commit()
     return record
+
+def change_password(conn: sqlite3.Connection, username: str, password: str) -> dict[str, Any]:
+    if not isinstance(password, str) or len(password) < 12:
+        raise ValueError("password must contain at least 12 characters")
+    normalized = username.strip().lower()
+    if conn.execute("SELECT 1 FROM system_users WHERE username = ?", (normalized,)).fetchone() is None:
+        raise ValueError("user not found")
+    conn.execute("UPDATE system_users SET password_hash = ?, must_change_password = 0 WHERE username = ?", (_password_hash(password), normalized))
+    conn.commit()
+    return authenticate_user(conn, normalized, password) or {}
 
 def list_idps(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute("SELECT id, name, kind, endpoint, enabled, settings, created_at FROM identity_provider_configs ORDER BY name")

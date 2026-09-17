@@ -1,6 +1,6 @@
 export type Row = Record<string, unknown>
 
-export type Principal = { subject: string; username: string; display_name: string; role: string; scopes: string[] }
+export type Principal = { subject: string; username: string; display_name: string; role: string; scopes: string[]; must_change_password: boolean }
 export type Params = Record<string, string | number | boolean | undefined>
 
 async function request(path: string, init: RequestInit = {}): Promise<unknown> {
@@ -20,6 +20,7 @@ function queryString(params: Params): string {
 export async function getSession(): Promise<Principal> { return request('/api/auth/session') as Promise<Principal> }
 export async function login(username: string, password: string): Promise<Principal> { return request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }) as Promise<Principal> }
 export async function logout(): Promise<void> { await request('/api/auth/logout', { method: 'POST' }) }
+export async function changePassword(newPassword: string): Promise<Principal> { return request('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ new_password: newPassword }) }) as Promise<Principal> }
 export async function getJson(path: string, params: Params = {}): Promise<Row> { return request(`/api/${path}${queryString(params)}`) as Promise<Row> }
 export async function getRows(path: string, params: Params = {}): Promise<Row[]> { const body = await getJson(path, params) as { items?: Row[] } | Row[]; return Array.isArray(body) ? body : body.items ?? [] }
 export type Page = { items: Row[]; total: number; limit: number; offset: number }

@@ -31,7 +31,7 @@ from access_review_engine.storage import Repository, hydrate_campaign, hydrate_d
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_read_models import projected_rows
 from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import
-from access_review_engine.system_admin import authenticate_user, ensure_bootstrap_user, init_system, list_idps, list_users, upsert_idp, upsert_user
+from access_review_engine.system_admin import authenticate_user, change_password as update_password, ensure_bootstrap_user, init_system, list_idps, list_users, upsert_idp, upsert_user
 
 
 SESSION_COOKIE = "eare_session"
@@ -46,13 +46,14 @@ class WebPrincipal:
     scopes: frozenset[str]
     username: str = ""
     display_name: str = ""
+    must_change_password: bool = False
 
     def can_access(self, scope: str | None) -> bool:
         return self.role == "ADMIN" or not scope or "*" in self.scopes or scope in self.scopes
 
 
 def _encode_session(principal: dict[str, Any], secret: bytes) -> str:
-    payload = {"sub": principal["subject"], "username": principal["username"], "display_name": principal["display_name"], "role": principal["role"], "scopes": principal["scopes"], "exp": int(time.time()) + SESSION_TTL_SECONDS}
+    payload = {"sub": principal["subject"], "username": principal["username"], "display_name": principal["display_name"], "role": principal["role"], "scopes": principal["scopes"], "must_change_password": bool(principal.get("must_change_password", False)), "exp": int(time.time()) + SESSION_TTL_SECONDS}
     body = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
     signature = hmac.new(secret, body.encode(), hashlib.sha256).hexdigest()
     return f"{body}.{signature}"
@@ -70,7 +71,7 @@ def _decode_session(token: str | None, secret: bytes) -> WebPrincipal | None:
         payload = json.loads(base64.urlsafe_b64decode(padded))
         if int(payload["exp"]) < int(time.time()) or payload["role"] not in ROLES:
             return None
-        return WebPrincipal(str(payload["sub"]), str(payload["role"]), frozenset(str(item) for item in payload.get("scopes", [])), str(payload.get("username", "")), str(payload.get("display_name", "")))
+        return WebPrincipal(str(payload["sub"]), str(payload["role"]), frozenset(str(item) for item in payload.get("scopes", [])), str(payload.get("username", "")), str(payload.get("display_name", "")), bool(payload.get("must_change_password", False)))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
 
@@ -78,6 +79,8 @@ def _decode_session(token: str | None, secret: bytes) -> WebPrincipal | None:
 def _require(user: WebPrincipal | None, roles: tuple[str, ...] = (), scope: str | None = None) -> WebPrincipal:
     if user is None:
         raise HTTPException(status_code=401, detail="Authentication required")
+    if user.must_change_password:
+        raise HTTPException(status_code=403, detail="Password change required")
     if roles and user.role not in roles and user.role != "ADMIN":
         raise HTTPException(status_code=403, detail="Insufficient role")
     if not user.can_access(scope):
@@ -138,7 +141,20 @@ def create_app(db_path: str | None = None):
         if principal is None:
             raise HTTPException(status_code=401, detail="Invalid credentials")
         response.set_cookie(SESSION_COOKIE, _encode_session(principal, session_secret), httponly=True, secure=os.environ.get("EARE_COOKIE_SECURE") == "1", samesite="strict", max_age=SESSION_TTL_SECONDS, path="/")
-        return {"subject": principal["subject"], "username": principal["username"], "display_name": principal["display_name"], "role": principal["role"], "scopes": principal["scopes"]}
+        return {"subject": principal["subject"], "username": principal["username"], "display_name": principal["display_name"], "role": principal["role"], "scopes": principal["scopes"], "must_change_password": bool(principal.get("must_change_password", False))}
+
+    @app.post("/api/auth/change-password")
+    def change_password(request: Request, payload: dict[str, Any] = Body(...), response: Response = None):  # type: ignore[assignment]
+        principal = current_user(request)
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        password = payload.get("new_password")
+        try:
+            updated = update_password(system_conn, principal.username, password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        response.set_cookie(SESSION_COOKIE, _encode_session(updated, session_secret), httponly=True, secure=os.environ.get("EARE_COOKIE_SECURE") == "1", samesite="strict", max_age=SESSION_TTL_SECONDS, path="/")
+        return {"subject": updated["subject"], "username": updated["username"], "display_name": updated["display_name"], "role": updated["role"], "scopes": updated["scopes"], "must_change_password": False}
 
     @app.post("/api/auth/logout")
     def logout(response: Response):
@@ -147,7 +163,10 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/auth/session")
     def session(request: Request):
-        return asdict(_require(current_user(request)))
+        principal = current_user(request)
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        return asdict(principal)
 
     @app.get("/api/me")
     def me(request: Request):
