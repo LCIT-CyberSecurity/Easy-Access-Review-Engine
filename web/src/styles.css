@@ -44,3 +44,9 @@ main { max-width: 1440px; margin: 0 auto; padding: 40px; } .page-header { displa
 .admin-form { display:flex; flex-wrap:wrap; align-items:end; gap:14px; margin-bottom:16px; } .admin-form label { min-width:170px; flex:1; } .admin-form .button { height:38px; }
 .diff-summary { display:flex; gap:10px; align-items:center; margin-bottom:18px; } .diff-summary strong { margin-right:10px; } .job-panel { margin-top:20px; } .job-progress { display:flex; align-items:center; gap:12px; }
 @media (max-width:700px) { .admin-form { display:grid; } .admin-form label { min-width:0; } .job-progress { align-items:flex-start; flex-direction:column; } }
+
+.nav-section { display:grid; gap:3px; margin-bottom:18px; }
+.nav-heading { color:var(--text-muted); font-size:10px; font-weight:700; letter-spacing:.08em; padding:8px 12px 5px; }
+.tabs .text-button { color:var(--text-muted); padding:9px 0 11px; border:0; border-bottom:2px solid transparent; border-radius:0; background:transparent; }
+.tabs .text-button:hover { color:var(--text-primary); }
+.tabs .text-button.active { color:var(--primary); border-color:var(--primary); font-weight:600; }
