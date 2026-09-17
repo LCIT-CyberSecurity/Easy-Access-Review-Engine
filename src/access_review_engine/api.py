@@ -240,10 +240,55 @@ def create_app(db_path: str | None = None):
     def me(request: Request):
         return asdict(_require(current_user(request)))
 
+    def _pending_reviews_by_reviewer() -> dict[str, int]:
+        """Count the reviews still waiting on each reviewer, in open campaigns only."""
+        counts: dict[str, int] = {}
+        with Repository(db_path) as repo:
+            open_campaigns = {str(row.get("id")) for row in repo.list_payloads("campaigns") if row.get("status") == "open"}
+            decided = {str(row.get("review_item_id")) for row in repo.list_payloads("decisions")}
+            for row in repo.list_payloads("review_items"):
+                identity = str((row.get("reviewer") or {}).get("identity", "")).lower()
+                if identity and str(row.get("campaign_id")) in open_campaigns and str(row.get("id")) not in decided:
+                    counts[identity] = counts.get(identity, 0) + 1
+        return counts
+
     @app.get("/api/system")
     def system_overview(request: Request):
         _require(current_user(request), ("ADMIN",))
-        return {"users": list_users(system_conn), "identity_providers": list_idps(system_conn), "roles": sorted(ROLES)}
+        pending = _pending_reviews_by_reviewer()
+        users = [{**user, "pending_reviews": pending.get(str(user.get("username", "")).lower(), 0)} for user in list_users(system_conn)]
+        return {"users": users, "identity_providers": list_idps(system_conn), "roles": sorted(ROLES)}
+
+    @app.post("/api/system/users/{username}/reassign-reviews")
+    def system_user_reassign_reviews(username: str, request: Request, payload: dict[str, Any] = Body(...)):
+        """Hand the pending reviews of one person to another, so a leaver cannot block a campaign."""
+        from access_review_engine.domain import OwnerRef
+
+        _require(current_user(request), ("ADMIN",))
+        origin = str(username).strip().lower()
+        target = str(payload.get("to", "")).strip().lower()
+        stored_target = _stored_user(target)
+        if not target or stored_target is None or not stored_target.get("enabled"):
+            raise HTTPException(status_code=400, detail="Choose an enabled EARE user to take the reviews over")
+        if target == origin:
+            raise HTTPException(status_code=400, detail="Choose a different user")
+        moved = 0
+        with Repository(db_path) as repo:
+            open_campaigns = {str(row.get("id")) for row in repo.list_payloads("campaigns") if row.get("status") == "open"}
+            decided = {str(row.get("review_item_id")) for row in repo.list_payloads("decisions")}
+            for row in repo.list_payloads("review_items"):
+                reviewer = row.get("reviewer") or {}
+                if str(reviewer.get("identity", "")).lower() != origin:
+                    continue
+                # Decided items keep their reviewer: they are evidence of who decided what.
+                if str(row.get("id")) in decided or str(row.get("campaign_id")) not in open_campaigns:
+                    continue
+                item = hydrate_review_item(row)
+                item.reviewer = OwnerRef(provider=str(reviewer.get("provider") or item.identity_provider), identity=target)
+                repo.upsert("review_items", item)
+                moved += 1
+            record_audit(repo, request, "review.reassigned", "user", origin, {"to": target, "review_items": moved})
+        return {"from": origin, "to": target, "review_items": moved}
 
     def _guard_admin_access(principal: WebPrincipal, username: str, *, role: str | None = None, enabled: bool = True) -> None:
         """Refuse a change that would lock the administrator, or EARE itself, out."""

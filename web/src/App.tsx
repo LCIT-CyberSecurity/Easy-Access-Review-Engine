@@ -1718,6 +1718,7 @@ function UsersPage() {
     [notice, setNotice] = useState(""),
     [confirming, setConfirming] = useState<{ action: string; user: Row } | null>(null),
     [newPassword, setNewPassword] = useState(""),
+    [reassignTo, setReassignTo] = useState(""),
     [form, setForm] = useState<Row>(blankUser()),
     directories = arr(q.data?.identity_providers).filter((r) => r.enabled && s(r.kind) === "LDAP"),
     source = s(form.auth_source, LOCAL_SOURCE),
@@ -1768,6 +1769,20 @@ function UsersPage() {
       },
       onError: (e) => setError(s(e, "Operation failed")),
     }),
+    reassign = useMutation({
+      mutationFn: (user: Row) =>
+        postJson(`system/users/${encodeURIComponent(s(user.username))}/reassign-reviews`, {
+          to: reassignTo,
+        }),
+      onSuccess: async (d) => {
+        setConfirming(null);
+        setReassignTo("");
+        setError("");
+        setNotice(`${s(d.review_items, "0")} pending review(s) moved to ${s(d.to)}`);
+        await c.invalidateQueries({ queryKey: ["system"] });
+      },
+      onError: (e) => setError(s(e, "Unable to reassign the reviews")),
+    }),
     users = arr(q.data?.users).filter(
       (r) =>
         !search ||
@@ -1817,7 +1832,7 @@ function UsersPage() {
       {error && !open && !confirming && <p className="form-error">{error}</p>}
       <Filter v={search} onChange={setSearch} />
       <Table
-        cols={["User", "Username", "Signs in with", "Role", "Scope", "Status", "Actions"]}
+        cols={["User", "Username", "Signs in with", "Role", "Scope", "Pending reviews", "Status", "Actions"]}
         q={q}
         rows={users.map((r) => [
           s(r.display_name),
@@ -1825,6 +1840,7 @@ function UsersPage() {
           s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE ? "Local account" : s(r.auth_source),
           <Status v={r.role} />,
           s(vals(r.scopes).join(", "), "All"),
+          Number(r.pending_reviews) > 0 ? s(r.pending_reviews) : "—",
           <>
             <Status v={r.enabled ? "enabled" : "disabled"} />
             {r.must_change_password ? <span className="muted"> · password change required</span> : null}
@@ -1846,6 +1862,19 @@ function UsersPage() {
                 Reset password
               </button>
             )}
+            {Number(r.pending_reviews) > 0 && (
+              <button
+                className="link-button"
+                onClick={() => {
+                  setError("");
+                  setNotice("");
+                  setReassignTo("");
+                  setConfirming({ action: "reassign", user: r });
+                }}
+              >
+                Reassign reviews
+              </button>
+            )}
             <button
               className="link-button"
               onClick={() => {
@@ -1865,6 +1894,13 @@ function UsersPage() {
           intro={
             <>
               <p>This person can no longer sign in, and any open session stops working immediately.</p>
+              {Number(confirming.user.pending_reviews) > 0 && (
+                <p className="form-error">
+                  {s(confirming.user.pending_reviews)} review(s) are still waiting on this person. Hand them
+                  over first with <strong>Reassign reviews</strong>, otherwise their campaign cannot be
+                  closed.
+                </p>
+              )}
               <p className="muted">
                 Their past decisions, their assigned reviews and the audit trail are kept. You can enable the
                 account again at any time.
@@ -1889,6 +1925,37 @@ function UsersPage() {
           cancel={() => setConfirming(null)}
           confirm={() => lifecycle.mutate(confirming)}
         />
+      )}
+      {confirming && confirming.action === "reassign" && (
+        <Confirm
+          title={`Reassign the reviews of ${s(confirming.user.display_name, s(confirming.user.username))}?`}
+          intro={
+            <p>
+              {s(confirming.user.pending_reviews)} review(s) waiting in open campaigns move to someone else.
+              Decisions already taken keep their author.
+            </p>
+          }
+          confirmLabel="Reassign reviews"
+          pending={reassign.isPending}
+          disabled={!reassignTo}
+          error={error}
+          cancel={() => setConfirming(null)}
+          confirm={() => reassign.mutate(confirming.user)}
+        >
+          <label>
+            Hand the reviews to
+            <select value={reassignTo} onChange={(e) => setReassignTo(e.target.value)}>
+              <option value="">Select a user</option>
+              {users
+                .filter((u) => u.enabled && s(u.username) !== s(confirming.user.username))
+                .map((u) => (
+                  <option key={s(u.username)} value={s(u.username)}>
+                    {s(u.display_name, s(u.username))} · {s(u.role)}
+                  </option>
+                ))}
+            </select>
+          </label>
+        </Confirm>
       )}
       {confirming && confirming.action === "reset-password" && (
         <Confirm
@@ -1965,7 +2032,7 @@ function UsersPage() {
                 <option>BUSINESS_ADMIN</option>
               </select>
             </label>
-            <p className="muted">{roleHelp(s(form.role))}</p>
+            <p className="field-note">{roleHelp(s(form.role))}</p>
             <label>
               Scopes
               <input
@@ -1975,7 +2042,7 @@ function UsersPage() {
               />
             </label>
             {s(form.role) === "GROUP_OWNER" && (
-              <p className="muted">
+              <p className="field-note">
                 The username must match the reviewer identifier in the audited source, otherwise no review is
                 assigned to this person.
               </p>
@@ -2001,17 +2068,29 @@ function UsersPage() {
                 />
               </label>
             )}
-            <label>
-              <input
-                type="checkbox"
-                checked={Boolean(form.enabled)}
-                onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
-              />{" "}
-              Enabled
-            </label>
-            <p className="muted">
-              A disabled account can no longer sign in. Its past decisions and assigned reviews are kept.
-            </p>
+            <h4>STATUS</h4>
+            {form.id ? (
+              <div className="status-row">
+                <Status v={form.enabled ? "enabled" : "disabled"} />
+                <button
+                  type="button"
+                  className="button subtle"
+                  onClick={() => {
+                    setOpen(false);
+                    setError("");
+                    setNotice("");
+                    setConfirming({ action: form.enabled ? "disable" : "enable", user: form });
+                  }}
+                >
+                  {form.enabled ? "Disable account" : "Enable account"}
+                </button>
+              </div>
+            ) : (
+              <p className="field-note">
+                The account is active as soon as it is created. You can disable it at any time from the user
+                list.
+              </p>
+            )}
             {error && <p className="form-error">{error}</p>}
             <button className="button primary" type="submit" disabled={m.isPending}>
               {form.id ? "Save user" : fromDirectory ? "Import user" : "Create user"}

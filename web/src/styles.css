@@ -55,3 +55,7 @@ main { max-width: 1440px; margin: 0 auto; padding: 40px; } .page-header { displa
 .modal h2{margin-bottom:6px}
 .modal p{color:var(--text-secondary)}
 .modal .form-error{margin-top:10px}
+.admin-form label:has(> input[type="checkbox"]), label.checkbox { display:flex; flex-direction:row; align-items:center; gap:9px; min-height:38px; color:var(--text-primary); font-size:13px; }
+.admin-form input[type="checkbox"], label.checkbox input[type="checkbox"] { width:16px; height:16px; min-height:0; flex:0 0 auto; margin:0; accent-color:var(--primary); }
+.field-note { flex-basis:100%; margin:-6px 0 0; color:var(--text-muted); font-size:12px; }
+.status-row { display:flex; align-items:center; gap:12px; flex-basis:100%; }

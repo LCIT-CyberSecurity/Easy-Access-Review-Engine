@@ -104,3 +104,19 @@ def test_identity_type_can_be_used_as_status_filter(tmp_path):
     result = projected_rows(str(db), "identities", limit=10, offset=0, status="group")
 
     assert [item["id"] for item in result["items"]] == ["identity-2"]
+
+
+def test_hydrated_identity_owner_is_usable_by_the_comparison():
+    """A stored account owner must come back as an OwnerRef, or campaign preview crashes."""
+    from access_review_engine.domain import Identity, OwnerRef
+    from access_review_engine.services import owner_findings
+    from access_review_engine.storage import hydrate_identity
+
+    stored = {
+        "provider": "corp", "identifier": "svc-erp", "type": "technical_account", "status": "active",
+        "account_owner": {"provider": "corp", "identity": "alice"},
+    }
+    identity = hydrate_identity(stored)
+    assert identity.account_owner == OwnerRef(provider="corp", identity="alice")
+    owner = Identity(provider="corp", identifier="alice", type="user_account", status="active")
+    assert owner_findings(identity, {("corp", "alice"): owner}) == []
