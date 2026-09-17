@@ -27,7 +27,7 @@ from access_review_engine.application import import_file_to_repository
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import connector_path, load_connector, secret_environment, validate_connector
 from access_review_engine.reporting import write_reports
-from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot
+from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
 from access_review_engine.storage import Repository, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_read_models import projected_rows
@@ -483,7 +483,10 @@ def create_app(db_path: str | None = None):
             snapshot = hydrate_snapshot(repo.list_payloads("snapshots")[-1]) if repo.list_payloads("snapshots") else None
             if snapshot is None:
                 raise HTTPException(status_code=409, detail="A snapshot is required for comparison")
-            current = golden_version_from_snapshot(source, snapshot, versions)
+            try:
+                current = golden_version_from_snapshot(source, snapshot, versions)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
             active = max(versions, key=lambda item: item.version)
             return {"name": name, "active_version": active.version, "active_golden_version_id": active.id, "observed_snapshot_id": snapshot.id, "changes": golden_diff(active, current)}
 
@@ -749,8 +752,12 @@ def create_app(db_path: str | None = None):
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             repo.upsert("campaigns", closed)
-            record_audit(repo, request, "campaign.closed", "campaign", closed.id, {"review_items": len(items)})
-            return asdict(closed)
+            # Closing is what turns decisions into work for the people who operate the systems.
+            actions = remediation_from_decisions(items, decisions)
+            for action in actions:
+                repo.insert_append_only("remediation_actions", action)
+            record_audit(repo, request, "campaign.closed", "campaign", closed.id, {"review_items": len(items), "remediation_actions": len(actions)})
+            return {**asdict(closed), "remediation_actions": len(actions)}
 
     @app.post("/api/campaigns/{campaign_id}/cancel")
     def campaign_cancel(campaign_id: str, request: Request):

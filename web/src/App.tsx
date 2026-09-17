@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, NavLink, Route, Routes, useParams } from "react-router-dom";
 import {
@@ -69,6 +69,37 @@ const describeIdentity = (row: Row): string =>
   [s(row.display_name, ""), s(row.description, ""), s(row.email, "")].filter(Boolean).join(" · ");
 const Sub = ({ children }: { children: ReactNode }) =>
   children ? <span className="cell-sub">{children}</span> : null;
+type Notice = { id: number; tone: "ok" | "error"; text: string };
+const ToastContext = createContext<(tone: "ok" | "error", text: string) => void>(() => {});
+const useToast = () => useContext(ToastContext);
+/** Reports what an action did, so a click never fails in silence. */
+function Toasts({ children }: { children: ReactNode }) {
+  const [notices, setNotices] = useState<Notice[]>([]);
+  const push = (tone: "ok" | "error", text: string) => {
+    const notice = { id: Date.now() + Math.random(), tone, text };
+    setNotices((all) => [...all, notice]);
+    if (tone === "ok") setTimeout(() => setNotices((all) => all.filter((x) => x.id !== notice.id)), 5000);
+  };
+  return (
+    <ToastContext.Provider value={push}>
+      {children}
+      <div className="toasts" aria-live="polite">
+        {notices.map((notice) => (
+          <div className={notice.tone === "ok" ? "toast" : "toast error"} key={notice.id}>
+            <span>{notice.text}</span>
+            <button
+              className="icon-button"
+              aria-label="Dismiss"
+              onClick={() => setNotices((all) => all.filter((x) => x.id !== notice.id))}
+            >
+              <X size={15} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
 function App() {
   const q = useQuery({ queryKey: ["session"], queryFn: getSession, retry: false });
   return q.isLoading ? (
@@ -78,7 +109,9 @@ function App() {
   ) : q.data!.must_change_password ? (
     <PasswordChange />
   ) : (
-    <Shell principal={q.data!} />
+    <Toasts>
+      <Shell principal={q.data!} />
+    </Toasts>
   );
 }
 function PasswordChange() {
@@ -760,6 +793,7 @@ function ReviewDrawer({
   next: (x: Row | null) => void;
 }) {
   const c = useQueryClient(),
+    toast = useToast(),
     [reason, setReason] = useState(""),
     [pending, setPending] = useState<string | null>(null);
   const m = useMutation({
@@ -771,7 +805,7 @@ function ReviewDrawer({
       setPending(null);
       setReason("");
     },
-    onError: () => setReason("Decision failed"),
+    onError: (e) => toast("error", s(e, "The decision was refused")),
   });
   const paths = arr(item.paths),
     who = s(item.identity_display_name, s(item.identity_identifier)),
@@ -828,7 +862,6 @@ function ReviewDrawer({
           </button>
         </div>
       )}
-      {reason === "Decision failed" && <p className="form-error">Decision failed</p>}
       {!pending && (
         <div className="drawer-footer">
           <button onClick={() => setPending("not_applicable")}>N/A</button>
@@ -1010,6 +1043,7 @@ function CampaignNew() {
     [preview, setPreview] = useState<Row | null>(null),
     [allow, setAllow] = useState(false),
     previewM = useMutation({
+      onError: (e: unknown) => toast("error", s(e, "Unable to preview the campaign")),
       mutationFn: () =>
         postJson("campaigns/preview", {
           ...form,
@@ -1020,6 +1054,7 @@ function CampaignNew() {
         }),
       onSuccess: setPreview,
     }),
+    toast = useToast(),
     create = useMutation({
       mutationFn: async (open: boolean) => {
         const { scope_type, providers, ...fields } = form;
@@ -1037,8 +1072,10 @@ function CampaignNew() {
         return d;
       },
       onSuccess: (d) => {
+        toast("ok", "Campaign created");
         if (d.id) window.location.href = "/campaigns/" + s(d.id);
       },
+      onError: (e) => toast("error", s(e, "Unable to create the campaign")),
     }),
     snapshots = arr(snap.data?.items),
     versions = arr(gold.data?.items);
@@ -1175,9 +1212,22 @@ function CampaignDetail() {
     [tab, setTab] = useState("overview"),
     [selected, setSelected] = useState<Row | null>(null),
     [selectedFinding, setSelectedFinding] = useState<Row | null>(null),
+    toast = useToast(),
     m = useMutation({
       mutationFn: (a: string) => postJson("campaigns/" + id + "/" + a),
-      onSuccess: () => q.refetch(),
+      onSuccess: (d, action) => {
+        const actions = Number((d as Row)?.remediation_actions ?? 0);
+        toast(
+          "ok",
+          action === "close"
+            ? `Campaign closed · ${actions} remediation action(s) generated`
+            : action === "promote"
+              ? "Promoted to the Golden Source"
+              : `Campaign ${action}ed`,
+        );
+        q.refetch();
+      },
+      onError: (e) => toast("error", s(e, "This operation was refused")),
     }),
     reviews = arr(q.data?.reviews),
     findings = arr(q.data?.findings),
@@ -1669,7 +1719,8 @@ function Golden() {
   );
 }
 function Sources() {
-  const q = useQuery({ queryKey: ["providers"], queryFn: () => getPage("providers", { limit: 100 }) }),
+  const toast = useToast(),
+    q = useQuery({ queryKey: ["providers"], queryFn: () => getPage("providers", { limit: 100 }) }),
     cfg = useQuery({ queryKey: ["source-configs"], queryFn: () => getJson("system/sources") }),
     [job, setJob] = useState(""),
     [kind, setKind] = useState("preview"),
@@ -1677,11 +1728,15 @@ function Sources() {
     [editing, setEditing] = useState<Row | null>(null),
     start = useMutation({
       mutationFn: (x: { p: string; a: string }) => postJson(`sources/${x.p}/${x.a}`),
-      onSuccess: (d) => {
+      onSuccess: (d, variables) => {
         setError("");
         setJob(s(d.id));
+        toast("ok", variables.a === "sync" ? "Synchronization started" : "Preview started");
       },
-      onError: (e) => setError(s(e, "Unable to start source operation")),
+      onError: (e) => {
+        setError(s(e, "Unable to start source operation"));
+        toast("error", s(e, "Unable to start this source operation"));
+      },
     }),
     save = useMutation({
       mutationFn: (body: Row) => postJson("system/sources", body),
