@@ -1652,31 +1652,43 @@ function Reports() {
     </>
   );
 }
+const LOCAL_SOURCE = "local";
+const blankUser = (source = LOCAL_SOURCE): Row => ({
+  username: "",
+  display_name: "",
+  role: "OPERATOR",
+  scopes: "",
+  password: "",
+  enabled: true,
+  auth_source: source,
+});
 function UsersPage() {
   const c = useQueryClient(),
     q = useQuery({ queryKey: ["system"], queryFn: () => getJson("system") }),
     [search, setSearch] = useState(""),
     [open, setOpen] = useState(false),
+    [picking, setPicking] = useState<Row | null>(null),
     [error, setError] = useState(""),
-    [form, setForm] = useState<Row>({
-      username: "",
-      display_name: "",
-      role: "OPERATOR",
-      scopes: "",
-      password: "",
-      enabled: true,
-    }),
+    [form, setForm] = useState<Row>(blankUser()),
+    directories = arr(q.data?.identity_providers).filter((r) => r.enabled && s(r.kind) === "LDAP"),
+    source = s(form.auth_source, LOCAL_SOURCE),
+    fromDirectory = source !== LOCAL_SOURCE,
     m = useMutation({
-      mutationFn: () =>
-        postJson("system/users", {
+      mutationFn: () => {
+        const scopes = String(form.scopes || "")
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean);
+        const password = String(form.password || "");
+        return postJson("system/users", {
           ...form,
-          scopes: String(form.scopes || "")
-            .split(",")
-            .map((x) => x.trim())
-            .filter(Boolean),
-          password: String(form.password || "") || undefined,
-          must_change_password: Boolean(form.password),
-        }),
+          scopes,
+          // A directory account keeps no password, and an empty field must leave a pending
+          // password change untouched.
+          password: fromDirectory || !password ? undefined : password,
+          ...(password && !fromDirectory ? { must_change_password: true } : {}),
+        });
+      },
       onSuccess: async () => {
         setOpen(false);
         setError("");
@@ -1687,7 +1699,7 @@ function UsersPage() {
     users = arr(q.data?.users).filter(
       (r) =>
         !search ||
-        [r.username, r.display_name, r.role]
+        [r.username, r.display_name, r.role, r.auth_source]
           .map(String)
           .join(" ")
           .toLowerCase()
@@ -1695,37 +1707,71 @@ function UsersPage() {
     );
   const edit = (r?: Row) => {
     setError("");
-    setForm(
-      r
-        ? { ...r, scopes: vals(r.scopes).join(", "), password: "" }
-        : { username: "", display_name: "", role: "OPERATOR", scopes: "", password: "", enabled: true },
-    );
+    setForm(r ? { ...r, scopes: vals(r.scopes).join(", "), password: "" } : blankUser());
+    setOpen(true);
+  };
+  const importAccount = (directory: Row, account: Row) => {
+    setError("");
+    setForm({
+      ...blankUser(s(directory.name)),
+      username: s(account.login),
+      display_name: s(account.display_name, s(account.login)),
+      external_id: s(account.dn),
+    });
+    setPicking(null);
     setOpen(true);
   };
   return (
     <>
       <Head title="Users & permissions">
-        <button className="button primary" onClick={() => edit()}>
-          + New user
-        </button>
+        <div className="button-row">
+          {directories.map((d) => (
+            <button className="button subtle" key={s(d.id)} onClick={() => setPicking(d)}>
+              + From {s(d.name)}
+            </button>
+          ))}
+          <button className="button primary" onClick={() => edit()}>
+            + New local user
+          </button>
+        </div>
       </Head>
+      {!directories.length && (
+        <p className="muted">
+          Only local accounts can sign in today. Configure a directory in Authentication to import accounts
+          from it.
+        </p>
+      )}
       <Filter v={search} onChange={setSearch} />
       <Table
-        cols={["User", "Username", "Role", "Scope", "Status", "Action"]}
+        cols={["User", "Username", "Signs in with", "Role", "Scope", "Status", "Action"]}
         q={q}
         rows={users.map((r) => [
           s(r.display_name),
           s(r.username),
+          s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE ? "Local account" : s(r.auth_source),
           <Status v={r.role} />,
           s(vals(r.scopes).join(", "), "All"),
-          <Status v={r.enabled ? "enabled" : "disabled"} />,
+          <>
+            <Status v={r.enabled ? "enabled" : "disabled"} />
+            {r.must_change_password ? <span className="muted"> · password change required</span> : null}
+          </>,
           <button className="link-button" onClick={() => edit(r)}>
             Edit
           </button>,
         ])}
       />
+      {picking && (
+        <DirectoryPicker
+          directory={picking}
+          close={() => setPicking(null)}
+          pick={(account) => importAccount(picking, account)}
+        />
+      )}
       {open && (
-        <Drawer title={form.id ? "Edit user" : "New user"} close={() => setOpen(false)}>
+        <Drawer
+          title={form.id ? "Edit user" : fromDirectory ? "Import user" : "New local user"}
+          close={() => setOpen(false)}
+        >
           <form
             className="admin-form"
             onSubmit={(e) => {
@@ -1738,7 +1784,7 @@ function UsersPage() {
               Username
               <input
                 required
-                disabled={Boolean(form.id)}
+                disabled={Boolean(form.id) || fromDirectory}
                 value={s(form.username, "")}
                 onChange={(e) => setForm({ ...form, username: e.target.value })}
               />
@@ -1761,6 +1807,7 @@ function UsersPage() {
                 <option>BUSINESS_ADMIN</option>
               </select>
             </label>
+            <p className="muted">{roleHelp(s(form.role))}</p>
             <label>
               Scopes
               <input
@@ -1769,17 +1816,33 @@ function UsersPage() {
                 onChange={(e) => setForm({ ...form, scopes: e.target.value })}
               />
             </label>
+            {s(form.role) === "GROUP_OWNER" && (
+              <p className="muted">
+                The username must match the reviewer identifier in the audited source, otherwise no review is
+                assigned to this person.
+              </p>
+            )}
             <h4>AUTHENTICATION</h4>
-            <label>
-              {form.id ? "Set new password" : "Password"}
-              <input
-                required={!form.id}
-                minLength={12}
-                type="password"
-                value={s(form.password, "")}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-              />
-            </label>
+            {fromDirectory ? (
+              <>
+                <p>
+                  Signs in with <strong>{source}</strong>. EARE stores no password for this account.
+                </p>
+                <p className="muted">{s(form.external_id)}</p>
+              </>
+            ) : (
+              <label>
+                {form.id ? "Set new password" : "Password"}
+                <input
+                  required={!form.id}
+                  minLength={12}
+                  type="password"
+                  placeholder={form.id ? "Leave empty to keep the current password" : ""}
+                  value={s(form.password, "")}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                />
+              </label>
+            )}
             <label>
               <input
                 type="checkbox"
@@ -1788,9 +1851,12 @@ function UsersPage() {
               />{" "}
               Enabled
             </label>
+            <p className="muted">
+              A disabled account can no longer sign in. Its past decisions and assigned reviews are kept.
+            </p>
             {error && <p className="form-error">{error}</p>}
             <button className="button primary" type="submit" disabled={m.isPending}>
-              Save user
+              {form.id ? "Save user" : fromDirectory ? "Import user" : "Create user"}
             </button>
           </form>
         </Drawer>
@@ -1798,18 +1864,264 @@ function UsersPage() {
     </>
   );
 }
+function roleHelp(role: string) {
+  if (role === "ADMIN") return "Configures EARE, manages users, and can run every governance operation.";
+  if (role === "OPERATOR")
+    return "Runs collections, manages the Golden Source, campaigns, findings and reports.";
+  if (role === "GROUP_OWNER") return "Only sees and decides the reviews assigned to this person.";
+  return "Only sees the remediation actions of the sources listed in Scopes.";
+}
+function DirectoryPicker({
+  directory,
+  close,
+  pick,
+}: {
+  directory: Row;
+  close: () => void;
+  pick: (account: Row) => void;
+}) {
+  const [search, setSearch] = useState(""),
+    selected = debounce(search),
+    q = useQuery({
+      queryKey: ["directory-accounts", s(directory.name), selected],
+      queryFn: () =>
+        getJson(`system/identity-providers/${encodeURIComponent(s(directory.name))}/accounts`, {
+          search: selected,
+          limit: 25,
+        }),
+    }),
+    accounts = arr(q.data?.items);
+  return (
+    <Drawer title={`Import from ${s(directory.name)}`} close={close}>
+      <p className="muted">
+        Imported people sign in with their directory password. Their role and scopes are managed here.
+      </p>
+      <Filter v={search} onChange={setSearch} />
+      <Table
+        cols={["Person", "Login", "Email", ""]}
+        q={q}
+        rows={accounts.map((r) => [
+          s(r.display_name),
+          s(r.login),
+          s(r.email),
+          r.imported ? (
+            <span className="muted">Already imported</span>
+          ) : (
+            <button className="link-button" onClick={() => pick(r)}>
+              Import
+            </button>
+          ),
+        ])}
+      />
+    </Drawer>
+  );
+}
+const blankDirectory = (): Row => ({
+  name: "",
+  kind: "LDAP",
+  endpoint: "ldaps://",
+  enabled: true,
+  settings: { base_dn: "", login_attribute: "uid", bind_dn: "", bind_password_env: "" },
+});
 function Auth() {
+  const c = useQueryClient(),
+    q = useQuery({ queryKey: ["system"], queryFn: () => getJson("system") }),
+    [editing, setEditing] = useState<Row | null>(null),
+    [notice, setNotice] = useState<{ tone: string; text: string } | null>(null),
+    directories = arr(q.data?.identity_providers),
+    localCount = arr(q.data?.users).filter((r) => s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE).length,
+    settings = (editing?.settings as Row | undefined) || {},
+    updateSettings = (key: string, value: unknown) =>
+      setEditing((x) => (x ? { ...x, settings: { ...((x.settings as Row) || {}), [key]: value } } : x)),
+    test = useMutation({
+      mutationFn: (body: Row) => postJson("system/identity-providers/test", body),
+      onSuccess: (d) => setNotice({ tone: "ok", text: s(d.message, "Connection test succeeded") }),
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Connection test failed") }),
+    }),
+    save = useMutation({
+      mutationFn: (body: Row) => postJson("system/identity-providers", body),
+      onSuccess: async (d) => {
+        setEditing(null);
+        setNotice({ tone: "ok", text: `Directory "${s(d.name)}" saved` });
+        await c.invalidateQueries({ queryKey: ["system"] });
+      },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to save the directory") }),
+    });
   return (
     <>
-      <Head title="Authentication" />
+      <Head title="Authentication">
+        <button
+          className="button primary"
+          onClick={() => {
+            setNotice(null);
+            setEditing(blankDirectory());
+          }}
+        >
+          + Add LDAP directory
+        </button>
+      </Head>
+      <p className="muted">
+        How people sign in to EARE. The directories EARE audits are configured in Sources &amp; IdPs.
+      </p>
+      {notice && <p className={notice.tone === "ok" ? "muted" : "form-error"}>{notice.text}</p>}
       <section className="panel">
         <h2>Local accounts</h2>
         <Status v="ACTIVE" />
-        <p>Username + password authentication is currently active.</p>
-        <h2>External SSO</h2>
-        <Status v="NOT_YET_ACTIVE" />
-        <p>LDAP / OIDC / SAML provider configuration does not currently enable application sign-in.</p>
+        <p>
+          {localCount} local account(s). Passwords need at least 12 characters, a password set by an
+          administrator must be changed at the next sign-in, and a session lasts 8 hours.
+        </p>
+        <NavLink className="button subtle" to="/system/users">
+          Manage users
+        </NavLink>
       </section>
+      {directories.map((r) => (
+        <section className="panel" key={s(r.id)}>
+          <h2>{s(r.name)}</h2>
+          <Status v={r.enabled ? "ACTIVE" : "DISABLED"} />
+          <p>
+            {s(r.kind)} · {s(r.endpoint)}
+          </p>
+          <p className="muted">
+            Base DN: {s((r.settings as Row | undefined)?.base_dn)} · Login attribute:{" "}
+            {s((r.settings as Row | undefined)?.login_attribute, "uid")}
+          </p>
+          <div className="button-row">
+            <button
+              className="button subtle"
+              disabled={test.isPending}
+              onClick={() => {
+                setNotice(null);
+                test.mutate(r);
+              }}
+            >
+              Test connection
+            </button>
+            <button
+              className="button subtle"
+              onClick={() => {
+                setNotice(null);
+                setEditing(JSON.parse(JSON.stringify(r)));
+              }}
+            >
+              Configure
+            </button>
+          </div>
+        </section>
+      ))}
+      <section className="panel">
+        <h2>Single sign-on (OIDC / SAML)</h2>
+        <Status v="NOT_YET_ACTIVE" />
+        <p>Not available yet. People sign in with a local account or with a configured LDAP directory.</p>
+      </section>
+      {editing && (
+        <Drawer
+          title={editing.id ? "Configure directory" : "Add LDAP directory"}
+          close={() => setEditing(null)}
+        >
+          <form
+            className="admin-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              save.mutate(editing);
+            }}
+          >
+            <h4>DIRECTORY</h4>
+            <label>
+              Name
+              <input
+                required
+                disabled={Boolean(editing.id)}
+                placeholder="corp-directory"
+                value={s(editing.name, "")}
+                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+              />
+            </label>
+            <label>
+              LDAP URI
+              <input
+                required
+                placeholder="ldaps://ldap.example.org"
+                value={s(editing.endpoint, "")}
+                onChange={(e) => setEditing({ ...editing, endpoint: e.target.value })}
+              />
+            </label>
+            <label>
+              Base DN
+              <input
+                required
+                placeholder="dc=example,dc=org"
+                value={s(settings.base_dn, "")}
+                onChange={(e) => updateSettings("base_dn", e.target.value)}
+              />
+            </label>
+            <label>
+              Login attribute
+              <input
+                placeholder="uid, or sAMAccountName on Active Directory"
+                value={s(settings.login_attribute, "")}
+                onChange={(e) => updateSettings("login_attribute", e.target.value)}
+              />
+            </label>
+            <label>
+              User filter
+              <input
+                placeholder="(objectClass=person)"
+                value={s(settings.user_filter, "")}
+                onChange={(e) => updateSettings("user_filter", e.target.value || undefined)}
+              />
+            </label>
+            <h4>SERVICE ACCOUNT</h4>
+            <p className="muted">
+              Used to search the directory. Leave empty if the directory answers anonymous searches. People
+              always sign in with their own credentials.
+            </p>
+            <label>
+              Service account DN
+              <input
+                value={s(settings.bind_dn, "")}
+                onChange={(e) => updateSettings("bind_dn", e.target.value)}
+              />
+            </label>
+            <label>
+              Password environment variable
+              <input
+                placeholder="EARE_DIRECTORY_PASSWORD"
+                value={s(settings.bind_password_env, "")}
+                onChange={(e) => updateSettings("bind_password_env", e.target.value)}
+              />
+            </label>
+            <p className="muted">
+              The password itself stays in the server environment and is never stored by the WebUI.
+            </p>
+            <label>
+              <input
+                type="checkbox"
+                checked={Boolean(editing.enabled)}
+                onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })}
+              />{" "}
+              Allow people from this directory to sign in
+            </label>
+            {notice && <p className={notice.tone === "ok" ? "muted" : "form-error"}>{notice.text}</p>}
+            <div className="button-row">
+              <button
+                type="button"
+                className="button subtle"
+                disabled={test.isPending}
+                onClick={() => {
+                  setNotice(null);
+                  test.mutate(editing);
+                }}
+              >
+                Test connection
+              </button>
+              <button type="submit" className="button primary" disabled={save.isPending}>
+                Save
+              </button>
+            </div>
+          </form>
+        </Drawer>
+      )}
     </>
   );
 }
