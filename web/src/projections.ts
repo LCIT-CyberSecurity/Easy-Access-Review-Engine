@@ -14,9 +14,18 @@ export function roleHome(role: string): string {
   if (role === "BUSINESS_ADMIN") return "/actions";
   return "/";
 }
+export function pendingFirst(a: { decision?: unknown }, b: { decision?: unknown }): number {
+  return Number(Boolean(a.decision)) - Number(Boolean(b.decision));
+}
+export function validProviderScope(scopeType: string, providers: string[]): boolean {
+  return scopeType !== "providers" || providers.some((provider) => provider.trim().length > 0);
+}
 export function campaignCtas(status: string, pending: number): string[] {
   if (status === "draft") return ["open", "cancel"];
   if (status === "open") return pending ? ["close-disabled"] : ["close"];
   if (status === "closed") return ["promote", "report"];
   return [];
+}
+export function campaignActionTarget(action: string, campaignId: string): string | null {
+  return action === "report" ? `/reports?campaign=${encodeURIComponent(campaignId)}` : null;
 }

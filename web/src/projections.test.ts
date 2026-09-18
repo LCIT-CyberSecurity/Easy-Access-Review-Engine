@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { campaignCtas, currentStateLabels, pageCount, pageLabel } from "./projections";
+import {
+  campaignActionTarget,
+  campaignCtas,
+  currentStateLabels,
+  pageCount,
+  pageLabel,
+  pendingFirst,
+  roleHome,
+  validProviderScope,
+} from "./projections";
 
 describe("currentStateLabels", () => {
   it("renders observed and expected independently", () => {
@@ -20,5 +29,30 @@ describe("campaignCtas", () => {
     expect(campaignCtas("open", 2)).toEqual(["close-disabled"]);
     expect(campaignCtas("open", 0)).toEqual(["close"]);
     expect(campaignCtas("closed", 0)).toEqual(["promote", "report"]);
+  });
+  it("navigates report actions to the existing reports workflow", () => {
+    expect(campaignActionTarget("report", "campaign 1")).toBe("/reports?campaign=campaign%201");
+    expect(campaignActionTarget("close", "campaign-1")).toBeNull();
+  });
+});
+describe("role landing", () => {
+  it("keeps restricted roles away from the dashboard", () => {
+    expect(roleHome("ADMIN")).toBe("/");
+    expect(roleHome("OPERATOR")).toBe("/");
+    expect(roleHome("GROUP_OWNER")).toBe("/reviews");
+    expect(roleHome("BUSINESS_ADMIN")).toBe("/actions");
+  });
+});
+describe("review ordering", () => {
+  it("puts reviews without a decision first", () => {
+    const rows = [{ id: "approved", decision: "approve" }, { id: "pending" }];
+    expect(rows.sort(pendingFirst).map((row) => row.id)).toEqual(["pending", "approved"]);
+  });
+});
+describe("provider campaign scope", () => {
+  it("requires a real provider selection", () => {
+    expect(validProviderScope("all", [])).toBe(true);
+    expect(validProviderScope("providers", [])).toBe(false);
+    expect(validProviderScope("providers", ["corp-ad"])).toBe(true);
   });
 });
