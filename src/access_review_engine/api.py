@@ -32,7 +32,7 @@ from access_review_engine.services import audit, calculate_effective_accesses, c
 from access_review_engine.storage import Repository, hydrate_authentication_posture, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_read_models import projected_rows
-from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import
+from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import, snapshot_collection_scope
 from access_review_engine.directory_auth import DirectoryError, authenticate as directory_authenticate, search_accounts as directory_accounts, test_directory, validate_directory
 from access_review_engine.system_admin import LOCAL_SOURCE, authenticate_user, change_password as update_password, enabled_admins, ensure_bootstrap_user, init_system, list_idps, list_users, reset_password, set_enabled, upsert_idp, upsert_user
 
@@ -488,6 +488,38 @@ def create_app(db_path: str | None = None):
             record_audit(repo, request, "golden_source.version_created", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
             return {"source": asdict(source), "version": asdict(version), "snapshot_id": snapshot.id}
 
+    @app.post("/api/golden-sources/from-scratch")
+    def create_empty_golden_source(request: Request, payload: dict[str, Any] | None = Body(default=None)):
+        """Create a real immutable empty v1 before any source has been collected."""
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        requested = payload or {}
+        name = str(requested.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Golden Source name is required")
+        display_name = str(requested.get("display_name") or name).strip()
+        with Repository(db_path) as repo:
+            if repo.find_by_name("golden_sources", name):
+                raise HTTPException(status_code=409, detail="A Golden Source with this name already exists")
+            source = create_golden_source(name, display_name)
+            version = create_golden_version(
+                source,
+                [],
+                "from_scratch",
+                comment="Empty expected state created in the WebUI",
+            )
+            source.active_version_id = version.id
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+            record_audit(
+                repo,
+                request,
+                "golden_source.version_created",
+                "golden_source_version",
+                version.id,
+                {"source_id": source.id, "version": version.version, "origin": "from_scratch"},
+            )
+            return {"source": asdict(source), "version": asdict(version)}
+
     @app.get("/api/golden-sources/{name}/compare")
     def compare_baseline(name: str, request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"))
@@ -576,6 +608,14 @@ def create_app(db_path: str | None = None):
                     row["access_permission"] = (permission or {}).get("display_name") or (permission or {}).get("identifier") if isinstance(permission, dict) else permission
                 rows.append(row)
             covered = sorted({str(item.access_provider) for item in active.assignments})
+            expected_identities = {
+                (str(item.identity_provider), str(item.identity_identifier))
+                for item in active.assignments
+            }
+            expected_accesses = {
+                (str(item.access_provider), str(item.access_name))
+                for item in active.assignments
+            }
             campaign_name = next((str(row.get("name")) for row in repo.list_payloads("campaigns") if str(row.get("id")) == str(active.source_campaign_id)), None)
             snapshots = repo.list_payloads("snapshots")
             collected = [str(item.get("name")) for item in (snapshots[-1].get("providers", []) if snapshots else [])]
@@ -608,6 +648,10 @@ def create_app(db_path: str | None = None):
                 "source_campaign_name": campaign_name,
                 "comment": active.comment,
                 "providers": covered,
+                "assignment_count": len(active.assignments),
+                "identity_count": len(expected_identities),
+                "access_count": len(expected_accesses),
+                "application_count": len(covered),
                 "collected_providers": collected,
                 "collected_at": snapshots[-1].get("created_at") if snapshots else None,
                 "versions": [{"id": item.id, "version": item.version, "source_type": item.source_type, "created_at": item.created_at, "assignments": len(item.assignments), "comment": item.comment} for item in sorted(versions, key=lambda item: item.version)],
@@ -1008,7 +1052,15 @@ def create_app(db_path: str | None = None):
         with Repository(db_path) as repo:
             snapshot = _snapshot(repo, campaign.snapshot_id)
             golden = _golden_version(repo, campaign.golden_source_version_id)
-            return preview_campaign_review(campaign, snapshot, golden)
+            try:
+                return preview_campaign_review(
+                    campaign,
+                    snapshot,
+                    golden,
+                    import_scope=snapshot_collection_scope(repo, snapshot),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/campaigns")
     def campaign_create(request: Request, payload: dict[str, Any] = Body(...)):
@@ -1033,7 +1085,12 @@ def create_app(db_path: str | None = None):
             snapshot = _snapshot(repo, campaign.snapshot_id)
             golden = _golden_version(repo, campaign.golden_source_version_id)
             try:
-                preparation = prepare_campaign_review(campaign, snapshot, golden)
+                preparation = prepare_campaign_review(
+                    campaign,
+                    snapshot,
+                    golden,
+                    snapshot_collection_scope(repo, snapshot),
+                )
                 opened, items = open_campaign(campaign, preparation.snapshot)
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -1126,11 +1183,19 @@ def create_app(db_path: str | None = None):
     @app.get("/api/campaigns/{campaign_id}")
     def campaign_detail(campaign_id: str, request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"))
-        result = page("campaigns", 500, 0, None, None, None)
+        # Aggregates and reviewer progress must cover the whole campaign. The generic page helper is
+        # intentionally capped for table endpoints, so using it here silently truncated large reviews.
+        result = projected_rows(db_path, "campaigns", limit=1_000_000_000, offset=0)
         campaign = next((item for item in result["items"] if item.get("id") == campaign_id), None)
         if campaign is None:
             raise HTTPException(status_code=404, detail="Campaign not found")
-        reviews = [item for item in page("review_items", 500, 0, None, None, None)["items"] if item.get("campaign_id") == campaign_id]
+        reviews = projected_rows(
+            db_path,
+            "review_items",
+            limit=1_000_000_000,
+            offset=0,
+            campaign=campaign_id,
+        )["items"]
         findings = [finding for item in reviews for finding in item.get("findings", [])]
         return {"campaign": campaign, "reviews": reviews, "findings": sorted(set(findings))}
 
@@ -1223,7 +1288,13 @@ def create_app(db_path: str | None = None):
         assignments = [row for row in snapshot.get("access_assignments", []) if row.get("identity_provider") == identity.get("provider") and row.get("identity_identifier") == identity.get("identifier")]
         hydrated = hydrate_snapshot(snapshot)
         evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
-        effective = [asdict(item) for item in evaluation.effective_accesses if item.identity_provider == identity.get("provider") and item.identity_identifier == identity.get("identifier")]
+        effective = [
+            asdict(item)
+            for item in evaluation.effective_accesses
+            if item.identity_provider == identity.get("provider")
+            and item.identity_identifier == identity.get("identifier")
+            and not item.direct
+        ]
         return {"identity": identity, "accesses": assignments, "effective_accesses": effective, "paths": [path for item in effective for path in item.get("paths", [])]}
 
     @app.get("/api/accesses/{provider}/{access_name}/holders")
@@ -1233,7 +1304,13 @@ def create_app(db_path: str | None = None):
         rows = [row for row in snapshot.get("access_assignments", []) if row.get("provider") == provider and row.get("access_name") == access_name]
         hydrated = hydrate_snapshot(snapshot)
         evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
-        effective = [asdict(item) for item in evaluation.effective_accesses if item.access_provider == provider and item.access_name == access_name]
+        effective = [
+            asdict(item)
+            for item in evaluation.effective_accesses
+            if item.access_provider == provider
+            and item.access_name == access_name
+            and not item.direct
+        ]
         return {"access": {"provider": provider, "name": access_name}, "holders": rows, "effective_holders": effective, "paths": [path for item in effective for path in item.get("paths", [])]}
 
     @app.post("/api/sources/{provider}/sync", status_code=202)
@@ -1257,7 +1334,7 @@ def create_app(db_path: str | None = None):
                 return {"snapshot_id": snapshot.id, "provider": provider}
             finally:
                 artifact.unlink(missing_ok=True)
-        return create_job(db_path, "sync", operation)
+        return create_job(db_path, "sync", operation, context={"provider": provider})
 
     @app.post("/api/sources/{provider}/preview", status_code=202)
     def source_preview(provider: str, request: Request):
@@ -1280,7 +1357,7 @@ def create_app(db_path: str | None = None):
                 return preview
             finally:
                 artifact.unlink(missing_ok=True)
-        return create_job(db_path, "preview", operation)
+        return create_job(db_path, "preview", operation, context={"provider": provider})
 
     @app.post("/api/sources/{provider}/sync/preview")
     def sync_preview(provider: str, request: Request, input_path: str, classification_rules: str | None = None):

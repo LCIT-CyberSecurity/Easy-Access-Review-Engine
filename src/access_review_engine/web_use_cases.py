@@ -41,12 +41,66 @@ class CampaignPreparation:
     comparison_states: list[dict[str, object]]
 
 
-def prepare_campaign_review(campaign: Campaign, snapshot: Snapshot, golden_version: GoldenSourceVersion | None) -> CampaignPreparation:
+def snapshot_collection_scope(repo: Repository, snapshot: Snapshot) -> dict[str, object] | None:
+    """Recover the collection boundary that produced an immutable snapshot.
+
+    Snapshot deliberately stores only import identifiers. Campaign comparison must follow those
+    identifiers back to their import batches; treating a provider-scoped collection as global would
+    turn every uncollected provider into a false ``missing`` result.
+    """
+    source_ids = set(snapshot.source_import_ids)
+    if not source_ids:
+        # A legacy snapshot without import references cannot prove that its collection was
+        # exhaustive. Keep conclusions inside the providers it contains and mark absence as
+        # unknown rather than manufacturing global ``missing`` findings.
+        return {
+            "type": "providers",
+            "values": sorted(provider.name for provider in snapshot.providers),
+            "completeness": "unknown",
+        }
+    imports = [row for row in repo.list_payloads("imports") if str(row.get("id")) in source_ids]
+    if not imports:
+        # Legacy/incomplete persistence is not authoritative. Being conservative is preferable to
+        # certifying false absences.
+        return {
+            "type": "providers",
+            "values": sorted(provider.name for provider in snapshot.providers),
+            "completeness": "unknown",
+        }
+    if len(imports) == 1:
+        scope = imports[0].get("scope")
+        if isinstance(scope, dict):
+            return deepcopy(scope)
+
+    providers: set[str] = set()
+    complete = True
+    for row in imports:
+        scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
+        providers.update(str(value) for value in scope.get("values", []) if value)
+        if row.get("provider"):
+            providers.add(str(row["provider"]))
+        completeness = str(scope.get("completeness") or row.get("completeness") or "unknown")
+        complete = complete and completeness == "full"
+    return {
+        "type": "providers",
+        "values": sorted(providers),
+        "completeness": "full" if complete else "unknown",
+    }
+
+
+def prepare_campaign_review(
+    campaign: Campaign,
+    snapshot: Snapshot,
+    golden_version: GoldenSourceVersion | None,
+    import_scope: dict[str, object] | None = None,
+) -> CampaignPreparation:
     """Recompute campaign rows without changing the persisted snapshot."""
-    rows = compare_snapshot(snapshot, golden_version)
+    rows = compare_snapshot(snapshot, golden_version, import_scope)
     scope = campaign.scope or {"type": "all"}
     if scope.get("type") == "providers":
         providers = {str(value) for value in scope.get("values", [])}
+        if not providers:
+            raise ValueError("Select at least one provider for this campaign scope")
         rows = [row for row in rows if str(row.get("access_provider")) in providers]
     elif scope.get("type") not in (None, "all"):
         raise ValueError("Unsupported campaign scope")
@@ -55,9 +109,15 @@ def prepare_campaign_review(campaign: Campaign, snapshot: Snapshot, golden_versi
     return CampaignPreparation(prepared, golden_version, rows)
 
 
-def preview_campaign_review(campaign: Campaign, snapshot: Snapshot, golden_version: GoldenSourceVersion | None, fallback_reviewer: object | None = None) -> dict[str, object]:
+def preview_campaign_review(
+    campaign: Campaign,
+    snapshot: Snapshot,
+    golden_version: GoldenSourceVersion | None,
+    fallback_reviewer: object | None = None,
+    import_scope: dict[str, object] | None = None,
+) -> dict[str, object]:
     """Resolve reviewers through the same service path as the real open operation."""
-    preparation = prepare_campaign_review(campaign, snapshot, golden_version)
+    preparation = prepare_campaign_review(campaign, snapshot, golden_version, import_scope)
     preview_campaign = deepcopy(campaign)
     preview_campaign.allow_unresolved_reviewers = True
     _, items = open_campaign(preview_campaign, preparation.snapshot, fallback_reviewer)  # type: ignore[arg-type]
