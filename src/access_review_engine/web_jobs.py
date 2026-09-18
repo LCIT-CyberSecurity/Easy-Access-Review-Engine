@@ -22,10 +22,28 @@ def _connect(path: str | Path) -> sqlite3.Connection:
     conn.commit()
     return conn
 
-def create_job(db_path: str | Path, kind: str, operation: Callable[[str], dict[str, Any]]) -> dict[str, Any]:
+def create_job(
+    db_path: str | Path,
+    kind: str,
+    operation: Callable[[str], dict[str, Any]],
+    *,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Queue an operation and retain enough context to identify failed jobs."""
     job_id = str(uuid4())
     with _connect(db_path) as conn:
-        conn.execute("INSERT INTO web_jobs (id, kind, status, progress, created_at) VALUES (?, ?, ?, ?, ?)", (job_id, kind, "QUEUED", "Queued", _now()))
+        conn.execute(
+            "INSERT INTO web_jobs (id, kind, status, progress, result, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                job_id,
+                kind,
+                "QUEUED",
+                "Queued",
+                json.dumps(context, sort_keys=True) if context else None,
+                _now(),
+            ),
+        )
         conn.execute("INSERT INTO web_job_events (job_id, event, detail, created_at) VALUES (?, ?, ?, ?)", (job_id, "queued", "Job queued", _now()))
     _WORKERS.submit(_run, db_path, job_id, operation)
     return get_job(db_path, job_id)

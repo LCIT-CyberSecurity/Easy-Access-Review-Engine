@@ -1,9 +1,11 @@
 """Read-only projections used by the WebUI."""
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any, Iterable
 
-from access_review_engine.storage import Repository
+from access_review_engine.services import calculate_effective_accesses
+from access_review_engine.storage import Repository, hydrate_snapshot
 
 
 def _latest_decisions(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -45,6 +47,63 @@ def review_item_view(repo: Repository, row: dict[str, Any], *, latest_decisions:
     result["decision_state"] = "decided" if decision else "pending"
     result["decision"] = decision.get("value") if decision else None
     return result
+
+
+def _latest_snapshot_for_provider(
+    snapshots: list[dict[str, Any]], provider: str
+) -> dict[str, Any] | None:
+    """Return the newest snapshot that actually covers one provider."""
+    covered = [
+        snapshot
+        for snapshot in snapshots
+        if any(str(item.get("name")) == provider for item in snapshot.get("providers", []))
+    ]
+    return max(
+        covered,
+        key=lambda snapshot: (str(snapshot.get("created_at") or ""), str(snapshot.get("id") or "")),
+        default=None,
+    )
+
+
+def _add_review_provenance(
+    repo: Repository, rows: list[dict[str, Any]]
+) -> None:
+    """Project immutable campaign-snapshot paths without changing ReviewItem persistence."""
+    campaigns = {str(row.get("id")): row for row in repo.list_payloads("campaigns")}
+    snapshots = {str(row.get("id")): row for row in repo.list_payloads("snapshots")}
+    evaluations: dict[str, dict[tuple[str, str, str, str], dict[str, Any]]] = {}
+    for row in rows:
+        campaign = campaigns.get(str(row.get("campaign_id")), {})
+        snapshot_id = str(campaign.get("snapshot_id") or "")
+        payload = snapshots.get(snapshot_id)
+        if not payload or snapshot_id in evaluations:
+            continue
+        required = {"providers", "identities", "resources", "accesses", "access_assignments", "source_import_ids", "id", "created_at", "checksum"}
+        if not required.issubset(payload):
+            evaluations[snapshot_id] = {}
+            continue
+        snapshot = hydrate_snapshot(payload)
+        effective = calculate_effective_accesses(
+            snapshot.access_assignments,
+            snapshot.access_relations,
+            snapshot.accesses,
+        ).effective_accesses
+        evaluations[snapshot_id] = {
+            item.key(): asdict(item)
+            for item in effective
+        }
+    for row in rows:
+        campaign = campaigns.get(str(row.get("campaign_id")), {})
+        snapshot_id = str(campaign.get("snapshot_id") or "")
+        key = (
+            str(row.get("identity_provider")),
+            str(row.get("identity_identifier")),
+            str(row.get("access_provider")),
+            str(row.get("access_name")),
+        )
+        effective = evaluations.get(snapshot_id, {}).get(key)
+        row["direct"] = bool(effective and effective.get("direct"))
+        row["paths"] = list(effective.get("paths", [])) if effective else []
 
 
 def _is_empty(value: Any) -> bool:
@@ -120,6 +179,10 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
         rows = [review_item_view(repo, item, latest_decisions=latest_decisions, names=names) for item in raw] if table == "review_items" else [dict(item) for item in raw]
         if table == "remediation_actions":
             review_items = {str(item.get("id")): item for item in repo.list_payloads("review_items")}
+            campaign_names = {
+                str(item.get("id")): str(item.get("display_name") or item.get("name") or "")
+                for item in repo.list_payloads("campaigns")
+            }
             identity_names, access_names = names or ({}, {})
             for row in rows:
                 review_item = review_items.get(str(row.get("review_item_id")), {})
@@ -128,13 +191,19 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                         row[key] = review_item[key]
                 row.setdefault("identity_display_name", identity_names.get((str(row.get("identity_provider")), str(row.get("identity_identifier")))) or row.get("identity_identifier"))
                 row.setdefault("access_display_name", access_names.get((str(row.get("access_provider")), str(row.get("access_name")))) or row.get("access_name"))
+                row["campaign_name"] = campaign_names.get(str(row.get("campaign_id"))) or row.get("campaign_id")
                 decision = latest_decisions.get(str(row.get("review_item_id")))
-                if decision is not None and "decision" not in row:
+                if decision is not None:
                     row["decision"] = decision.get("value")
+                    row["comment"] = decision.get("comment")
+                    row["decided_by"] = decision.get("decided_by")
+                    row["decided_at"] = decision.get("created_at")
         if table == "review_items" and reviewer_username is not None:
             rows = [row for row in rows if (row.get("reviewer") or {}).get("identity") == reviewer_username]
         if campaign and table == "review_items":
             rows = [row for row in rows if row.get("campaign_id") == campaign]
+        if table == "review_items":
+            _add_review_provenance(repo, rows)
         if campaign and table == "remediation_actions":
             items = {str(item.get("id")): item for item in repo.list_payloads("review_items")}
             rows = [row for row in rows if items.get(str(row.get("review_item_id")), {}).get("campaign_id") == campaign]
@@ -142,28 +211,66 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             rows = [row for row in rows if row.get("access_provider") in allowed_providers]
         if table == "providers":
             snapshots = repo.list_payloads("snapshots")
-            snapshot = snapshots[-1] if snapshots else None
             jobs = _latest_provider_jobs(db_path)
             for row in rows:
                 name = str(row.get("name", ""))
+                snapshot = _latest_snapshot_for_provider(snapshots, name)
                 observed = snapshot and next((item for item in snapshot.get("providers", []) if item.get("name") == name), None)
                 if observed is None:
-                    row.update({"health": "never_synced", "identity_count": 0, "group_count": 0, "access_count": 0, "last_sync": None, "latest_snapshot": None, "latest_job": jobs.get(name)})
+                    job = jobs.get(name)
+                    health = "failed" if job and job.get("status") == "FAILED" else "never_synced"
+                    row.update({"health": health, "identity_count": 0, "group_count": 0, "access_count": 0, "last_sync": None, "latest_snapshot": None, "latest_job": job})
                     continue
                 identities = [item for item in snapshot.get("identities", []) if item.get("provider") == name]
                 groups = [item for item in identities if str(item.get("type", "")).lower() == "group"]
                 assignments = [item for item in snapshot.get("access_assignments", []) if item.get("provider") == name]
+                accesses = [item for item in snapshot.get("accesses", []) if item.get("provider") == name]
                 job = jobs.get(name)
-                health = "failed" if job and job.get("status") == "FAILED" else "healthy"
-                row.update({"health": health, "identity_count": len(identities), "group_count": len(groups), "access_count": len(assignments), "last_sync": snapshot.get("created_at"), "latest_snapshot": snapshot.get("id"), "latest_job": job})
+                job_is_newer = bool(
+                    job
+                    and str(job.get("created_at") or "") >= str(snapshot.get("created_at") or "")
+                )
+                health = "failed" if job_is_newer and job.get("status") == "FAILED" else "healthy"
+                access_count = len(accesses) if "accesses" in snapshot else len({
+                    (item.get("provider"), item.get("access_name")) for item in assignments
+                })
+                row.update({"health": health, "identity_count": len(identities), "group_count": len(groups), "access_count": access_count, "last_sync": snapshot.get("created_at"), "latest_snapshot": snapshot.get("id"), "latest_job": job})
+        if table == "snapshots":
+            for row in rows:
+                row["assignment_count"] = len(row.get("access_assignments", []))
+                row["provider_count"] = len(row.get("providers", []))
         if table == "identities":
             assignments = repo.list_payloads("access_assignments")
             snapshots = repo.list_payloads("snapshots")
-            current_states = snapshots[-1].get("comparison_states", []) if snapshots else []
             for row in rows:
                 key = (row.get("provider"), row.get("identifier"))
+                snapshot = _latest_snapshot_for_provider(snapshots, str(row.get("provider") or ""))
+                current_states = snapshot.get("comparison_states", []) if snapshot else []
                 row["access_count"] = sum(a.get("identity_provider") == key[0] and a.get("identity_identifier") == key[1] for a in assignments)
                 row["finding_count"] = sum(len(finding.get("findings", [])) for finding in current_states if (finding.get("identity_provider"), finding.get("identity_identifier")) == key)
+        if table == "accesses":
+            assignments = repo.list_payloads("access_assignments")
+            snapshots = repo.list_payloads("snapshots")
+            for row in rows:
+                key = (row.get("provider"), row.get("name"))
+                snapshot = _latest_snapshot_for_provider(snapshots, str(row.get("provider") or ""))
+                current_states = snapshot.get("comparison_states", []) if snapshot else []
+                row["assignment_count"] = sum(
+                    assignment.get("provider") == key[0]
+                    and assignment.get("access_name") == key[1]
+                    for assignment in assignments
+                )
+                row["holder_count"] = len({
+                    (assignment.get("identity_provider"), assignment.get("identity_identifier"))
+                    for assignment in assignments
+                    if assignment.get("provider") == key[0]
+                    and assignment.get("access_name") == key[1]
+                })
+                row["finding_count"] = sum(
+                    len(state.get("findings", []))
+                    for state in current_states
+                    if (state.get("access_provider"), state.get("access_name")) == key
+                )
         if table == "campaigns":
             items = repo.list_payloads("review_items")
             for row in rows:
@@ -182,7 +289,10 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             needle = search.casefold()
             rows = [row for row in rows if needle in _search_text(row).casefold()]
         if status:
-            rows = [row for row in rows if row.get("status") == status or row.get("decision") == status or (table == "identities" and row.get("type") == status)]
+            if table == "review_items" and status == "pending":
+                rows = [row for row in rows if row.get("latest_decision") is None]
+            else:
+                rows = [row for row in rows if row.get("status") == status or row.get("decision") == status or (table == "identities" and row.get("type") == status)]
         if provider:
             rows = [row for row in rows if provider in {row.get("provider"), row.get("identity_provider"), row.get("access_provider")}]
         if classification:
@@ -191,6 +301,14 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
         summary = review_summary(rows) if table == "review_items" else None
         if sort and any(sort in row for row in rows):
             rows = sorted_rows(rows, sort, order)
+        elif table == "review_items":
+            rows.sort(
+                key=lambda item: (
+                    item.get("latest_decision") is not None,
+                    str(item.get("identity_display_name") or item.get("identity_identifier") or "").casefold(),
+                    str(item.get("access_display_name") or item.get("access_name") or "").casefold(),
+                )
+            )
         else:
             rows.sort(key=lambda item: str(item.get("identifier", item.get("name", item.get("id", "")))).casefold())
         result: dict[str, object] = {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower()}

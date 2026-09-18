@@ -1,3 +1,18 @@
+from dataclasses import asdict
+import sqlite3
+
+from access_review_engine.domain import (
+    Access,
+    AccessAssignment,
+    AccessRelation,
+    AccessRelationType,
+    Identity,
+    IdentityStatus,
+    IdentityType,
+    Origin,
+    Provider,
+)
+from access_review_engine.services import create_snapshot
 from access_review_engine.storage import Repository
 from access_review_engine.web_read_models import projected_rows, review_item_view
 
@@ -70,7 +85,11 @@ def test_source_summary_uses_latest_snapshot_data(tmp_path):
                 {"provider": "finance", "identifier": "alice", "type": "user"},
                 {"provider": "finance", "identifier": "finance-admins", "type": "group"},
             ],
-            "access_assignments": [{"provider": "finance", "access_name": "payroll"}],
+            "accesses": [{"provider": "finance", "name": "payroll"}],
+            "access_assignments": [
+                {"provider": "finance", "access_name": "payroll", "identity_identifier": "alice"},
+                {"provider": "finance", "access_name": "payroll", "identity_identifier": "bob"},
+            ],
             "comparison_states": [],
         })
     source = projected_rows(str(db), "providers", limit=10, offset=0)["items"][0]
@@ -79,6 +98,70 @@ def test_source_summary_uses_latest_snapshot_data(tmp_path):
     assert source["group_count"] == 1
     assert source["access_count"] == 1
     assert source["latest_snapshot"] == "snapshot-1"
+
+
+def test_source_summary_attributes_a_failed_sync_to_its_provider(tmp_path):
+    db = tmp_path / "failed-source.db"
+    with Repository(db) as repo:
+        for provider in ("corp-ad", "crm-ldap"):
+            repo.upsert("providers", {"id": provider, "name": provider, "type": "generic"})
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE web_jobs ("
+            "id TEXT PRIMARY KEY, kind TEXT, status TEXT, progress TEXT, result TEXT, error TEXT, "
+            "created_at TEXT, started_at TEXT, finished_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO web_jobs (id, kind, status, progress, result, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("failed", "sync", "FAILED", "Failed", '{"provider": "corp-ad"}', "2026-01-03"),
+        )
+
+    sources = {
+        row["name"]: row
+        for row in projected_rows(str(db), "providers", limit=10, offset=0)["items"]
+    }
+
+    assert sources["corp-ad"]["health"] == "failed"
+    assert sources["crm-ldap"]["health"] == "never_synced"
+
+
+def test_source_summary_uses_latest_snapshot_covering_each_provider(tmp_path):
+    db = tmp_path / "sources.db"
+    with Repository(db) as repo:
+        for provider in ("corp-ad", "crm-ldap"):
+            repo.upsert("providers", {"id": provider, "name": provider, "type": "generic"})
+        repo.upsert("snapshots", {
+            "id": "ad-snapshot", "created_at": "2026-01-02T14:00:00Z",
+            "providers": [{"name": "corp-ad"}],
+            "identities": [{"provider": "corp-ad", "identifier": "alice", "type": "user"}],
+            "access_assignments": [], "comparison_states": [],
+        })
+        repo.upsert("snapshots", {
+            "id": "crm-snapshot", "created_at": "2026-01-02T15:31:00Z",
+            "providers": [{"name": "crm-ldap"}],
+            "identities": [{"provider": "crm-ldap", "identifier": "bob", "type": "user"}],
+            "access_assignments": [], "comparison_states": [],
+        })
+    sources = {row["name"]: row for row in projected_rows(str(db), "providers", limit=10, offset=0)["items"]}
+    assert sources["corp-ad"]["latest_snapshot"] == "ad-snapshot"
+    assert sources["corp-ad"]["health"] == "healthy"
+    assert sources["crm-ldap"]["latest_snapshot"] == "crm-snapshot"
+
+
+def test_snapshot_picker_counts_real_assignments_and_providers(tmp_path):
+    db = tmp_path / "snapshots.db"
+    with Repository(db) as repo:
+        repo.upsert("snapshots", {
+            "id": "snapshot",
+            "providers": [{"name": "corp"}, {"name": "crm"}],
+            "access_assignments": [{"id": "one"}, {"id": "two"}],
+        })
+
+    snapshot = projected_rows(str(db), "snapshots", limit=10, offset=0)["items"][0]
+
+    assert snapshot["assignment_count"] == 2
+    assert snapshot["provider_count"] == 2
 
 
 def test_remediation_actions_include_review_context_and_campaign_filter(tmp_path):
@@ -93,6 +176,82 @@ def test_remediation_actions_include_review_context_and_campaign_filter(tmp_path
     assert result["items"][0]["identity_identifier"] == "alice"
     assert result["items"][0]["access_name"] == "Finance"
     assert result["items"][0]["campaign_id"] == "campaign-a"
+
+
+def test_remediation_action_includes_latest_decision_comment_and_author(tmp_path):
+    db = tmp_path / "remediation.db"
+    with Repository(db) as repo:
+        repo.upsert("campaigns", {"id": "campaign-a", "name": "Quarterly access review"})
+        repo.upsert("review_items", {"id": "review-1", "campaign_id": "campaign-a"})
+        repo.insert_append_only("decisions", {"id": "old", "review_item_id": "review-1", "value": "approve", "comment": None, "decided_by": "old-owner", "created_at": "2026-01-01"})
+        repo.insert_append_only("decisions", {"id": "new", "review_item_id": "review-1", "value": "revoke", "comment": "No longer needed", "decided_by": "owner", "created_at": "2026-01-02"})
+        repo.insert_append_only("remediation_actions", {"id": "action-1", "review_item_id": "review-1", "action": "revoke", "status": "pending"})
+    action = projected_rows(str(db), "remediation_actions", limit=10, offset=0)["items"][0]
+    assert action["decision"] == "revoke"
+    assert action["comment"] == "No longer needed"
+    assert action["decided_by"] == "owner"
+    assert action["campaign_name"] == "Quarterly access review"
+
+
+def test_pending_filter_means_no_latest_decision_and_pending_sorts_first(tmp_path):
+    db = tmp_path / "pending.db"
+    with Repository(db) as repo:
+        for item_id, identity in (("pending", "zoe"), ("decided", "alice")):
+            repo.upsert("review_items", {"id": item_id, "campaign_id": "campaign", "identity_identifier": identity, "identity_provider": "corp", "access_provider": "corp", "access_name": "staff", "findings": []})
+        repo.insert_append_only("decisions", {"id": "decision", "review_item_id": "decided", "value": "approve", "created_at": "2026-01-01"})
+    all_rows = projected_rows(str(db), "review_items", limit=10, offset=0)["items"]
+    pending = projected_rows(str(db), "review_items", limit=10, offset=0, status="pending")
+    assert [row["id"] for row in all_rows] == ["pending", "decided"]
+    assert pending["total"] == 1
+    assert pending["items"][0]["id"] == "pending"
+
+
+def test_access_counts_are_projected_from_real_assignments_and_findings(tmp_path):
+    db = tmp_path / "access-counts.db"
+    with Repository(db) as repo:
+        repo.upsert("accesses", {"id": "access", "provider": "crm", "name": "support"})
+        repo.upsert("access_assignments", {"id": "grant", "provider": "crm", "access_name": "support", "identity_provider": "crm", "identity_identifier": "alice"})
+        repo.upsert("access_assignments", {"id": "second-path", "provider": "crm", "access_name": "support", "identity_provider": "crm", "identity_identifier": "alice", "origin": {"kind": "nested"}})
+        repo.upsert("access_assignments", {"id": "second-holder", "provider": "crm", "access_name": "support", "identity_provider": "crm", "identity_identifier": "bob"})
+        repo.upsert("snapshots", {"id": "snapshot", "created_at": "2026-01-01", "providers": [{"name": "crm"}], "comparison_states": [{"access_provider": "crm", "access_name": "support", "findings": ["unexpected"]}]})
+    access = projected_rows(str(db), "accesses", limit=10, offset=0)["items"][0]
+    assert access["assignment_count"] == 3
+    assert access["holder_count"] == 2
+    assert access["finding_count"] == 1
+
+
+def test_review_provenance_uses_campaign_snapshot_access_paths(tmp_path):
+    db = tmp_path / "paths.db"
+    identity = Identity("corp", "alice", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)
+    root = Access("crm-support", "crm")
+    target = Access("application-users", "crm")
+    assignment = AccessAssignment("crm", "crm-support", "corp", "alice", Origin("direct", True, False))
+    relation = AccessRelation("crm", "crm-support", "crm", "application-users", AccessRelationType.GRANTS, Origin("group", False, True))
+    snapshot = create_snapshot([Provider("crm", "generic")], [identity], [], [root, target], [assignment], ["import"], access_relations=[relation])
+    with Repository(db) as repo:
+        repo.upsert("snapshots", asdict(snapshot))
+        repo.upsert("campaigns", {"id": "campaign", "name": "Q4", "snapshot_id": snapshot.id})
+        repo.upsert("review_items", {"id": "direct", "campaign_id": "campaign", "identity_provider": "corp", "identity_identifier": "alice", "access_provider": "crm", "access_name": "crm-support", "findings": []})
+        repo.upsert("review_items", {"id": "effective", "campaign_id": "campaign", "identity_provider": "corp", "identity_identifier": "alice", "access_provider": "crm", "access_name": "application-users", "findings": []})
+    rows = {row["id"]: row for row in projected_rows(str(db), "review_items", limit=10, offset=0)["items"]}
+    assert rows["direct"]["direct"] is True
+    assert rows["effective"]["direct"] is False
+    assert [step["identifier"] for step in rows["effective"]["paths"][0]["access_chain"]] == ["crm-support", "application-users"]
+
+
+def test_campaign_aggregates_include_more_than_five_hundred_reviews(tmp_path):
+    db = tmp_path / "large-campaign.db"
+    with Repository(db) as repo:
+        repo.upsert("campaigns", {"id": "campaign", "name": "Large"})
+        for index in range(505):
+            item_id = f"review-{index}"
+            repo.upsert("review_items", {"id": item_id, "campaign_id": "campaign", "findings": []})
+            if index < 501:
+                repo.insert_append_only("decisions", {"id": f"decision-{index}", "review_item_id": item_id, "value": "approve", "created_at": f"2026-01-01T00:{index // 60:02d}:{index % 60:02d}Z"})
+    campaign = projected_rows(str(db), "campaigns", limit=10, offset=0)["items"][0]
+    assert campaign["review_items"] == 505
+    assert campaign["approved"] == 501
+    assert campaign["pending"] == 4
 
 
 def test_identity_type_can_be_used_as_status_filter(tmp_path):
