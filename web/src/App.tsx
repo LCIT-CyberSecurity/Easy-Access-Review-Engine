@@ -1664,7 +1664,8 @@ function Golden() {
     [notice, setNotice] = useState<{ tone: string; text: string } | null>(null),
     [name, setName] = useState("Main baseline"),
     [sid, setSid] = useState(""),
-    [tab, setTab] = useState("expected"),
+    [tab, setTab] = useState("accesses"),
+    [holders, setHolders] = useState<Row | null>(null),
     [adding, setAdding] = useState<Row | null>(null),
     [removing, setRemoving] = useState<Row | null>(null),
     [search, setSearch] = useState(""),
@@ -1682,6 +1683,31 @@ function Golden() {
         setOffset(0);
       },
     },
+    accessesQuery = useQuery({
+      queryKey: ["golden-accesses", sourceName, selected, limit, offset, sort, order],
+      queryFn: () =>
+        getJson(`golden-sources/${encoded}/accesses`, { search: selected, limit, offset, sort, order }),
+      enabled: Boolean(sourceName),
+      retry: false,
+    }),
+    expectedAccesses = arr(accessesQuery.data?.items),
+    authQuery = useQuery({
+      queryKey: ["golden-authentication", sourceName],
+      queryFn: () => getJson(`golden-sources/${encoded}/authentication`),
+      enabled: Boolean(sourceName),
+      retry: false,
+    }),
+    authControls = arr(authQuery.data?.controls),
+    authSummary = (authQuery.data?.summary ?? {}) as Row,
+    adoptPosture = useMutation({
+      mutationFn: () => postJson(`golden-sources/${encoded}/authentication`),
+      onSuccess: async (d) => {
+        setNotice({ tone: "ok", text: `Authentication policy recorded in v${s(d.version)}` });
+        await c.invalidateQueries({ queryKey: ["golden-authentication"] });
+        await refresh();
+      },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to record the authentication policy") }),
+    }),
     content = useQuery({
       queryKey: ["golden-assignments", sourceName, selected, limit, offset, sort, order],
       queryFn: () =>
@@ -1692,7 +1718,11 @@ function Golden() {
     expected = arr(content.data?.items),
     history = arr(content.data?.versions),
     refresh = async () => {
-      await Promise.all([q.refetch(), c.invalidateQueries({ queryKey: ["golden-assignments"] })]);
+      await Promise.all([
+        q.refetch(),
+        c.invalidateQueries({ queryKey: ["golden-assignments"] }),
+        c.invalidateQueries({ queryKey: ["golden-accesses"] }),
+      ]);
     },
     baseline = useMutation({
       mutationFn: () => postJson("golden-sources/baseline", { name, snapshot_id: sid }),
@@ -1903,10 +1933,16 @@ function Golden() {
           </section>
           <div className="tabs">
             <button
+              className={tab === "accesses" ? "text-button active" : "text-button"}
+              onClick={() => setTab("accesses")}
+            >
+              Expected access rights
+            </button>
+            <button
               className={tab === "expected" ? "text-button active" : "text-button"}
               onClick={() => setTab("expected")}
             >
-              Expected access
+              Who holds them
             </button>
             <button
               className={tab === "changes" ? "text-button active" : "text-button"}
@@ -1915,12 +1951,69 @@ function Golden() {
               Changes since the last collection
             </button>
             <button
+              className={tab === "authentication" ? "text-button active" : "text-button"}
+              onClick={() => setTab("authentication")}
+            >
+              Authentication policy
+            </button>
+            <button
               className={tab === "history" ? "text-button active" : "text-button"}
               onClick={() => setTab("history")}
             >
               Version history
             </button>
           </div>
+          {tab === "accesses" && (
+            <>
+              <Filter v={search} onChange={setSearch}>
+                <button className="button subtle" onClick={() => setAdding(blankExpected())}>
+                  + Add expected access
+                </button>
+              </Filter>
+              <Table
+                cols={[
+                  "Access right",
+                  "What it allows",
+                  "Application",
+                  "Permission",
+                  "Owner",
+                  "Source",
+                  "Expected holders",
+                ]}
+                fields={[
+                  "access_display_name",
+                  "access_description",
+                  null,
+                  "access_permission",
+                  "access_owner",
+                  "access_provider",
+                  "expected_identities",
+                ]}
+                sorting={sorting}
+                q={accessesQuery}
+                rows={expectedAccesses.map((r) => [
+                  <button className="link-button" onClick={() => setHolders(r)}>
+                    {s(r.access_display_name, s(r.access_name))}
+                  </button>,
+                  <Sub>{s(r.access_description, "")}</Sub>,
+                  targetText(r.access_target) || "—",
+                  s(r.access_permission),
+                  s(r.access_owner),
+                  s(r.access_provider),
+                  <button className="link-button" onClick={() => setHolders(r)}>
+                    {s(r.expected_identities, "0")} people
+                  </button>,
+                ])}
+              />
+              <Pager
+                total={Number(accessesQuery.data?.total ?? 0)}
+                limit={limit}
+                offset={offset}
+                setOffset={setOffset}
+                setLimit={setLimit}
+              />
+            </>
+          )}
           {tab === "expected" && (
             <>
               <Filter v={search} onChange={setSearch}>
@@ -2013,6 +2106,63 @@ function Golden() {
               )}
             </section>
           )}
+          {tab === "authentication" && (
+            <>
+              <section className="panel">
+                <div className="panel-title">
+                  <h2>How people are expected to authenticate</h2>
+                  <span className="muted">
+                    {authQuery.data?.collected_at
+                      ? `observed ${when(authQuery.data.collected_at)}`
+                      : "nothing observed yet"}
+                  </span>
+                </div>
+                {authQuery.data?.expected ? (
+                  <div className="diff-summary">
+                    <strong>{s(authSummary.compliant, "0")} as expected</strong>
+                    <strong>{s(authSummary.deviation, "0")} deviation(s)</strong>
+                    <strong>{s(authSummary.unknown, "0")} not collected</strong>
+                  </div>
+                ) : (
+                  <p>
+                    This expected state declares no authentication policy, so nothing is checked against what
+                    the systems enforce.
+                  </p>
+                )}
+                <p className="muted">
+                  Controls cover password rules, multi-factor authentication, federation and tokens, as
+                  reported by the collection.
+                </p>
+                <button
+                  className="button subtle"
+                  disabled={adoptPosture.isPending}
+                  onClick={() => adoptPosture.mutate()}
+                >
+                  {authQuery.data?.expected
+                    ? "Replace with the observed posture"
+                    : "Adopt the observed posture as expected"}
+                </button>
+              </section>
+              <Table
+                cols={["Control", "Expected", "Observed", "Assessment"]}
+                q={authQuery}
+                rows={authControls.map((r) => [
+                  s(r.control).replaceAll("_", " "),
+                  s(r.expected),
+                  s(r.observed),
+                  <Status
+                    v={
+                      s(r.assessment) === "compliant"
+                        ? "expected_and_observed"
+                        : s(r.assessment) === "deviation"
+                          ? "unexpected"
+                          : s(r.assessment)
+                    }
+                  />,
+                ])}
+              />
+            </>
+          )}
           {tab === "history" && (
             <Table
               cols={["Version", "Origin", "Created", "Expected access"]}
@@ -2028,6 +2178,40 @@ function Golden() {
             />
           )}
         </>
+      )}
+      {holders && (
+        <Drawer title={s(holders.access_display_name, s(holders.access_name))} close={() => setHolders(null)}>
+          <p>{s(holders.access_description, "The source provided no description for this access.")}</p>
+          <p className="muted">
+            {s(holders.access_provider)}
+            {targetText(holders.access_target) ? ` · ${targetText(holders.access_target)}` : ""}
+            {s(holders.access_permission, "") ? ` · ${s(holders.access_permission)}` : ""}
+            {s(holders.access_owner, "") ? ` · owner ${s(holders.access_owner)}` : ""}
+          </p>
+          <h4>EXPECTED HOLDERS</h4>
+          <Table
+            cols={["Identity", "Source", ""]}
+            rows={arr(holders.identities).map((r) => [
+              s(r.identity_display_name, s(r.identity_identifier)),
+              s(r.identity_provider),
+              <button
+                className="link-button"
+                onClick={() =>
+                  setRemoving({
+                    access_provider: holders.access_provider,
+                    access_name: holders.access_name,
+                    access_display_name: holders.access_display_name,
+                    identity_provider: r.identity_provider,
+                    identity_identifier: r.identity_identifier,
+                    identity_display_name: r.identity_display_name,
+                  })
+                }
+              >
+                Remove
+              </button>,
+            ])}
+          />
+        </Drawer>
       )}
       {adding && (
         <Drawer title="Add an expected access" close={() => setAdding(null)}>

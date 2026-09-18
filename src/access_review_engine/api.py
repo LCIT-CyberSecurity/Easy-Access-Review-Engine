@@ -24,11 +24,12 @@ except ModuleNotFoundError:  # pragma: no cover
     Body = Request = Response = HTTPException = StreamingResponse = None  # type: ignore[assignment,misc]
 
 from access_review_engine.application import import_file_to_repository
+from access_review_engine.authentication import compare_authentication_posture
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import connector_path, load_connector, secret_environment, validate_connector
 from access_review_engine.reporting import build_report_rows, report_summary, write_reports
 from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
-from access_review_engine.storage import Repository, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
+from access_review_engine.storage import Repository, hydrate_authentication_posture, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_read_models import projected_rows
 from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import
@@ -181,6 +182,14 @@ def create_app(db_path: str | None = None):
         event.details = details or {}
         repo.insert_append_only("audit_events", event)
 
+    def record_sign_in_event(event_type: str, actor: str, details: dict[str, Any] | None = None) -> None:
+        """Sign-in events name their own actor: there is no session to read them from yet."""
+        event = audit(event_type, "user", actor)
+        event.actor = actor
+        event.details = details or {}
+        with Repository(db_path) as repo:
+            repo.insert_append_only("audit_events", event)
+
     @app.get("/api/health")
     def health():
         return {"status": "ok"}
@@ -204,7 +213,9 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=400, detail="Username and password are required")
         principal = authenticate_user(system_conn, username, password, _directory_login)
         if principal is None:
+            record_sign_in_event("auth.sign_in_failed", username.strip().lower())
             raise HTTPException(status_code=401, detail="Invalid credentials")
+        record_sign_in_event("auth.signed_in", principal["username"], {"role": principal["role"], "auth_source": principal.get("auth_source", LOCAL_SOURCE)})
         response.set_cookie(SESSION_COOKIE, _encode_session(principal, session_secret), httponly=True, secure=os.environ.get("EARE_COOKIE_SECURE") == "1", samesite="strict", max_age=SESSION_TTL_SECONDS, path="/")
         return {"subject": principal["subject"], "username": principal["username"], "display_name": principal["display_name"], "role": principal["role"], "scopes": principal["scopes"], "must_change_password": bool(principal.get("must_change_password", False))}
 
@@ -221,11 +232,15 @@ def create_app(db_path: str | None = None):
             updated = update_password(system_conn, principal.username, password)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        record_sign_in_event("auth.password_changed", str(updated["username"]))
         response.set_cookie(SESSION_COOKIE, _encode_session(updated, session_secret), httponly=True, secure=os.environ.get("EARE_COOKIE_SECURE") == "1", samesite="strict", max_age=SESSION_TTL_SECONDS, path="/")
         return {"subject": updated["subject"], "username": updated["username"], "display_name": updated["display_name"], "role": updated["role"], "scopes": updated["scopes"], "must_change_password": False}
 
     @app.post("/api/auth/logout")
-    def logout(response: Response):
+    def logout(request: Request, response: Response):
+        principal = current_user(request)
+        if principal is not None:
+            record_sign_in_event("auth.signed_out", principal.username)
         response.delete_cookie(SESSION_COOKIE, path="/")
         return {"ok": True}
 
@@ -591,6 +606,102 @@ def create_app(db_path: str | None = None):
                 "versions": [{"id": item.id, "version": item.version, "source_type": item.source_type, "created_at": item.created_at, "assignments": len(item.assignments), "comment": item.comment} for item in sorted(versions, key=lambda item: item.version)],
             }
 
+    @app.get("/api/golden-sources/{name}/authentication")
+    def golden_authentication(name: str, request: Request):
+        """Expected authentication controls against the ones the collection observed."""
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            source, versions, active = _golden_context(repo, name)
+            snapshots = repo.list_payloads("snapshots")
+            covered = sorted({str(item.access_provider) for item in active.assignments}) if active else []
+            # Read the posture of a collection that covers what this expected state describes.
+            relevant = [row for row in snapshots if not covered or {str(item.get("name")) for item in row.get("providers", [])} & set(covered)]
+            observed_payload = next((row.get("authentication_posture") for row in reversed(relevant) if row.get("authentication_posture")), None)
+            collected_at = next((row.get("created_at") for row in reversed(relevant) if row.get("authentication_posture")), None)
+        expected = active.golden_authentication_policy if active else None
+        observed = hydrate_authentication_posture(observed_payload) if observed_payload else None
+        rows = compare_authentication_posture(expected, observed)
+        return {
+            "version": active.version if active else None,
+            "expected": asdict(expected) if expected else None,
+            "observed": asdict(observed) if observed else None,
+            "collected_at": collected_at,
+            "providers": covered,
+            "controls": rows,
+            "summary": {
+                "compliant": sum(1 for row in rows if row["assessment"] == "compliant"),
+                "deviation": sum(1 for row in rows if row["assessment"] == "deviation"),
+                "unknown": sum(1 for row in rows if row["assessment"] in {"unknown", "not_collected"}),
+            },
+        }
+
+    @app.post("/api/golden-sources/{name}/authentication")
+    def golden_adopt_authentication(name: str, request: Request, payload: dict[str, Any] | None = Body(default=None)):
+        """Record the observed authentication posture as the expected one, in a new version."""
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            source, versions, active = _golden_context(repo, name)
+            if active is None:
+                raise HTTPException(status_code=409, detail="Golden Source has no version yet")
+            snapshots = repo.list_payloads("snapshots")
+            observed_payload = next((row.get("authentication_posture") for row in reversed(snapshots) if row.get("authentication_posture")), None)
+            if observed_payload is None:
+                raise HTTPException(status_code=409, detail="No collection has reported an authentication posture yet")
+            posture = hydrate_authentication_posture(observed_payload)
+            version = create_golden_version(source, set(active.assignments), "manual", versions, parent_version_id=active.id, comment=str((payload or {}).get("comment") or "Authentication policy taken from the collected posture"), golden_authentication_policy=posture)
+            source.active_version_id = version.id
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+            record_audit(repo, request, "golden_source.authentication_policy_set", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
+            return {"version": version.version, "version_id": version.id, "controls": len(posture.controls)}
+
+    @app.get("/api/golden-sources/{name}/accesses")
+    def golden_accesses(name: str, request: Request, search: str | None = None, limit: int = 25, offset: int = 0, sort: str | None = None, order: str | None = None):
+        """The expected accesses themselves: each role or group, what it allows, and how many people hold it."""
+        from access_review_engine.web_read_models import _display_names, sorted_rows
+
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            source, versions, active = _golden_context(repo, name)
+            if active is None:
+                raise HTTPException(status_code=409, detail="Golden Source has no version yet")
+            identity_names, access_names = _display_names(repo)
+            catalog = {(str(row.get("provider")), str(row.get("name"))): row for row in repo.list_payloads("accesses")}
+            grouped: dict[tuple[str, str], dict[str, Any]] = {}
+            for item in active.assignments:
+                key = (item.access_provider, item.access_name)
+                row = grouped.get(key)
+                if row is None:
+                    described = catalog.get(key, {})
+                    permission = described.get("permission")
+                    row = grouped[key] = {
+                        "access_provider": item.access_provider,
+                        "access_name": item.access_name,
+                        "access_display_name": access_names.get(key) or item.access_name,
+                        "access_description": described.get("description"),
+                        "access_target": described.get("target"),
+                        "access_owner": (described.get("access_owner") or {}).get("identity") if isinstance(described.get("access_owner"), dict) else None,
+                        "access_permission": item.access_permission or ((permission or {}).get("display_name") or (permission or {}).get("identifier") if isinstance(permission, dict) else permission),
+                        "expected_identities": 0,
+                        "identities": [],
+                    }
+                row["expected_identities"] += 1
+                row["identities"].append({
+                    "identity_provider": item.identity_provider,
+                    "identity_identifier": item.identity_identifier,
+                    "identity_display_name": identity_names.get((item.identity_provider, item.identity_identifier)) or item.identity_identifier,
+                })
+            rows = sorted(grouped.values(), key=lambda row: str(row["access_display_name"]).casefold())
+            for row in rows:
+                row["identities"].sort(key=lambda entry: str(entry["identity_display_name"]).casefold())
+            if search:
+                needle = search.casefold()
+                rows = [row for row in rows if needle in " ".join(str(row.get(field) or "") for field in ("access_display_name", "access_name", "access_description", "access_provider", "access_permission")).casefold()]
+            if sort:
+                rows = sorted_rows(rows, sort, order)
+            bounded, start = max(1, min(limit, 500)), max(0, offset)
+            return {"items": rows[start : start + bounded], "total": len(rows), "limit": bounded, "offset": start, "version": active.version, "sort": sort or "", "order": (order or "asc").lower()}
+
     @app.post("/api/golden-sources/{name}/assignments")
     def golden_edit_assignments(name: str, request: Request, payload: dict[str, Any] = Body(...)):
         """Add, remove or replace expected assignments, as a new immutable version."""
@@ -628,7 +739,7 @@ def create_app(db_path: str | None = None):
             if active is not None and assignments == set(active.assignments):
                 raise HTTPException(status_code=409, detail="This change leaves the Golden Source unchanged")
             try:
-                version = create_golden_version(source, assignments, origin, versions, parent_version_id=active.id if active else None, comment=comment)
+                version = create_golden_version(source, assignments, origin, versions, parent_version_id=active.id if active else None, comment=comment, golden_authentication_policy=active.golden_authentication_policy if active else None)
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             source.active_version_id = version.id
@@ -952,6 +1063,9 @@ def create_app(db_path: str | None = None):
                 version = promote_campaign(source, campaign, items, decisions, previous, mode="replace_scope")
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            # Promotion changes who is expected to have what, not how people authenticate.
+            if version.golden_authentication_policy is None and previous is not None:
+                version.golden_authentication_policy = previous.golden_authentication_policy
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
