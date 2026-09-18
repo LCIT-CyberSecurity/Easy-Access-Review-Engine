@@ -147,18 +147,32 @@ function AuthFrame({ children }: { children: ReactNode }) {
     <div className="login-page">
       <div className="auth-layout">
         <aside className="auth-intro">
-          <div className="login-brand">
-            <span className="brand-mark">E</span>
-            <div><strong>EARE</strong><span>Access governance</span></div>
+          <div className="auth-product">
+            <span className="auth-product-icon"><ShieldCheck size={22} strokeWidth={1.8} /></span>
+            <span><strong>EARE</strong><small>Access Review Engine</small></span>
           </div>
           <div className="auth-message">
-            <span className="auth-eyebrow">ACCESS REVIEW & CERTIFICATION</span>
-            <h2>Know who has access.<br />Decide what should stay.</h2>
-            <p>One place to compare expected and observed access, make review decisions, and follow remediation.</p>
+            <span className="auth-eyebrow">ACCESS GOVERNANCE, MADE CLEAR</span>
+            <h2>Every access.<br /><em>Accounted for.</em></h2>
+            <p>See what people have, compare it with what they should have, and turn every review into a clear decision.</p>
           </div>
-          <div className="auth-foot"><ShieldCheck size={18} /> Govern access with confidence</div>
+          <div className="auth-process">
+            <div><span>01</span><strong>Collect</strong><small>Know the current state</small></div>
+            <div><span>02</span><strong>Compare</strong><small>Find what needs attention</small></div>
+            <div><span>03</span><strong>Certify</strong><small>Record the right decision</small></div>
+          </div>
+          <div className="auth-foot">A product by <strong>LCIT Cybersecurity</strong></div>
         </aside>
-        <div className="auth-form-wrap">{children}</div>
+        <div className="auth-form-wrap">
+          <div className="auth-form-content">
+            <div className="auth-company">
+              <img src="/lcit-logo.png" alt="LCIT logo" />
+              <div><strong>LCIT Cybersecurity</strong><span>Identity &amp; access governance</span></div>
+            </div>
+            {children}
+            <p className="auth-form-foot">Protected access to the EARE workspace</p>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -184,6 +198,7 @@ function PasswordChange() {
             setE("Passwords do not match");
             return;
           }
+          setE("");
           m.mutate();
         }}
       >
@@ -240,8 +255,8 @@ function Login() {
         }}
       >
         <span className="auth-eyebrow">WELCOME BACK</span>
-        <h1>Sign in</h1>
-        <p>Use your EARE account to continue.</p>
+        <h1>Welcome back</h1>
+        <p>Sign in to continue your access reviews.</p>
         <label>
           Username
           <input
