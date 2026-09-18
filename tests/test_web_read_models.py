@@ -136,3 +136,16 @@ def test_review_items_carry_the_names_people_recognise(tmp_path):
     assert row["identity"]["display_name"] == "Alice Martin"
     action = projected_rows(str(db), "remediation_actions", limit=10, offset=0)["items"][0]
     assert action["identity_display_name"] == "Alice Martin"
+
+
+def test_rows_can_be_sorted_on_a_column_with_empty_values_last(tmp_path):
+    db = tmp_path / "sort.db"
+    with Repository(db) as repo:
+        for identifier, count in (("b-user", 5), ("a-user", 50), ("c-user", None)):
+            repo.insert_append_only("identities", {"id": identifier, "provider": "corp", "identifier": identifier, "display_name": identifier.upper(), "type": "user_account", "status": "active", "seats": count})
+    ascending = [row["identifier"] for row in projected_rows(str(db), "identities", limit=10, offset=0, sort="seats")["items"]]
+    assert ascending == ["b-user", "a-user", "c-user"]
+    descending = [row["identifier"] for row in projected_rows(str(db), "identities", limit=10, offset=0, sort="seats", order="desc")["items"]]
+    assert descending[0] == "a-user"
+    unknown = [row["identifier"] for row in projected_rows(str(db), "identities", limit=10, offset=0, sort="nothing")["items"]]
+    assert unknown == ["a-user", "b-user", "c-user"]

@@ -47,7 +47,27 @@ def review_item_view(repo: Repository, row: dict[str, Any], *, latest_decisions:
     return result
 
 
-def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, campaign: str | None = None) -> dict[str, object]:
+def _is_empty(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _sort_key(row: dict[str, Any], field: str) -> tuple[float, str]:
+    """Order one column, comparing numbers as numbers and text case-insensitively."""
+    value = row.get(field)
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return (float(value), "")
+    return (0.0, str(value).casefold())
+
+
+def sorted_rows(rows: list[dict[str, Any]], field: str, order: str | None) -> list[dict[str, Any]]:
+    """Sort on a column, always keeping rows without a value at the end."""
+    present = [row for row in rows if not _is_empty(row.get(field))]
+    missing = [row for row in rows if _is_empty(row.get(field))]
+    present.sort(key=lambda item: _sort_key(item, field), reverse=str(order).lower() == "desc")
+    return present + missing
+
+
+def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None) -> dict[str, object]:
     with Repository(db_path) as repo:
         raw = repo.list_payloads(table)
         latest_decisions = _latest_decisions(repo.list_payloads("decisions"))
@@ -120,8 +140,11 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             rows = [row for row in rows if row.get("status") == status or row.get("decision") == status or (table == "identities" and row.get("type") == status)]
         if provider:
             rows = [row for row in rows if provider in {row.get("provider"), row.get("identity_provider"), row.get("access_provider")}]
-        rows.sort(key=lambda item: str(item.get("identifier", item.get("name", item.get("id", "")))).casefold())
-        return {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset}
+        if sort and any(sort in row for row in rows):
+            rows = sorted_rows(rows, sort, order)
+        else:
+            rows.sort(key=lambda item: str(item.get("identifier", item.get("name", item.get("id", "")))).casefold())
+        return {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower()}
 
 
 def _search_text(value: Any) -> str:

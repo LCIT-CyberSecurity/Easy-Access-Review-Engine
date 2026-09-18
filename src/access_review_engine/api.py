@@ -185,11 +185,11 @@ def create_app(db_path: str | None = None):
     def health():
         return {"status": "ok"}
 
-    def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None):
-        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign)
+    def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None, sort: str | None = None, order: str | None = None):
+        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order)
 
-    def scoped_page(principal: WebPrincipal, table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None):
-        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=principal.scopes if principal.role == "BUSINESS_ADMIN" else None)
+    def scoped_page(principal: WebPrincipal, table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None, sort: str | None = None, order: str | None = None):
+        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=principal.scopes if principal.role == "BUSINESS_ADMIN" else None)
 
     def require_table_access(principal: WebPrincipal, table: str) -> None:
         if principal.role == "BUSINESS_ADMIN" and table != "remediation_actions":
@@ -648,12 +648,83 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/dashboard")
     def dashboard(request: Request):
+        """What deserves attention today, and what to do about it."""
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
-        campaigns = page("campaigns", 500, 0, None, None, None)["items"]
-        items = page("review_items", 500, 0, None, None, None)["items"]
-        actions = page("remediation_actions", 500, 0, None, None, None)["items"]
-        pending = [item for item in items if not item.get("decision")]
-        return {"role": principal.role, "metrics": {"campaigns": len(campaigns), "pending_reviews": len(pending), "remediation_actions": len(actions), "findings": sum(bool(item.get("findings")) for item in items)}, "latest_snapshot": latest_snapshot(db_path), "campaigns": campaigns[:3], "attention": []}
+        today = time.strftime("%Y-%m-%d")
+        with Repository(db_path) as repo:
+            campaigns = repo.list_payloads("campaigns")
+            items = repo.list_payloads("review_items")
+            decided = {str(row.get("review_item_id")) for row in repo.list_payloads("decisions")}
+            actions = repo.list_payloads("remediation_actions")
+            snapshots = repo.list_payloads("snapshots")
+            sources = repo.list_payloads("golden_sources")
+            versions = repo.list_payloads("golden_source_versions")
+            connectors = repo.list_payloads("providers")
+        snapshot = snapshots[-1] if snapshots else None
+        comparison = list(snapshot.get("comparison_states", [])) if snapshot else []
+        pending_actions = [row for row in actions if row.get("status") != "exported"]
+        open_campaigns = [row for row in campaigns if row.get("status") == "open"]
+        providers = projected_rows(db_path, "providers", limit=100, offset=0)["items"]
+        attention: list[dict[str, Any]] = []
+
+        def note(tone: str, title: str, detail: str, link: str) -> None:
+            attention.append({"tone": tone, "title": title, "detail": detail, "link": link})
+
+        for row in providers:
+            if row.get("health") == "failed":
+                note("red", f"Collection failed on {row.get('name')}", "The last synchronization did not complete.", "/sources")
+            elif row.get("health") == "never_synced":
+                note("amber", f"{row.get('name')} has never been collected", "EARE knows nothing about this source yet.", "/sources")
+        if not connectors:
+            note("blue", "No source yet", "Connect the first directory or application EARE should audit.", "/sources")
+        elif not snapshot:
+            note("blue", "Nothing collected yet", "Synchronize a source to see identities and accesses.", "/sources")
+
+        active_versions = {str(row.get("active_version_id")) for row in sources}
+        active = [row for row in versions if str(row.get("id")) in active_versions]
+        newest_expected = max((str(row.get("created_at", "")) for row in active), default="")
+        if not sources:
+            note("blue", "No expected state yet", "Declare what is expected, so deviations can be reported.", "/golden")
+        elif snapshot and newest_expected and str(snapshot.get("created_at", "")) > newest_expected:
+            note("amber", "The systems changed since the expected state was set", "Compare the collected state with the Golden Source.", "/golden")
+
+        for row in open_campaigns:
+            scoped = [item for item in items if item.get("campaign_id") == row.get("id")]
+            waiting = [item for item in scoped if str(item.get("id")) not in decided]
+            due = str(row.get("due_at") or "")
+            if waiting and due and due < today:
+                note("red", f"{row.get('name')} is overdue", f"{len(waiting)} review(s) still waiting, due {due}.", f"/campaigns/{row.get('id')}")
+            elif waiting:
+                note("amber", f"{row.get('name')} is in progress", f"{len(waiting)} review(s) still waiting.", f"/campaigns/{row.get('id')}")
+            else:
+                note("blue", f"{row.get('name')} can be closed", "Every review has been decided.", f"/campaigns/{row.get('id')}")
+        promoted = {str(row.get("source_campaign_id")) for row in versions if row.get("source_campaign_id")}
+        for row in campaigns:
+            if row.get("status") == "closed" and str(row.get("id")) not in promoted:
+                note("blue", f"{row.get('name')} is closed but not promoted", "Its decisions have not been carried into the expected state.", f"/campaigns/{row.get('id')}")
+        if pending_actions:
+            note("amber", f"{len(pending_actions)} remediation action(s) to carry out", "Decisions are waiting to be applied in the systems.", "/actions")
+        if not campaigns and snapshot:
+            note("blue", "No campaign yet", "A campaign asks the owners to confirm who should keep their access.", "/campaigns/new")
+
+        return {
+            "role": principal.role,
+            "metrics": {
+                "campaigns": len(open_campaigns),
+                "pending_reviews": sum(1 for item in items if str(item.get("id")) not in decided and item.get("campaign_id") in {str(row.get("id")) for row in open_campaigns}),
+                "remediation_actions": len(pending_actions),
+                "findings": sum(1 for row in comparison if row.get("findings")),
+            },
+            "collected_at": snapshot.get("created_at") if snapshot else None,
+            "collected_from": [provider.get("name") for provider in (snapshot or {}).get("providers", [])],
+            "expected_state": {"name": sources[0].get("name"), "version": max((int(row.get("version", 0)) for row in active), default=0), "assignments": max((len(row.get("assignments", [])) for row in active), default=0)} if sources else None,
+            "campaigns": [
+                {"id": row.get("id"), "name": row.get("name"), "status": row.get("status"), "due_at": row.get("due_at"), "review_items": len([item for item in items if item.get("campaign_id") == row.get("id")]), "pending": len([item for item in items if item.get("campaign_id") == row.get("id") and str(item.get("id")) not in decided])}
+                for row in open_campaigns[:4]
+            ],
+            "sources": [{"name": row.get("name"), "health": row.get("health"), "last_sync": row.get("last_sync"), "identity_count": row.get("identity_count"), "access_count": row.get("access_count")} for row in providers],
+            "attention": attention[:8],
+        }
 
 
     def _snapshot(repo: Repository, snapshot_id: str | None = None):
@@ -834,14 +905,14 @@ def create_app(db_path: str | None = None):
 
     tables = {"providers": "providers", "imports": "imports", "identities": "identities", "accesses": "accesses", "assignments": "access_assignments", "golden-sources": "golden_sources", "golden-source-versions": "golden_source_versions", "snapshots": "snapshots", "campaigns": "campaigns", "review-items": "review_items", "decisions": "decisions", "remediation-actions": "remediation_actions"}
     for path, table in tables.items():
-        def route(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, campaign: str | None = None, _table: str = table):
+        def route(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None, _table: str = table):
             principal = _require(current_user(request))
             require_table_access(principal, _table)
-            return scoped_page(principal, _table, limit, offset, search, status, provider, campaign)
+            return scoped_page(principal, _table, limit, offset, search, status, provider, campaign, sort, order)
         app.get(f"/api/{path}")(route)
 
     @app.get("/api/findings")
-    def findings(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, campaign: str | None = None):
+    def findings(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None):
         _require(current_user(request), ("ADMIN", "OPERATOR"))
         snapshot = latest_snapshot(db_path) or {}
         rows = list(snapshot.get("comparison_states", []))
@@ -873,7 +944,11 @@ def create_app(db_path: str | None = None):
         if search:
             needle = search.casefold()
             rows = [row for row in rows if needle in json.dumps(row, sort_keys=True).casefold()]
-        return {"items": rows[offset : offset + limit], "total": len(rows), "limit": limit, "offset": offset}
+        if sort:
+            from access_review_engine.web_read_models import sorted_rows
+
+            rows = sorted_rows(rows, sort, order)
+        return {"items": rows[offset : offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower()}
 
     @app.get("/api/identities/{identity_id}/accesses")
     def identity_accesses(identity_id: str, request: Request):

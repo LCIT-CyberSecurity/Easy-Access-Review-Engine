@@ -426,16 +426,22 @@ function Pager({
     </div>
   );
 }
+type SortState = { sort: string; order: string; toggle: (field: string) => void };
 function Table({
   cols,
   rows,
   q,
   onRow,
+  fields,
+  sorting,
 }: {
   cols: string[];
   rows: ReactNode[][];
   q?: any;
   onRow?: (i: number) => void;
+  /** Column index → API field name. Only the named columns become sortable. */
+  fields?: (string | null)[];
+  sorting?: SortState;
 }) {
   if (q?.isLoading) return <div className="empty">Loading…</div>;
   if (q?.isError)
@@ -449,9 +455,23 @@ function Table({
       <table>
         <thead>
           <tr>
-            {cols.map((x) => (
-              <th key={x}>{x}</th>
-            ))}
+            {cols.map((x, i) => {
+              const field = sorting && fields ? fields[i] : null;
+              if (!field || !sorting) return <th key={x}>{x}</th>;
+              const active = sorting.sort === field;
+              return (
+                <th key={x}>
+                  <button
+                    className={active ? "sort-button active" : "sort-button"}
+                    onClick={() => sorting.toggle(field)}
+                    aria-label={`Sort by ${x}`}
+                  >
+                    {x}
+                    <span>{active ? (sorting.order === "desc" ? "▼" : "▲") : "↕"}</span>
+                  </button>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -488,24 +508,159 @@ function Drawer({ title, close, children }: { title: string; close: () => void; 
     </div>
   );
 }
+/** Turns an ISO timestamp into something a person reads, without a date library. */
+const when = (value: unknown): string => {
+  const text = s(value, "");
+  if (!text) return "—";
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) return text;
+  return date.toLocaleString(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
 function Home() {
-  const q = useQuery({ queryKey: ["dashboard"], queryFn: () => getJson("dashboard") });
-  const m = (q.data?.metrics ?? {}) as Row;
+  const q = useQuery({ queryKey: ["dashboard"], queryFn: () => getJson("dashboard") }),
+    m = (q.data?.metrics ?? {}) as Row,
+    attention = arr(q.data?.attention),
+    campaigns = arr(q.data?.campaigns),
+    sources = arr(q.data?.sources),
+    expected = (q.data?.expected_state ?? null) as Row | null,
+    collectedFrom = vals(q.data?.collected_from).join(", "),
+    tiles: [string, unknown, string, string][] = [
+      ["Open campaigns", m.campaigns, "/campaigns", "in progress"],
+      ["Reviews waiting", m.pending_reviews, "/reviews", "to be decided"],
+      ["Findings", m.findings, "/findings", "in the last collection"],
+      ["Remediation actions", m.remediation_actions, "/actions", "to carry out"],
+    ];
+  if (q.isLoading) return <div className="empty">Loading…</div>;
+  if (q.isError)
+    return (
+      <div className="empty">
+        {s(q.error)}{" "}
+        <button className="button subtle" onClick={() => q.refetch()}>
+          Retry
+        </button>
+      </div>
+    );
   return (
     <>
-      <Head title="Overview" />
+      <Head title="Overview">
+        <NavLink className="button primary" to="/campaigns/new">
+          + New campaign
+        </NavLink>
+      </Head>
+      <p className="muted">
+        {q.data?.collected_at
+          ? `Data collected ${when(q.data.collected_at)}${collectedFrom ? ` · ${collectedFrom}` : ""}`
+          : "Nothing has been collected yet."}
+        {expected
+          ? ` · Expected state: ${s(expected.name)} v${s(expected.version)} (${s(expected.assignments, "0")} accesses)`
+          : " · No expected state yet"}
+      </p>
       <div className="metrics">
-        {[
-          ["Campaigns", m.campaigns],
-          ["Reviews remaining", m.pending_reviews],
-          ["Actions", m.remediation_actions],
-          ["Findings", m.findings],
-        ].map((x) => (
-          <div className="metric" key={String(x[0])}>
-            <strong>{s(x[1], "0")}</strong>
-            <small>{String(x[0])}</small>
-          </div>
+        {tiles.map(([label, value, link, hint]) => (
+          <NavLink className="metric" to={link} key={label}>
+            <div className="metric-label">{label}</div>
+            <strong>{s(value, "0")}</strong>
+            <small>{hint}</small>
+          </NavLink>
         ))}
+      </div>
+      <div className="dashboard-grid">
+        <section className="panel">
+          <div className="panel-title">
+            <h2>Needs attention</h2>
+            <span className="muted">
+              {attention.length ? `${attention.length} item(s)` : "nothing pending"}
+            </span>
+          </div>
+          {attention.length ? (
+            attention.map((row, i) => (
+              <NavLink className="attention" to={s(row.link, "/")} key={i}>
+                <div className={`attention-icon ${s(row.tone, "blue")}`}>
+                  {s(row.tone) === "red" ? (
+                    <AlertTriangle size={17} />
+                  ) : s(row.tone) === "amber" ? (
+                    <AlertTriangle size={17} />
+                  ) : (
+                    <ChevronRight size={17} />
+                  )}
+                </div>
+                <div>
+                  <strong>{s(row.title)}</strong>
+                  <p>{s(row.detail)}</p>
+                </div>
+                <ChevronRight size={16} />
+              </NavLink>
+            ))
+          ) : (
+            <p className="muted">
+              Everything collected matches the expected state, and no campaign is waiting on anyone.
+            </p>
+          )}
+        </section>
+        <section className="panel">
+          <div className="panel-title">
+            <h2>Campaigns in progress</h2>
+            <NavLink className="text-button" to="/campaigns">
+              See all
+            </NavLink>
+          </div>
+          {campaigns.length ? (
+            campaigns.map((row) => {
+              const total = Number(row.review_items) || 0,
+                pending = Number(row.pending) || 0,
+                done = total - pending;
+              return (
+                <div className="progress-row" key={s(row.id)}>
+                  <div className="progress-head">
+                    <NavLink to={`/campaigns/${s(row.id)}`}>{s(row.name)}</NavLink>
+                    <span>{total ? Math.round((done / total) * 100) : 0}%</span>
+                  </div>
+                  <div className="review-progress">
+                    <div>
+                      <span style={{ width: `${total ? (done / total) * 100 : 0}%` }} />
+                    </div>
+                  </div>
+                  <small>
+                    {done} of {total} decided{row.due_at ? ` · due ${s(row.due_at)}` : ""}
+                  </small>
+                </div>
+              );
+            })
+          ) : (
+            <p className="muted">No campaign is open. Start one when a collection is up to date.</p>
+          )}
+          <div className="panel-title" style={{ marginTop: 24 }}>
+            <h2>Sources</h2>
+            <NavLink className="text-button" to="/sources">
+              Manage
+            </NavLink>
+          </div>
+          {sources.length ? (
+            sources.map((row) => (
+              <div className="attention" key={s(row.name)}>
+                <div className={`attention-icon ${s(row.health) === "healthy" ? "blue" : "amber"}`}>
+                  <Database size={17} />
+                </div>
+                <div>
+                  <strong>{s(row.name)}</strong>
+                  <p>
+                    {s(row.health).replaceAll("_", " ")} ·{" "}
+                    {row.last_sync ? when(row.last_sync) : "never collected"}
+                    {Number(row.identity_count) ? ` · ${s(row.identity_count)} identities` : ""}
+                  </p>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="muted">No source configured yet.</p>
+          )}
+        </section>
       </div>
     </>
   );
@@ -514,13 +669,24 @@ function useList(path: string, extra: Row = {}) {
   const [search, setSearch] = useState(""),
     [offset, setOffset] = useState(0),
     [limit, setLimit] = useState(25),
+    [sort, setSort] = useState(""),
+    [order, setOrder] = useState("asc"),
     selected = debounce(search);
   const q = useQuery({
-    queryKey: [path, selected, limit, offset, extra],
-    queryFn: () => getPage(path, { ...extra, search: selected, limit, offset }),
+    queryKey: [path, selected, limit, offset, sort, order, extra],
+    queryFn: () => getPage(path, { ...extra, search: selected, limit, offset, sort, order }),
   });
-  useEffect(() => setOffset(0), [selected]);
-  return { q, search, setSearch, offset, setOffset, limit, setLimit };
+  // Any change of what is being listed sends the reader back to the first page.
+  useEffect(() => setOffset(0), [selected, sort, order, JSON.stringify(extra)]);
+  const sorting: SortState = {
+    sort,
+    order,
+    toggle: (field: string) => {
+      setOrder(sort === field && order === "asc" ? "desc" : "asc");
+      setSort(field);
+    },
+  };
+  return { q, search, setSearch, offset, setOffset, limit, setLimit, sorting };
 }
 function Identities() {
   const [provider, setProvider] = useState(""),
@@ -546,6 +712,8 @@ function Identities() {
       </Filter>
       <Table
         cols={["Identity", "Type", "Source / IdP", "Status", "Accesses", "Findings"]}
+        fields={["display_name", "type", "provider", "status", "access_count", "finding_count"]}
+        sorting={x.sorting}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) => [
           <>
@@ -650,6 +818,8 @@ function Accesses() {
           "Holders",
           "Findings",
         ]}
+        fields={["display_name", "description", "provider", null, null, null, null]}
+        sorting={x.sorting}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) => [
           <button className="link-button" onClick={() => setSelected(r)}>
@@ -750,7 +920,15 @@ function Reviews() {
         />
       </Filter>
       <Table
-        cols={["Identity", "Access", "Classification", "Latest decision"]}
+        cols={["Identity", "Access", "Application", "Classification", "Latest decision"]}
+        fields={[
+          "identity_display_name",
+          "access_display_name",
+          "access_provider",
+          "classification",
+          "decision",
+        ]}
+        sorting={x.sorting}
         q={x.q}
         rows={[...(x.q.data?.items ?? [])]
           .sort((a, b) => Number(!a.decision) - Number(!b.decision))
@@ -759,6 +937,7 @@ function Reviews() {
               {s(r.identity_display_name, s(r.identity_identifier))}
             </button>,
             s(r.access_display_name, s(r.access_name)),
+            targetText(r.target) || s(r.access_provider),
             <Status v={r.classification} />,
             <Status v={r.decision ?? "pending"} />,
           ])}
@@ -914,6 +1093,12 @@ function List({ path, title }: { path: string; title: string }) {
             ? ["Classification", "Identity", "Access", "Source", "Campaign", "Observed", "Expected"]
             : ["Identity", "Requested action", "Access / Application", "Campaign", "Status"]
         }
+        fields={
+          findings
+            ? ["classification", "identity_identifier", "access_name", "access_provider", null, null, null]
+            : ["identity_display_name", "action", "access_display_name", "campaign_id", "status"]
+        }
+        sorting={x.sorting}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) =>
           findings
@@ -1002,6 +1187,8 @@ function Campaigns() {
       <Filter v={x.search} onChange={x.setSearch} />
       <Table
         cols={["Campaign", "Scope", "Status", "Progress", "Pending", "Due date"]}
+        fields={["name", null, "status", "progress", "pending", "due_at"]}
+        sorting={x.sorting}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) => [
           <NavLink to={"/campaigns/" + s(r.id)}>{s(r.name)}</NavLink>,
