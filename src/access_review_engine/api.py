@@ -1191,16 +1191,35 @@ def create_app(db_path: str | None = None):
             rows = sorted_rows(rows, sort, order)
         return {"items": rows[offset : offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower()}
 
+    def _snapshot_covering(provider: str | None) -> dict[str, Any]:
+        """The most recent collection that covers this source.
+
+        A collection holds one source, so the latest one overall would hide every
+        identity and access belonging to the others.
+        """
+        with Repository(db_path) as repo:
+            snapshots = repo.list_payloads("snapshots")
+        if provider:
+            for row in reversed(snapshots):
+                if any(str(item.get("name")) == provider for item in row.get("providers", [])):
+                    return row
+        return snapshots[-1] if snapshots else {}
+
+    def _identity_owner(identity_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Find an identity in any collection, and return it with the collection covering it."""
+        with Repository(db_path) as repo:
+            stored = repo.list_payloads("identities")
+        found = next((row for row in stored if str(row.get("id")) == identity_id), None) or next((row for row in stored if str(row.get("identifier")) == identity_id), None)
+        if found is None:
+            raise HTTPException(status_code=404, detail="Identity not found")
+        snapshot = _snapshot_covering(str(found.get("provider")))
+        inside = next((row for row in snapshot.get("identities", []) if row.get("id") == found.get("id")), None) or found
+        return inside, snapshot
+
     @app.get("/api/identities/{identity_id}/accesses")
     def identity_accesses(identity_id: str, request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"))
-        snapshot = latest_snapshot(db_path) or {}
-        identities = {f"{item.get('provider')}:{item.get('identifier')}": item for item in snapshot.get("identities", [])}
-        identity = next((item for item in snapshot.get("identities", []) if item.get("id") == identity_id), None)
-        if identity is None:
-            identity = next((item for item in snapshot.get("identities", []) if item.get("identifier") == identity_id), None)
-        if identity is None:
-            raise HTTPException(status_code=404, detail="Identity not found")
+        identity, snapshot = _identity_owner(identity_id)
         assignments = [row for row in snapshot.get("access_assignments", []) if row.get("identity_provider") == identity.get("provider") and row.get("identity_identifier") == identity.get("identifier")]
         hydrated = hydrate_snapshot(snapshot)
         evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
@@ -1210,7 +1229,7 @@ def create_app(db_path: str | None = None):
     @app.get("/api/accesses/{provider}/{access_name}/holders")
     def access_holders(provider: str, access_name: str, request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"))
-        snapshot = latest_snapshot(db_path) or {}
+        snapshot = _snapshot_covering(provider)
         rows = [row for row in snapshot.get("access_assignments", []) if row.get("provider") == provider and row.get("access_name") == access_name]
         hydrated = hydrate_snapshot(snapshot)
         evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
