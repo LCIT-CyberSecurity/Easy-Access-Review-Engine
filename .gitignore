@@ -18,3 +18,6 @@ web/dist/
 web/*.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
+
+# Claude Code local settings
+.claude/settings.local.json
