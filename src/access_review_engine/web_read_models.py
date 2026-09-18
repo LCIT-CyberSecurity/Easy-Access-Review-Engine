@@ -67,7 +67,28 @@ def sorted_rows(rows: list[dict[str, Any]], field: str, order: str | None) -> li
     return present + missing
 
 
-def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None) -> dict[str, object]:
+def review_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Counts a reviewer acts on: how much is left, of what kind, and what carries a finding."""
+    decided = sum(1 for row in rows if row.get("decision"))
+    classification: dict[str, int] = {}
+    decision: dict[str, int] = {}
+    for row in rows:
+        key = str(row.get("classification") or "unknown")
+        classification[key] = classification.get(key, 0) + 1
+        if row.get("decision"):
+            value = str(row["decision"])
+            decision[value] = decision.get(value, 0) + 1
+    return {
+        "total": len(rows),
+        "decided": decided,
+        "pending": len(rows) - decided,
+        "with_findings": sum(1 for row in rows if row.get("findings")),
+        "classification": classification,
+        "decision": decision,
+    }
+
+
+def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None) -> dict[str, object]:
     with Repository(db_path) as repo:
         raw = repo.list_payloads(table)
         latest_decisions = _latest_decisions(repo.list_payloads("decisions"))
@@ -140,11 +161,17 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             rows = [row for row in rows if row.get("status") == status or row.get("decision") == status or (table == "identities" and row.get("type") == status)]
         if provider:
             rows = [row for row in rows if provider in {row.get("provider"), row.get("identity_provider"), row.get("access_provider")}]
+        if classification:
+            rows = [row for row in rows if row.get("classification") == classification]
+        summary = review_summary(rows) if table == "review_items" else None
         if sort and any(sort in row for row in rows):
             rows = sorted_rows(rows, sort, order)
         else:
             rows.sort(key=lambda item: str(item.get("identifier", item.get("name", item.get("id", "")))).casefold())
-        return {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower()}
+        result: dict[str, object] = {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower()}
+        if summary is not None:
+            result["summary"] = summary
+        return result
 
 
 def _search_text(value: Any) -> str:

@@ -42,6 +42,7 @@ const s = (v: unknown, f = "—") =>
     Array.isArray(v) ? v.filter((x): x is Row => !!x && typeof x === "object") : [],
   vals = (v: unknown) => (Array.isArray(v) ? v.map(String) : []),
   pct = (v: unknown) => Math.max(0, Math.min(100, Number(v) || 0));
+const count = (rows: Row[], keep: (row: Row) => boolean) => rows.filter(keep).length;
 // The collectors store structured references; the WebUI must read them as a sentence.
 const refText = (v: unknown): string => {
   if (typeof v === "string") return v;
@@ -1016,6 +1017,38 @@ function AccessDrawer({ access, close }: { access: Row; close: () => void }) {
     </Drawer>
   );
 }
+/** Parts of a whole, as one bar. Every segment keeps its label and its count. */
+function StackedBar({ parts }: { parts: { label: string; value: number; tone: string }[] }) {
+  const total = parts.reduce((sum, part) => sum + part.value, 0);
+  if (!total) return null;
+  return (
+    <div className="stacked">
+      <div className="stacked-track">
+        {parts
+          .filter((part) => part.value > 0)
+          .map((part) => (
+            <span
+              key={part.label}
+              className={`stacked-part ${part.tone}`}
+              style={{ width: `${(part.value / total) * 100}%` }}
+              title={`${part.label}: ${part.value}`}
+            />
+          ))}
+      </div>
+      <div className="stacked-legend">
+        {parts
+          .filter((part) => part.value > 0)
+          .map((part) => (
+            <span key={part.label}>
+              <span className={`stacked-dot ${part.tone}`} />
+              {part.label}
+              <strong>{part.value}</strong>
+            </span>
+          ))}
+      </div>
+    </div>
+  );
+}
 function Reviews() {
   const campaigns = useQuery({
       queryKey: ["review-campaigns"],
@@ -1023,12 +1056,58 @@ function Reviews() {
     }),
     [decision, setDecision] = useState(""),
     [campaign, setCampaign] = useState(""),
-    x = useList("review-items", { status: decision, campaign }),
-    [selected, setSelected] = useState<Row | null>(null);
+    [classification, setClassification] = useState(""),
+    x = useList("review-items", { status: decision, campaign, classification }),
+    [selected, setSelected] = useState<Row | null>(null),
+    summary = (x.q.data?.summary ?? null) as Row | null,
+    states = ((summary?.classification ?? {}) as Row) || {};
   return (
     <>
       <Head title="My Reviews" />
+      {summary ? (
+        <section className="review-summary">
+          <div>
+            <div className="progress-head">
+              <span>
+                {s(summary.decided, "0")} of {s(summary.total, "0")} decided
+              </span>
+              <span>{Math.round((Number(summary.decided) / Math.max(1, Number(summary.total))) * 100)}%</span>
+            </div>
+            <div className="review-progress">
+              <div>
+                <span
+                  style={{
+                    width: `${(Number(summary.decided) / Math.max(1, Number(summary.total))) * 100}%`,
+                  }}
+                />
+              </div>
+            </div>
+            <small>{s(summary.pending, "0")} left in this view</small>
+          </div>
+          <StackedBar
+            parts={[
+              { label: "As expected", value: Number(states.expected_and_observed) || 0, tone: "ok" },
+              { label: "No reference", value: Number(states.no_reference) || 0, tone: "neutral" },
+              { label: "Missing", value: Number(states.missing) || 0, tone: "warn" },
+              { label: "Not expected", value: Number(states.unexpected) || 0, tone: "bad" },
+            ]}
+          />
+          <button
+            className={Number(summary.with_findings) ? "button subtle" : "button subtle"}
+            disabled={!Number(summary.with_findings)}
+            onClick={() => x.setSearch("")}
+          >
+            {s(summary.with_findings, "0")} with findings
+          </button>
+        </section>
+      ) : null}
       <Filter v={x.search} onChange={x.setSearch}>
+        <SelectFilter
+          value={classification}
+          onChange={setClassification}
+          options={Object.keys(states)}
+          placeholder="State"
+        />
         <SelectFilter
           value={campaign}
           onChange={setCampaign}
@@ -1541,6 +1620,23 @@ function CampaignDetail() {
     }),
     reviews = arr(q.data?.reviews),
     findings = arr(q.data?.findings),
+    reviewerRows = Object.entries(
+      reviews.reduce<Record<string, { total: number; decided: number }>>((acc, row) => {
+        const name = s((row.reviewer as Row | undefined)?.identity, "unassigned"),
+          entry = (acc[name] ??= { total: 0, decided: 0 });
+        entry.total += 1;
+        if (row.decision) entry.decided += 1;
+        return acc;
+      }, {}),
+    )
+      .map(([name, value]) => ({ name, ...value }))
+      .sort((a, b) => b.total - b.decided - (a.total - a.decided)),
+    findingRows = Object.entries(
+      reviews.reduce<Record<string, number>>((acc, row) => {
+        for (const finding of vals(row.findings)) acc[finding] = (acc[finding] ?? 0) + 1;
+        return acc;
+      }, {}),
+    ).sort((a, b) => b[1] - a[1]),
     status = s(c?.status),
     pending = reviews.filter((r) => !r.decision).length,
     ctas = campaignCtas(status, pending);
@@ -1583,19 +1679,122 @@ function CampaignDetail() {
         </button>
       </div>
       {tab === "overview" && (
-        <section className="panel">
-          <h2>Campaign overview</h2>
-          <p>
-            Status: <Status v={c.status} />
-          </p>
-          <p>Progress: {pct(c.progress)}%</p>
-          <p>Snapshot: {s(c.snapshot_id)}</p>
-          <p>Golden version: {s(c.golden_source_version_id)}</p>
-          <p>Scope: {s((c.scope as Row | undefined)?.type, "all")}</p>
-          <p>
-            Review items: {reviews.length} - Pending: {pending}
-          </p>
-        </section>
+        <>
+          <div className="metrics">
+            {[
+              ["Reviews", reviews.length, "in this campaign"],
+              ["Decided", reviews.length - pending, "so far"],
+              ["Still waiting", pending, "to be decided"],
+              ["With findings", reviews.filter((r) => arr(r.findings).length).length, "need attention"],
+            ].map(([label, value, hint]) => (
+              <div className="metric" key={String(label)}>
+                <div className="metric-label">{String(label)}</div>
+                <strong>{s(value, "0")}</strong>
+                <small>{String(hint)}</small>
+              </div>
+            ))}
+          </div>
+          <div className="dashboard-grid">
+            <section className="panel">
+              <div className="panel-title">
+                <h2>Where the campaign stands</h2>
+                <span className="muted">
+                  {pct(c.progress)}% decided
+                  {c.due_at ? ` · due ${s(c.due_at)}` : ""}
+                </span>
+              </div>
+              <StackedBar
+                parts={[
+                  { label: "Approved", value: count(reviews, (r) => r.decision === "approve"), tone: "ok" },
+                  {
+                    label: "Not applicable",
+                    value: count(reviews, (r) => r.decision === "not_applicable"),
+                    tone: "neutral",
+                  },
+                  { label: "Pending", value: pending, tone: "warn" },
+                  { label: "Revoked", value: count(reviews, (r) => r.decision === "revoke"), tone: "bad" },
+                ]}
+              />
+              <div className="panel-title" style={{ marginTop: 22 }}>
+                <h2>What was compared</h2>
+              </div>
+              <StackedBar
+                parts={[
+                  {
+                    label: "As expected",
+                    value: count(reviews, (r) => r.classification === "expected_and_observed"),
+                    tone: "ok",
+                  },
+                  {
+                    label: "No reference",
+                    value: count(reviews, (r) => r.classification === "no_reference"),
+                    tone: "neutral",
+                  },
+                  {
+                    label: "Missing",
+                    value: count(reviews, (r) => r.classification === "missing"),
+                    tone: "warn",
+                  },
+                  {
+                    label: "Not expected",
+                    value: count(reviews, (r) => r.classification === "unexpected"),
+                    tone: "bad",
+                  },
+                ]}
+              />
+              <p className="muted" style={{ marginTop: 18 }}>
+                Snapshot {s(c.snapshot_id)} · Golden version {s(c.golden_source_version_id, "none")} · scope{" "}
+                {s((c.scope as Row | undefined)?.type, "all")}
+              </p>
+            </section>
+            <section className="panel">
+              <div className="panel-title">
+                <h2>Who still has to decide</h2>
+                <span className="muted">{reviewerRows.length} reviewer(s)</span>
+              </div>
+              {reviewerRows.length ? (
+                reviewerRows.map((row) => (
+                  <div className="progress-row" key={row.name}>
+                    <div className="progress-head">
+                      <span>{row.name}</span>
+                      <span>
+                        {row.decided}/{row.total}
+                      </span>
+                    </div>
+                    <div className="review-progress">
+                      <div>
+                        <span style={{ width: `${(row.decided / Math.max(1, row.total)) * 100}%` }} />
+                      </div>
+                    </div>
+                    <small>{row.total - row.decided} left</small>
+                  </div>
+                ))
+              ) : (
+                <p className="muted">No reviewer is assigned on this campaign.</p>
+              )}
+              {findingRows.length ? (
+                <>
+                  <div className="panel-title" style={{ marginTop: 24 }}>
+                    <h2>Findings raised</h2>
+                  </div>
+                  {findingRows.map(([label, value]) => (
+                    <div className="progress-row" key={label}>
+                      <div className="progress-head">
+                        <span>{label.replaceAll("_", " ")}</span>
+                        <span>{value}</span>
+                      </div>
+                      <div className="review-progress">
+                        <div>
+                          <span style={{ width: `${(value / findingRows[0][1]) * 100}%` }} />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              ) : null}
+            </section>
+          </div>
+        </>
       )}
       {tab === "reviews" && (
         <Table

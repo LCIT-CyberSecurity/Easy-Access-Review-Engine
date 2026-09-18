@@ -102,3 +102,17 @@ tr.empty-row td { border-bottom:0; }
 .login-card h1 { font-size:22px; margin:0; }
 .password-field { display:flex; align-items:center; gap:8px; }
 .password-field input { flex:1; }
+
+/* One stacked bar, labelled. Segments keep a surface gap so they never blur together. */
+.stacked { display:grid; gap:8px; min-width:230px; flex:1; }
+.stacked-track { display:flex; gap:2px; height:9px; border-radius:10px; overflow:hidden; background:var(--surface-secondary); }
+.stacked-part { display:block; height:100%; border-radius:3px; }
+.stacked-part.ok, .stacked-dot.ok { background:var(--success); }
+.stacked-part.warn, .stacked-dot.warn { background:var(--warning); }
+.stacked-part.bad, .stacked-dot.bad { background:var(--danger); }
+.stacked-part.neutral, .stacked-dot.neutral { background:var(--border-strong); }
+.stacked-part.info, .stacked-dot.info { background:var(--info); }
+.stacked-legend { display:flex; flex-wrap:wrap; gap:14px; color:var(--text-secondary); font-size:12px; }
+.stacked-legend span { display:inline-flex; align-items:center; gap:6px; }
+.stacked-legend strong { color:var(--text-primary); }
+.stacked-dot { width:8px; height:8px; border-radius:3px; display:inline-block; }

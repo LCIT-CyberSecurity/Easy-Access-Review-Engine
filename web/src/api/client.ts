@@ -61,7 +61,14 @@ export async function getRows(path: string, params: Params = {}): Promise<Row[]>
   const body = (await getJson(path, params)) as { items?: Row[] } | Row[];
   return Array.isArray(body) ? body : (body.items ?? []);
 }
-export type Page = { items: Row[]; total: number; limit: number; offset: number };
+export type Page = {
+  items: Row[];
+  total: number;
+  limit: number;
+  offset: number;
+  /** Counts over the whole filtered set, not only the page. Review lists carry one. */
+  summary?: Row;
+};
 export async function getPage(path: string, params: Params = {}): Promise<Page> {
   const body = (await getJson(path, params)) as Partial<Page>;
   return {
@@ -69,6 +76,7 @@ export async function getPage(path: string, params: Params = {}): Promise<Page> 
     total: Number(body.total ?? 0),
     limit: Number(body.limit ?? 25),
     offset: Number(body.offset ?? 0),
+    ...(body.summary ? { summary: body.summary } : {}),
   };
 }
 export async function postJson(path: string, body?: Row): Promise<Row> {
