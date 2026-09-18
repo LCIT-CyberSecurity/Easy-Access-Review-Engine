@@ -3,8 +3,19 @@ set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-.env}"
 if [[ -f "$ENV_FILE" ]]; then
+  # The dotenv file supplies defaults; explicit process environment values win.
+  declare -A provided_environment=()
+  for variable_name in LDAP_URI BASE_DN PROVIDER_NAME BIND_DN LDAP_PASSWORD LDAP_PASSWORD_FILE LDAP_CA_CERT SEARCH_SCOPE LDAP_FILTER START_TLS ALLOW_ANONYMOUS ALLOW_PARTIAL PAGE_SIZE CONNECTION_TIMEOUT_SECONDS SEARCH_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS CHECK_ONLY OUTPUT; do
+    if [[ ${!variable_name+x} ]]; then
+      provided_environment["$variable_name"]="${!variable_name}"
+    fi
+  done
   # shellcheck disable=SC1090
   . "$ENV_FILE"
+  for variable_name in "${!provided_environment[@]}"; do
+    printf -v "$variable_name" '%s' "${provided_environment[$variable_name]}"
+  done
+  unset provided_environment
 fi
 
 LDAP_URI="${LDAP_URI:-ldap://localhost}"
@@ -140,12 +151,12 @@ elif [[ -n "$LDAP_PASSWORD_FILE" ]]; then
 fi
 export -n LDAP_PASSWORD 2>/dev/null || true
 
-cmd=(ldapsearch -LLL -H "$LDAP_URI" -b "$BASE_DN" -s "$SEARCH_SCOPE" -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "$SEARCH_TIMEOUT_SECONDS" -E "pr=${PAGE_SIZE}/noprompt")
+cmd=(ldapsearch -LLL -x -H "$LDAP_URI" -b "$BASE_DN" -s "$SEARCH_SCOPE" -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "$SEARCH_TIMEOUT_SECONDS" -E "pr=${PAGE_SIZE}/noprompt")
 if [[ "$START_TLS" == "1" ]]; then
   cmd+=(-ZZ)
 fi
 if [[ -n "$BIND_DN" ]]; then
-  cmd+=(-x -D "$BIND_DN" -y "$password_file")
+  cmd+=(-D "$BIND_DN" -y "$password_file")
 fi
 cmd+=("$LDAP_FILTER" "${LDIF_ATTRIBUTES[@]}")
 
@@ -155,9 +166,9 @@ if command -v timeout >/dev/null 2>&1; then
 fi
 
 if [[ "${CHECK_ONLY}" == "1" ]]; then
-  check_cmd=(ldapsearch -LLL -H "${LDAP_URI}" -b "${BASE_DN}" -s base -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "${SEARCH_TIMEOUT_SECONDS}")
+  check_cmd=(ldapsearch -LLL -x -H "${LDAP_URI}" -b "${BASE_DN}" -s base -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "${SEARCH_TIMEOUT_SECONDS}")
   if [[ "${START_TLS}" == "1" ]]; then check_cmd+=(-ZZ); fi
-  if [[ -n "${BIND_DN}" ]]; then check_cmd+=(-x -D "${BIND_DN}" -y "${password_file}"); fi
+  if [[ -n "${BIND_DN}" ]]; then check_cmd+=(-D "${BIND_DN}" -y "${password_file}"); fi
   check_cmd+=("(objectClass=*)" dn)
   set +e
   "${runner[@]}" "${check_cmd[@]}" >/dev/null 2>"${tmp}/ldapsearch.stderr"

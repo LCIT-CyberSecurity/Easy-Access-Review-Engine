@@ -1245,6 +1245,9 @@ def test_openldap_exporter_timeout_partial_zip_is_unknown(tmp_path: Path) -> Non
 
 def test_openldap_exporter_rejects_authenticated_cleartext_and_missing_password(tmp_path: Path) -> None:
     env = os.environ | {
+        "ENV_FILE": str(tmp_path / "no-local-env"),
+        "LDAP_PASSWORD": "",
+        "LDAP_PASSWORD_FILE": "",
         "BASE_DN": "dc=example,dc=com",
         "BIND_DN": "cn=admin,dc=example,dc=com",
         "LDAP_URI": "ldap://ldap.example.test",

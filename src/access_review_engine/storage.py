@@ -282,7 +282,10 @@ def hydrate_provider(data: dict[str, Any]) -> Provider:
 
 
 def hydrate_identity(data: dict[str, Any]) -> Identity:
-    return Identity(**data)
+    from access_review_engine.domain import OwnerRef
+
+    owner = data.get("account_owner")
+    return Identity(**(data | {"account_owner": OwnerRef(**owner) if owner else None}))
 
 
 def hydrate_resource(data: dict[str, Any]) -> Resource:
