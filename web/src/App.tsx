@@ -1635,8 +1635,9 @@ function CampaignDetail() {
 }
 const goldenOrigin = (row: Row) => {
   const kind = s(row.source_type);
-  if (kind === "promoted_campaign") return `Promoted from campaign ${s(row.source_campaign_id, "—")}`;
-  if (kind === "snapshot" || kind === "baseline")
+  if (kind === "promoted_campaign")
+    return `Promoted from the campaign ${s(row.source_campaign_name, s(row.source_campaign_id, "—"))}`;
+  if (kind === "promoted_observed_snapshot" || kind === "snapshot" || kind === "baseline")
     return `Adopted from what the systems contained on ${s(row.created_at)}`;
   if (kind === "csv") return "Imported from a CSV file";
   if (kind === "manual") return "Edited in the WebUI";
@@ -1654,7 +1655,9 @@ function Golden() {
   const c = useQueryClient(),
     q = useQuery({ queryKey: ["golden"], queryFn: () => getPage("golden-sources", { limit: 100 }) }),
     snap = useQuery({ queryKey: ["snap"], queryFn: () => getPage("snapshots", { limit: 100 }) }),
-    source = arr(q.data?.items)[0],
+    goldens = arr(q.data?.items),
+    [chosen, setChosen] = useState(""),
+    source = goldens.find((row) => s(row.name) === chosen) ?? goldens[0],
     sourceName = s(source?.name, ""),
     encoded = encodeURIComponent(sourceName),
     [compare, setCompare] = useState<Row | null>(null),
@@ -1668,9 +1671,21 @@ function Golden() {
     selected = debounce(search),
     [offset, setOffset] = useState(0),
     [limit, setLimit] = useState(25),
+    [sort, setSort] = useState(""),
+    [order, setOrder] = useState("asc"),
+    sorting: SortState = {
+      sort,
+      order,
+      toggle: (field: string) => {
+        setOrder(sort === field && order === "asc" ? "desc" : "asc");
+        setSort(field);
+        setOffset(0);
+      },
+    },
     content = useQuery({
-      queryKey: ["golden-assignments", sourceName, selected, limit, offset],
-      queryFn: () => getJson(`golden-sources/${encoded}/assignments`, { search: selected, limit, offset }),
+      queryKey: ["golden-assignments", sourceName, selected, limit, offset, sort, order],
+      queryFn: () =>
+        getJson(`golden-sources/${encoded}/assignments`, { search: selected, limit, offset, sort, order }),
       enabled: Boolean(sourceName),
       retry: false,
     }),
@@ -1732,6 +1747,9 @@ function Golden() {
     snapshots = [...arr(snap.data?.items)].sort((a, b) => s(a.created_at).localeCompare(s(b.created_at))),
     latest = snapshots[snapshots.length - 1],
     changes = arr(compare?.changes),
+    covered = vals(content.data?.providers),
+    collected = vals(content.data?.collected_providers),
+    mismatch = covered.filter((name) => !collected.includes(name)),
     counted = (state: string) => changes.filter((r) => r.status === state).length;
   useEffect(() => setOffset(0), [selected]);
   useEffect(() => {
@@ -1760,7 +1778,60 @@ function Golden() {
         contain beyond this list is reported as unexpected, and everything missing from the systems is
         reported as missing.
       </p>
-      {notice && <p className={notice.tone === "ok" ? "muted" : "form-error"}>{notice.text}</p>}
+      {goldens.length > 1 && (
+        <div className="filterbar">
+          <select
+            className="filter-button"
+            value={sourceName}
+            onChange={(e) => {
+              setChosen(e.target.value);
+              setCompare(null);
+              setNotice(null);
+            }}
+          >
+            {goldens.map((row) => (
+              <option key={s(row.id)} value={s(row.name)}>
+                {s(row.display_name, s(row.name))}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {notice && notice.tone !== "ok" && mismatch.length ? (
+        <section className="panel">
+          <h2>This expected state cannot be compared with the latest collection</h2>
+          <p>
+            {s(source?.display_name, sourceName)} describes {covered.join(", ")}, but the latest collection
+            only contains {collected.join(", ") || "nothing"}.
+          </p>
+          <p className="muted">
+            Collect {mismatch.join(", ")} to compare the whole expected state, or open the expected state that
+            matches what was collected.
+          </p>
+          <div className="button-row">
+            <NavLink className="button subtle" to="/sources">
+              Go to Sources &amp; IdPs
+            </NavLink>
+            {goldens
+              .filter((row) => s(row.name) !== sourceName)
+              .map((row) => (
+                <button
+                  className="button subtle"
+                  key={s(row.id)}
+                  onClick={() => {
+                    setChosen(s(row.name));
+                    setCompare(null);
+                    setNotice(null);
+                  }}
+                >
+                  Open {s(row.display_name, s(row.name))}
+                </button>
+              ))}
+          </div>
+        </section>
+      ) : (
+        notice && <p className={notice.tone === "ok" ? "muted" : "form-error"}>{notice.text}</p>
+      )}
       {!source ? (
         <section className="panel">
           <h2>No expected state yet</h2>
@@ -1826,6 +1897,7 @@ function Golden() {
             </p>
             <p className="muted">
               {content.data ? goldenOrigin(content.data as Row) : "Loading…"}
+              {covered.length ? ` · covers ${covered.join(", ")}` : ""}
               {content.data?.comment ? ` · ${s(content.data.comment)}` : ""}
             </p>
           </section>
@@ -1858,11 +1930,19 @@ function Golden() {
               </Filter>
               <Table
                 cols={["Identity", "Source", "Access", "Permission", ""]}
+                fields={[
+                  "identity_display_name",
+                  "access_provider",
+                  "access_display_name",
+                  "access_permission",
+                  null,
+                ]}
+                sorting={sorting}
                 q={content}
                 rows={expected.map((r) => [
-                  s(r.identity_identifier),
+                  s(r.identity_display_name, s(r.identity_identifier)),
                   s(r.access_provider),
-                  s(r.access_name),
+                  s(r.access_display_name, s(r.access_name)),
                   s(r.access_permission),
                   <button className="link-button" onClick={() => setRemoving(r)}>
                     Remove
@@ -2012,7 +2092,8 @@ function Golden() {
           intro={
             <>
               <p>
-                {s(removing.identity_identifier)} → {s(removing.access_name)} ({s(removing.access_provider)})
+                {s(removing.identity_display_name, s(removing.identity_identifier))} →{" "}
+                {s(removing.access_display_name, s(removing.access_name))} ({s(removing.access_provider)})
                 stops being expected. If the systems still grant it, the next review reports it as unexpected.
               </p>
               <p className="muted">A new version is recorded. The current one stays in the history.</p>

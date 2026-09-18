@@ -530,17 +530,34 @@ def create_app(db_path: str | None = None):
         return source, versions, active
 
     @app.get("/api/golden-sources/{name}/assignments")
-    def golden_assignments(name: str, request: Request, search: str | None = None, limit: int = 25, offset: int = 0):
+    def golden_assignments(name: str, request: Request, search: str | None = None, limit: int = 25, offset: int = 0, sort: str | None = None, order: str | None = None):
         """Read what the Golden Source currently expects, so it can be reviewed in the WebUI."""
         _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             source, versions, active = _golden_context(repo, name)
             if active is None:
                 raise HTTPException(status_code=409, detail="Golden Source has no version yet")
-            rows = [asdict(item) for item in sorted(active.assignments, key=lambda item: item.key())]
+            from access_review_engine.web_read_models import _display_names
+
+            identity_names, access_names = _display_names(repo)
+            rows = []
+            for item in sorted(active.assignments, key=lambda entry: entry.key()):
+                row = asdict(item)
+                # Show the names people recognise; collectors key objects by their native id.
+                row["identity_display_name"] = identity_names.get((item.identity_provider, item.identity_identifier)) or item.identity_identifier
+                row["access_display_name"] = access_names.get((item.access_provider, item.access_name)) or item.access_name
+                rows.append(row)
+            covered = sorted({str(item.access_provider) for item in active.assignments})
+            campaign_name = next((str(row.get("name")) for row in repo.list_payloads("campaigns") if str(row.get("id")) == str(active.source_campaign_id)), None)
+            snapshots = repo.list_payloads("snapshots")
+            collected = [str(item.get("name")) for item in (snapshots[-1].get("providers", []) if snapshots else [])]
             if search:
                 needle = search.casefold()
                 rows = [row for row in rows if needle in " ".join(str(value or "") for value in row.values()).casefold()]
+            if sort:
+                from access_review_engine.web_read_models import sorted_rows
+
+                rows = sorted_rows(rows, sort, order)
             bounded = max(1, min(limit, 500))
             start = max(0, offset)
             return {
@@ -548,6 +565,8 @@ def create_app(db_path: str | None = None):
                 "total": len(rows),
                 "limit": bounded,
                 "offset": start,
+                "sort": sort or "",
+                "order": (order or "asc").lower(),
                 "version": active.version,
                 "version_id": active.id,
                 "source_type": active.source_type,
@@ -555,7 +574,11 @@ def create_app(db_path: str | None = None):
                 "created_by": active.created_by,
                 "source_snapshot_id": active.source_snapshot_id,
                 "source_campaign_id": active.source_campaign_id,
+                "source_campaign_name": campaign_name,
                 "comment": active.comment,
+                "providers": covered,
+                "collected_providers": collected,
+                "collected_at": snapshots[-1].get("created_at") if snapshots else None,
                 "versions": [{"id": item.id, "version": item.version, "source_type": item.source_type, "created_at": item.created_at, "assignments": len(item.assignments), "comment": item.comment} for item in sorted(versions, key=lambda item: item.version)],
             }
 
