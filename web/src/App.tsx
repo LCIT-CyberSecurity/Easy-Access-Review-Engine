@@ -2194,7 +2194,13 @@ function Golden() {
                   <button className="link-button" onClick={() => setHolders(r)}>
                     {s(r.access_display_name, s(r.access_name))}
                   </button>,
-                  <Sub>{s(r.access_description, "")}</Sub>,
+                  <Sub>
+                    {describeAccess({
+                      description: r.access_description,
+                      permission: r.access_permission,
+                      target: r.access_target,
+                    })}
+                  </Sub>,
                   targetText(r.access_target) || "—",
                   s(r.access_permission),
                   s(r.access_owner),
@@ -2236,7 +2242,13 @@ function Golden() {
                 rows={expected.map((r) => [
                   s(r.identity_display_name, s(r.identity_identifier)),
                   s(r.access_display_name, s(r.access_name)),
-                  <Sub>{s(r.access_description, "")}</Sub>,
+                  <Sub>
+                    {describeAccess({
+                      description: r.access_description,
+                      permission: r.access_permission,
+                      target: r.access_target,
+                    })}
+                  </Sub>,
                   targetText(r.access_target) || "—",
                   s(r.access_permission),
                   s(r.access_provider),
@@ -2380,7 +2392,13 @@ function Golden() {
       )}
       {holders && (
         <Drawer title={s(holders.access_display_name, s(holders.access_name))} close={() => setHolders(null)}>
-          <p>{s(holders.access_description, "The source provided no description for this access.")}</p>
+          <p>
+            {describeAccess({
+              description: holders.access_description,
+              permission: holders.access_permission,
+              target: holders.access_target,
+            }) || "The source provided no description for this access."}
+          </p>
           <p className="muted">
             {s(holders.access_provider)}
             {targetText(holders.access_target) ? ` · ${targetText(holders.access_target)}` : ""}
