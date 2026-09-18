@@ -75,3 +75,30 @@ a.attention { text-decoration:none; color:inherit; }
 a.attention:hover strong { color:var(--primary); }
 .progress-head a { color:var(--text-primary); text-decoration:none; font-weight:600; }
 .progress-head a:hover { color:var(--primary); }
+
+/* Status badges: one shape, five tones, never colour alone. */
+.badge { display:inline-flex; align-items:center; gap:7px; padding:3px 9px 3px 8px; border-radius:999px; border:1px solid var(--border); background:var(--surface-secondary); color:var(--text-secondary); font-size:12px; font-weight:500; line-height:18px; white-space:nowrap; }
+.badge .dot { width:6px; height:6px; border-radius:50%; background:currentColor; opacity:.9; }
+.badge.ok { color:var(--success); background:var(--success-soft); border-color:transparent; }
+.badge.warn { color:var(--warning); background:var(--warning-soft); border-color:transparent; }
+.badge.bad { color:var(--danger); background:var(--danger-soft); border-color:transparent; }
+.badge.info { color:var(--info); background:#e9f1fb; border-color:transparent; }
+
+/* Tables: quieter chrome, clearer hierarchy. */
+.table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow-sm); overflow:auto; }
+th { position:sticky; top:0; z-index:1; background:var(--surface-secondary); color:var(--text-muted); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:11px 16px; border-bottom:1px solid var(--border); white-space:nowrap; }
+td { padding:13px 16px; vertical-align:top; border-bottom:1px solid var(--border); }
+tbody tr:hover { background:#f8faff; }
+tr.empty-row:hover { background:transparent; }
+tr.empty-row td { border-bottom:0; }
+.empty { display:grid; justify-items:center; gap:10px; padding:44px 20px; color:var(--text-muted); text-align:center; }
+.empty strong { color:var(--text-secondary); font-size:14px; }
+
+/* Login */
+.login-card { display:grid; gap:16px; padding:32px; border-radius:14px; box-shadow:var(--shadow-md); }
+.login-brand { display:flex; align-items:center; gap:12px; padding:0 0 4px; }
+.login-brand strong { display:block; font-size:15px; }
+.login-brand span { color:var(--text-muted); font-size:12px; }
+.login-card h1 { font-size:22px; margin:0; }
+.password-field { display:flex; align-items:center; gap:8px; }
+.password-field input { flex:1; }

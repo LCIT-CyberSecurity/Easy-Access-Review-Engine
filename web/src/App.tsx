@@ -165,6 +165,7 @@ function Login() {
   const c = useQueryClient(),
     [u, setU] = useState(""),
     [p, setP] = useState(""),
+    [visible, setVisible] = useState(false),
     [e, setE] = useState("");
   const m = useMutation({
     mutationFn: () => login(u, p),
@@ -177,20 +178,52 @@ function Login() {
         className="login-card"
         onSubmit={(x) => {
           x.preventDefault();
+          setE("");
           m.mutate();
         }}
       >
-        <h1>Sign in to EARE</h1>
+        <div className="login-brand">
+          <span className="brand-mark">E</span>
+          <div>
+            <strong>EARE</strong>
+            <span>Access review and certification</span>
+          </div>
+        </div>
+        <h1>Sign in</h1>
         <label>
           Username
-          <input required value={u} onChange={(x) => setU(x.target.value)} />
+          <input
+            required
+            autoFocus
+            autoComplete="username"
+            value={u}
+            onChange={(x) => setU(x.target.value)}
+          />
         </label>
         <label>
           Password
-          <input required type="password" value={p} onChange={(x) => setP(x.target.value)} />
+          <span className="password-field">
+            <input
+              required
+              autoComplete="current-password"
+              type={visible ? "text" : "password"}
+              value={p}
+              onChange={(x) => setP(x.target.value)}
+            />
+            <button
+              type="button"
+              className="text-button"
+              aria-label={visible ? "Hide password" : "Show password"}
+              onClick={() => setVisible(!visible)}
+            >
+              {visible ? "Hide" : "Show"}
+            </button>
+          </span>
         </label>
         {e && <p className="form-error">{e}</p>}
-        <button className="button primary">Sign in</button>
+        <button className="button primary" disabled={m.isPending}>
+          {m.isPending ? "Signing in…" : "Sign in"}
+        </button>
       </form>
     </div>
   );
@@ -333,8 +366,83 @@ function Head({ title, children }: { title: string; children?: ReactNode }) {
     </div>
   );
 }
+// One vocabulary for every state the product shows, so a status reads the same everywhere.
+const STATUS_LABELS: Record<string, string> = {
+  expected_and_observed: "As expected",
+  unexpected: "Not expected",
+  missing: "Missing",
+  no_reference: "No reference",
+  unknown_due_to_scope: "Out of scope",
+  pending: "Pending",
+  approve: "Approved",
+  revoke: "Revoked",
+  not_applicable: "Not applicable",
+  draft: "Draft",
+  open: "Open",
+  closed: "Closed",
+  cancelled: "Cancelled",
+  healthy: "Healthy",
+  failed: "Failed",
+  never_synced: "Never collected",
+  enabled: "Active",
+  disabled: "Disabled",
+  exported: "Exported",
+  added: "To add",
+  removed: "No longer present",
+  unchanged: "Unchanged",
+  active: "Active",
+  deleted: "Deleted",
+  unknown: "Unknown",
+  ACTIVE: "Active",
+  DISABLED: "Disabled",
+  NOT_YET_ACTIVE: "Not yet active",
+  ADMIN: "Admin",
+  OPERATOR: "Operator",
+  GROUP_OWNER: "Group owner",
+  BUSINESS_ADMIN: "Business admin",
+  QUEUED: "Queued",
+  RUNNING: "Running",
+  SUCCEEDED: "Completed",
+  FAILED: "Failed",
+};
+const STATUS_TONES: Record<string, string> = {
+  expected_and_observed: "ok",
+  approve: "ok",
+  healthy: "ok",
+  enabled: "ok",
+  active: "ok",
+  ACTIVE: "ok",
+  SUCCEEDED: "ok",
+  unchanged: "ok",
+  exported: "ok",
+  unexpected: "bad",
+  revoke: "bad",
+  failed: "bad",
+  FAILED: "bad",
+  disabled: "bad",
+  DISABLED: "bad",
+  deleted: "bad",
+  removed: "bad",
+  missing: "warn",
+  pending: "warn",
+  draft: "warn",
+  never_synced: "warn",
+  QUEUED: "warn",
+  no_reference: "warn",
+  open: "info",
+  RUNNING: "info",
+  added: "info",
+};
 function Status({ v }: { v: unknown }) {
-  return <span className="status">{s(v, "unknown").replaceAll("_", " ")}</span>;
+  const raw = s(v, "unknown"),
+    label = STATUS_LABELS[raw] ?? raw.replaceAll("_", " "),
+    tone = STATUS_TONES[raw] ?? "neutral";
+  return (
+    <span className={`badge ${tone}`}>
+      <span className="dot" />
+      {label}
+    </span>
+  );
 }
 function Filter({
   v,
@@ -443,11 +551,21 @@ function Table({
   fields?: (string | null)[];
   sorting?: SortState;
 }) {
-  if (q?.isLoading) return <div className="empty">Loading…</div>;
+  if (q?.isLoading)
+    return (
+      <div className="table-wrap">
+        <div className="empty">Loading…</div>
+      </div>
+    );
   if (q?.isError)
     return (
-      <div className="empty">
-        {s(q.error)} <button onClick={() => q.refetch()}>Retry</button>
+      <div className="table-wrap">
+        <div className="empty">
+          <strong>{s(q.error)}</strong>
+          <button className="button subtle" onClick={() => q.refetch()}>
+            Try again
+          </button>
+        </div>
       </div>
     );
   return (
@@ -484,8 +602,13 @@ function Table({
               </tr>
             ))
           ) : (
-            <tr>
-              <td colSpan={cols.length}>No records match this view.</td>
+            <tr className="empty-row">
+              <td colSpan={cols.length}>
+                <div className="empty">
+                  <strong>Nothing to show here</strong>
+                  <span>No record matches the current search and filters.</span>
+                </div>
+              </td>
             </tr>
           )}
         </tbody>
