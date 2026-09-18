@@ -861,6 +861,34 @@ def create_app(db_path: str | None = None):
             connectors = repo.list_payloads("providers")
         snapshot = snapshots[-1] if snapshots else None
         comparison = list(snapshot.get("comparison_states", [])) if snapshot else []
+        with Repository(db_path) as repo:
+            accesses = repo.list_payloads("accesses")
+            assignments = repo.list_payloads("access_assignments")
+            identity_names, access_names = __import__("access_review_engine.web_read_models", fromlist=["_display_names"])._display_names(repo)
+        # What this person is personally on the hook for: their reviews and the rights they own.
+        me = principal.username.casefold()
+        my_items = [row for row in items if str((row.get("reviewer") or {}).get("identity", "")).casefold() == me]
+        holders: dict[tuple[str, str], int] = {}
+        for row in assignments:
+            key = (str(row.get("provider")), str(row.get("access_name")))
+            holders[key] = holders.get(key, 0) + 1
+        owned = []
+        for row in accesses:
+            owner = row.get("access_owner") or {}
+            if str(owner.get("identity", "")).casefold() != me:
+                continue
+            target = row.get("target") or {}
+            service = (target.get("service") or {}) if isinstance(target, dict) else {}
+            key = (str(row.get("provider")), str(row.get("name")))
+            owned.append({
+                "access_name": row.get("name"),
+                "access_display_name": access_names.get(key) or row.get("display_name") or row.get("name"),
+                "description": row.get("description"),
+                "provider": row.get("provider"),
+                "application": service.get("display_name") or service.get("identifier"),
+                "holders": holders.get(key, 0),
+            })
+        owned.sort(key=lambda row: (str(row["application"] or "~"), str(row["access_display_name"]).casefold()))
         pending_actions = [row for row in actions if row.get("status") != "exported"]
         open_campaigns = [row for row in campaigns if row.get("status") == "open"]
         providers = projected_rows(db_path, "providers", limit=100, offset=0)["items"]
@@ -917,6 +945,16 @@ def create_app(db_path: str | None = None):
             "collected_at": snapshot.get("created_at") if snapshot else None,
             "collected_from": [provider.get("name") for provider in (snapshot or {}).get("providers", [])],
             "expected_state": {"name": sources[0].get("name"), "version": max((int(row.get("version", 0)) for row in active), default=0), "assignments": max((len(row.get("assignments", [])) for row in active), default=0)} if sources else None,
+            "mine": {
+                "reviews": {
+                    "total": len(my_items),
+                    "pending": sum(1 for row in my_items if str(row.get("id")) not in decided),
+                    "campaigns": sorted({str(row.get("campaign_id")) for row in my_items if str(row.get("id")) not in decided}),
+                },
+                "owned_accesses": owned[:12],
+                "owned_total": len(owned),
+                "applications": sorted({str(row["application"]) for row in owned if row["application"]}),
+            },
             "campaigns": [
                 {"id": row.get("id"), "name": row.get("name"), "status": row.get("status"), "due_at": row.get("due_at"), "review_items": len([item for item in items if item.get("campaign_id") == row.get("id")]), "pending": len([item for item in items if item.get("campaign_id") == row.get("id") and str(item.get("id")) not in decided])}
                 for row in open_campaigns[:4]

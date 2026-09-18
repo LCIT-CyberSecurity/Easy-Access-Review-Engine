@@ -537,6 +537,76 @@ function Pager({
 }
 type SortState = { sort: string; order: string; toggle: (field: string) => void };
 type FilterState = { values: Row; set: (field: string, value: string) => void };
+/** A column header that sorts and filters from one menu, the way a spreadsheet does. */
+function ColumnMenu({
+  label,
+  field,
+  sorting,
+  filtering,
+}: {
+  label: string;
+  field: string;
+  sorting?: SortState;
+  filtering?: FilterState;
+}) {
+  const [open, setOpen] = useState(false),
+    active = sorting?.sort === field,
+    filtered = s(filtering?.values[field], ""),
+    sortAs = (want: string) => {
+      if (!sorting) return;
+      if (sorting.sort !== field) sorting.toggle(field);
+      if (sorting.sort === field && sorting.order !== want) sorting.toggle(field);
+      setOpen(false);
+    };
+  return (
+    <div className="column-menu">
+      <button
+        className={active || filtered ? "sort-button active" : "sort-button"}
+        onClick={() => setOpen(!open)}
+        aria-label={`Sort or filter on ${label}`}
+      >
+        {label}
+        <span>{active ? (sorting!.order === "desc" ? "▼" : "▲") : filtered ? "▣" : "▾"}</span>
+      </button>
+      {open ? (
+        <>
+          <div className="menu-backdrop" onClick={() => setOpen(false)} />
+          <div className="menu-panel">
+            {sorting ? (
+              <div className="menu-row">
+                <button className="text-button" onClick={() => sortAs("asc")}>
+                  Sort A → Z
+                </button>
+                <button className="text-button" onClick={() => sortAs("desc")}>
+                  Sort Z → A
+                </button>
+              </div>
+            ) : null}
+            {filtering ? (
+              <>
+                <input
+                  autoFocus
+                  placeholder={`Filter ${label.toLowerCase()}`}
+                  value={filtered}
+                  onChange={(e) => filtering.set(field, e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && setOpen(false)}
+                />
+                <div className="menu-row">
+                  <button className="text-button" onClick={() => filtering.set(field, "")}>
+                    Clear filter
+                  </button>
+                  <button className="text-button" onClick={() => setOpen(false)}>
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
 function Table({
   cols,
   rows,
@@ -578,42 +648,15 @@ function Table({
         <thead>
           <tr>
             {cols.map((x, i) => {
-              const field = sorting && fields ? fields[i] : null;
-              if (!field || !sorting) return <th key={x}>{x}</th>;
-              const active = sorting.sort === field;
+              const field = fields ? fields[i] : null;
+              if (!field || (!sorting && !filtering)) return <th key={x}>{x}</th>;
               return (
                 <th key={x}>
-                  <button
-                    className={active ? "sort-button active" : "sort-button"}
-                    onClick={() => sorting.toggle(field)}
-                    aria-label={`Sort by ${x}`}
-                  >
-                    {x}
-                    <span>{active ? (sorting.order === "desc" ? "▼" : "▲") : "↕"}</span>
-                  </button>
+                  <ColumnMenu label={x} field={field} sorting={sorting} filtering={filtering} />
                 </th>
               );
             })}
           </tr>
-          {filtering && fields ? (
-            <tr className="filter-row">
-              {cols.map((label, i) => {
-                const field = fields[i];
-                return (
-                  <th key={`filter-${label}`}>
-                    {field ? (
-                      <input
-                        value={s(filtering.values[field], "")}
-                        placeholder="Filter"
-                        aria-label={`Filter on ${label}`}
-                        onChange={(e) => filtering.set(field, e.target.value)}
-                      />
-                    ) : null}
-                  </th>
-                );
-              })}
-            </tr>
-          ) : null}
         </thead>
         <tbody>
           {rows.length ? (
@@ -675,6 +718,10 @@ function Home() {
     campaigns = arr(q.data?.campaigns),
     sources = arr(q.data?.sources),
     expected = (q.data?.expected_state ?? null) as Row | null,
+    mine = (q.data?.mine ?? {}) as Row,
+    myReviews = (mine.reviews ?? {}) as Row,
+    myRights = arr(mine.owned_accesses),
+    myReviewsDone = Number(myReviews.total ?? 0) - Number(myReviews.pending ?? 0),
     collectedFrom = vals(q.data?.collected_from).join(", "),
     tiles: [string, unknown, string, string][] = [
       ["Open campaigns", m.campaigns, "/campaigns", "in progress"],
@@ -716,6 +763,70 @@ function Home() {
           </NavLink>
         ))}
       </div>
+      {Number(myReviews.total ?? 0) || myRights.length ? (
+        <div className="dashboard-grid">
+          <section className="panel">
+            <div className="panel-title">
+              <h2>Your reviews</h2>
+              <NavLink className="text-button" to="/reviews">
+                Open my queue
+              </NavLink>
+            </div>
+            {Number(myReviews.total ?? 0) ? (
+              <div className="progress-row" style={{ borderTop: 0, paddingTop: 0 }}>
+                <div className="progress-head">
+                  <span>
+                    {myReviewsDone} of {s(myReviews.total, "0")} decided
+                  </span>
+                  <span>{Math.round((myReviewsDone / Math.max(1, Number(myReviews.total))) * 100)}%</span>
+                </div>
+                <div className="review-progress">
+                  <div>
+                    <span
+                      style={{ width: `${(myReviewsDone / Math.max(1, Number(myReviews.total))) * 100}%` }}
+                    />
+                  </div>
+                </div>
+                <small>
+                  {s(myReviews.pending, "0")} left
+                  {vals(myReviews.campaigns).length
+                    ? ` · ${vals(myReviews.campaigns).length} campaign(s)`
+                    : ""}
+                </small>
+              </div>
+            ) : (
+              <p className="muted">No review is assigned to you right now.</p>
+            )}
+          </section>
+          <section className="panel">
+            <div className="panel-title">
+              <h2>Access rights you own</h2>
+              <span className="muted">
+                {s(mine.owned_total, "0")} right(s)
+                {vals(mine.applications).length ? ` · ${vals(mine.applications).join(", ")}` : ""}
+              </span>
+            </div>
+            {myRights.length ? (
+              myRights.map((row) => (
+                <div className="attention" key={`${s(row.provider)}-${s(row.access_name)}`}>
+                  <div className="attention-icon blue">
+                    <KeyRound size={17} />
+                  </div>
+                  <div>
+                    <strong>{s(row.access_display_name, s(row.access_name))}</strong>
+                    <p>
+                      {s(row.application, s(row.provider))} · {s(row.holders, "0")} holder(s)
+                      {s(row.description, "") ? ` · ${s(row.description)}` : ""}
+                    </p>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="muted">No access right lists you as its owner in the collected data.</p>
+            )}
+          </section>
+        </div>
+      ) : null}
       <div className="dashboard-grid">
         <section className="panel">
           <div className="panel-title">
@@ -987,7 +1098,7 @@ function Accesses() {
           "Holders",
           "Findings",
         ]}
-        fields={["display_name", "description", "provider", null, null, null, null]}
+        fields={["display_name", "description", "provider", "permission", "target", null, null]}
         sorting={x.sorting}
         filtering={x.filtering}
         q={x.q}
@@ -1169,13 +1280,7 @@ function Reviews() {
       </Filter>
       <Table
         cols={["Identity", "Access", "Application", "Classification", "Latest decision"]}
-        fields={[
-          "identity_display_name",
-          "access_display_name",
-          "access_provider",
-          "classification",
-          "decision",
-        ]}
+        fields={["identity_display_name", "access_display_name", "target", "classification", "decision"]}
         sorting={x.sorting}
         filtering={x.filtering}
         q={x.q}
@@ -2263,7 +2368,7 @@ function Golden() {
                 fields={[
                   "access_display_name",
                   "access_description",
-                  null,
+                  "access_target",
                   "access_permission",
                   "access_owner",
                   "access_provider",
@@ -2314,7 +2419,7 @@ function Golden() {
                   "identity_display_name",
                   "access_display_name",
                   "access_description",
-                  null,
+                  "access_target",
                   "access_permission",
                   "access_provider",
                   null,

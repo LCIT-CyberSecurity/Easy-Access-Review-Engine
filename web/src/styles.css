@@ -116,6 +116,9 @@ tr.empty-row td { border-bottom:0; }
 .stacked-legend span { display:inline-flex; align-items:center; gap:6px; }
 .stacked-legend strong { color:var(--text-primary); }
 .stacked-dot { width:8px; height:8px; border-radius:3px; display:inline-block; }
-.filter-row th { position:static; padding:8px 10px 10px; background:var(--surface-secondary); border-bottom:1px solid var(--border); }
-.filter-row input { width:100%; min-width:80px; height:30px; padding:0 8px; color:var(--text-primary); background:var(--surface); border:1px solid var(--border); border-radius:6px; font:inherit; font-size:12px; }
-.filter-row input::placeholder { color:var(--text-muted); }
+.column-menu { position:relative; display:inline-block; }
+.menu-backdrop { position:fixed; inset:0; z-index:8; }
+.menu-panel { position:absolute; z-index:9; top:calc(100% + 6px); left:0; min-width:190px; display:grid; gap:9px; padding:12px; background:var(--surface); border:1px solid var(--border); border-radius:9px; box-shadow:var(--shadow-md); text-transform:none; letter-spacing:0; }
+.menu-panel input { height:32px; padding:0 9px; color:var(--text-primary); background:var(--background); border:1px solid var(--border); border-radius:6px; font:inherit; font-size:13px; }
+.menu-row { display:flex; justify-content:space-between; gap:12px; }
+.menu-row .text-button { font-size:12px; }
