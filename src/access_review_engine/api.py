@@ -26,7 +26,7 @@ except ModuleNotFoundError:  # pragma: no cover
 from access_review_engine.application import import_file_to_repository
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import connector_path, load_connector, secret_environment, validate_connector
-from access_review_engine.reporting import write_reports
+from access_review_engine.reporting import build_report_rows, report_summary, write_reports
 from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
 from access_review_engine.storage import Repository, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
@@ -655,6 +655,49 @@ def create_app(db_path: str | None = None):
                 writer.writerow({"access_provider": item.access_provider, "access_name": item.access_name, "identity_provider": item.identity_provider, "identity_identifier": item.identity_identifier, "permission": item.access_permission or ""})
             return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={name}-baseline.csv"})
 
+
+    @app.get("/api/reports/{campaign_id}/results")
+    def campaign_report_results(campaign_id: str, request: Request, search: str | None = None, classification: str | None = None, decision: str | None = None, provider: str | None = None, owner: str | None = None, limit: int = 25, offset: int = 0, sort: str | None = None, order: str | None = None):
+        """The report, readable in the WebUI: same rows and same counts as the exported file."""
+        from access_review_engine.web_read_models import sorted_rows
+
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            raw = repo.get_payload("campaigns", campaign_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            campaign = hydrate_campaign(raw)
+            items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
+            decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
+        rows = build_report_rows(items, decisions)
+        summary = report_summary(rows)
+        facets = {
+            "classification": sorted({str(row["classification"]) for row in rows if row["classification"]}),
+            "decision": sorted({str(row["decision"]) for row in rows if row["decision"]}),
+            "provider": sorted({str(row["provider"]) for row in rows if row["provider"]}),
+            "owner": sorted({str(row["owner"]) for row in rows if row["owner"]}),
+        }
+        selected = {"classification": classification, "decision": decision, "provider": provider, "owner": owner}
+        for field, value in selected.items():
+            if value:
+                rows = [row for row in rows if str(row.get(field)) == value]
+        if search:
+            needle = search.casefold()
+            rows = [row for row in rows if needle in " ".join(str(value) for value in row.values()).casefold()]
+        if sort:
+            rows = sorted_rows(rows, sort, order)
+        bounded, start = max(1, min(limit, 500)), max(0, offset)
+        return {
+            "campaign": {"id": campaign.id, "name": campaign.name, "status": campaign.status, "due_at": campaign.due_at, "opened_at": campaign.opened_at, "closed_at": campaign.closed_at, "snapshot_id": campaign.snapshot_id, "golden_source_version_id": campaign.golden_source_version_id},
+            "summary": summary,
+            "facets": facets,
+            "items": rows[start : start + bounded],
+            "total": len(rows),
+            "limit": bounded,
+            "offset": start,
+            "sort": sort or "",
+            "order": (order or "asc").lower(),
+        }
 
     @app.get("/api/reports/{campaign_id}/{format}")
     def campaign_report(campaign_id: str, format: str, request: Request):

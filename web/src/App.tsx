@@ -2388,48 +2388,208 @@ function AuditTrail() {
   );
 }
 function Reports() {
-  const q = useQuery({ queryKey: ["reports"], queryFn: () => getPage("campaigns", { limit: 100 }) }),
-    [campaign, setCampaign] = useState("");
-  const campaigns = arr(q.data?.items),
-    selected = campaigns.find((r) => s(r.id) === campaign) || campaigns[0];
+  const campaignsQuery = useQuery({
+      queryKey: ["reports"],
+      queryFn: () => getPage("campaigns", { limit: 100 }),
+    }),
+    campaigns = arr(campaignsQuery.data?.items),
+    [chosen, setChosen] = useState(""),
+    // Reports are read after a campaign is closed: offer that one first.
+    selected =
+      campaigns.find((r) => s(r.id) === chosen) ??
+      campaigns.find((r) => s(r.status) === "closed") ??
+      campaigns[0],
+    id = s(selected?.id, ""),
+    [search, setSearch] = useState(""),
+    debounced = debounce(search),
+    [classification, setClassification] = useState(""),
+    [decision, setDecision] = useState(""),
+    [provider, setProvider] = useState(""),
+    [owner, setOwner] = useState(""),
+    [offset, setOffset] = useState(0),
+    [limit, setLimit] = useState(25),
+    [sort, setSort] = useState(""),
+    [order, setOrder] = useState("asc"),
+    sorting: SortState = {
+      sort,
+      order,
+      toggle: (field: string) => {
+        setOrder(sort === field && order === "asc" ? "desc" : "asc");
+        setSort(field);
+        setOffset(0);
+      },
+    },
+    q = useQuery({
+      queryKey: [
+        "report",
+        id,
+        debounced,
+        classification,
+        decision,
+        provider,
+        owner,
+        limit,
+        offset,
+        sort,
+        order,
+      ],
+      queryFn: () =>
+        getJson(`reports/${encodeURIComponent(id)}/results`, {
+          search: debounced,
+          classification,
+          decision,
+          provider,
+          owner,
+          limit,
+          offset,
+          sort,
+          order,
+        }),
+      enabled: Boolean(id),
+    }),
+    summary = (q.data?.summary ?? {}) as Row,
+    facets = (q.data?.facets ?? {}) as Row,
+    rows = arr(q.data?.items),
+    campaign = (q.data?.campaign ?? {}) as Row;
+  useEffect(() => setOffset(0), [debounced, classification, decision, provider, owner, id]);
+  if (!campaigns.length)
+    return (
+      <>
+        <Head title="Reports" />
+        <div className="table-wrap">
+          <div className="empty">
+            <strong>No campaign yet</strong>
+            <span>A report describes what a campaign decided. Run one first.</span>
+            <NavLink className="button subtle" to="/campaigns/new">
+              Create a campaign
+            </NavLink>
+          </div>
+        </div>
+      </>
+    );
   return (
     <>
-      <Head title="Reports" />
+      <Head title="Reports">
+        <div className="button-row">
+          <a className="button subtle" href={`/api/reports/${id}/csv`}>
+            Download CSV
+          </a>
+          <a className="button subtle" href={`/api/reports/${id}/json`}>
+            Download JSON
+          </a>
+          <a className="button primary" href={`/api/reports/${id}/html`}>
+            Download report
+          </a>
+        </div>
+      </Head>
       <div className="filterbar">
-        <select
-          className="filter-button"
-          value={s(selected?.id, "")}
-          onChange={(e) => setCampaign(e.target.value)}
-        >
-          <option value="">Select campaign</option>
+        <select className="filter-button" value={id} onChange={(e) => setChosen(e.target.value)}>
           {campaigns.map((r) => (
             <option key={s(r.id)} value={s(r.id)}>
-              {s(r.name)}
+              {s(r.name)} — {s(r.status)}
             </option>
           ))}
         </select>
+        <Status v={campaign.status ?? selected?.status} />
+        <span className="muted">
+          {campaign.closed_at
+            ? `closed ${when(campaign.closed_at)}`
+            : campaign.opened_at
+              ? `opened ${when(campaign.opened_at)}`
+              : "not opened yet"}
+        </span>
       </div>
-      {selected ? (
-        <section className="panel">
-          <h2>{s(selected.name)} reports</h2>
-          <div className="report-list">
-            <div className="report-row">
-              <strong>Campaign review report</strong>
-              <a href={`/api/reports/${s(selected.id)}/html`}>HTML</a>
-            </div>
-            <div className="report-row">
-              <strong>Campaign results</strong>
-              <a href={`/api/reports/${s(selected.id)}/csv`}>CSV</a>
-            </div>
-            <div className="report-row">
-              <strong>Campaign evidence</strong>
-              <a href={`/api/reports/${s(selected.id)}/json`}>JSON</a>
-            </div>
+      <div className="metrics">
+        {[
+          ["Reviewed accesses", q.data?.total, "in this campaign"],
+          ["Approved", summary.approve, "kept as is"],
+          ["Revoked", summary.revoke, "to be removed"],
+          ["Still pending", summary.pending, "no decision yet"],
+        ].map(([label, value, hint]) => (
+          <div className="metric" key={String(label)}>
+            <div className="metric-label">{String(label)}</div>
+            <strong>{s(value, "0")}</strong>
+            <small>{String(hint)}</small>
           </div>
-        </section>
-      ) : (
-        <div className="empty">No campaign available.</div>
-      )}
+        ))}
+      </div>
+      <section className="panel">
+        <div className="panel-title">
+          <h2>What the campaign found</h2>
+          <span className="muted">
+            {s(summary.identities, "0")} identities · {s(summary.providers, "0")} source(s)
+          </span>
+        </div>
+        <div className="diff-summary">
+          <strong>{s(summary.expected_and_observed, "0")} as expected</strong>
+          <strong>{s(summary.unexpected, "0")} not expected</strong>
+          <strong>{s(summary.missing, "0")} missing</strong>
+          <strong>{s(summary.disabled_with_access, "0")} disabled accounts with access</strong>
+          <strong>{s(summary.technical_account_without_owner, "0")} technical accounts without owner</strong>
+        </div>
+      </section>
+      <Filter v={search} onChange={setSearch}>
+        <SelectFilter
+          value={classification}
+          onChange={setClassification}
+          options={vals(facets.classification)}
+          placeholder="Classification"
+        />
+        <SelectFilter
+          value={decision}
+          onChange={setDecision}
+          options={vals(facets.decision)}
+          placeholder="Decision"
+        />
+        <SelectFilter
+          value={provider}
+          onChange={setProvider}
+          options={vals(facets.provider)}
+          placeholder="Source"
+        />
+        <SelectFilter value={owner} onChange={setOwner} options={vals(facets.owner)} placeholder="Reviewer" />
+      </Filter>
+      <Table
+        cols={["Identity", "Access", "Application", "Permission", "State", "Decision", "Reason", "Reviewer"]}
+        fields={[
+          "identity",
+          "access",
+          "service",
+          "permission",
+          "classification",
+          "decision",
+          "comment",
+          "reviewer",
+        ]}
+        sorting={sorting}
+        q={q}
+        rows={rows.map((r) => [
+          <>
+            {s(r.identity)}
+            <Sub>{s(r.identity_status, "")}</Sub>
+          </>,
+          <>
+            {s(r.access)}
+            <Sub>{s(r.description, "")}</Sub>
+          </>,
+          s(r.service),
+          s(r.permission),
+          <>
+            <Status v={r.classification} />
+            <Sub>{s(r.findings, "")}</Sub>
+          </>,
+          <Status v={r.decision} />,
+          s(r.comment, ""),
+          s(r.reviewer),
+        ])}
+      />
+      <Pager
+        total={Number(q.data?.total ?? 0)}
+        limit={limit}
+        offset={offset}
+        setOffset={setOffset}
+        setLimit={setLimit}
+      />
     </>
   );
 }

@@ -887,6 +887,11 @@ def _reference_links_html(reference_links: list[dict[str, str]]) -> str:
     return f'<nav class="references" aria-label="Reference files">{links}</nav>'
 
 
+def report_summary(rows: list[dict[str, object]]) -> dict[str, int]:
+    """The counts the exported report shows, so the WebUI can show the same ones."""
+    return _summary(rows)
+
+
 def _summary(rows: list[dict[str, object]]) -> dict[str, int]:
     values = {
         "providers": len({row["provider"] for row in rows}),
