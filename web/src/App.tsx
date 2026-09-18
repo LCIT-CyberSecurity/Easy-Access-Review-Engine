@@ -142,6 +142,27 @@ function App() {
     </Toasts>
   );
 }
+function AuthFrame({ children }: { children: ReactNode }) {
+  return (
+    <div className="login-page">
+      <div className="auth-layout">
+        <aside className="auth-intro">
+          <div className="login-brand">
+            <span className="brand-mark">E</span>
+            <div><strong>EARE</strong><span>Access governance</span></div>
+          </div>
+          <div className="auth-message">
+            <span className="auth-eyebrow">ACCESS REVIEW & CERTIFICATION</span>
+            <h2>Know who has access.<br />Decide what should stay.</h2>
+            <p>One place to compare expected and observed access, make review decisions, and follow remediation.</p>
+          </div>
+          <div className="auth-foot"><ShieldCheck size={18} /> Govern access with confidence</div>
+        </aside>
+        <div className="auth-form-wrap">{children}</div>
+      </div>
+    </div>
+  );
+}
 function PasswordChange() {
   const c = useQueryClient(),
     [p, setP] = useState(""),
@@ -154,7 +175,7 @@ function PasswordChange() {
     onError: (x) => setE(s(x, "Unable to change password")),
   });
   return (
-    <div className="login-page">
+    <AuthFrame>
       <form
         className="login-card"
         onSubmit={(x) => {
@@ -166,13 +187,14 @@ function PasswordChange() {
           m.mutate();
         }}
       >
+        <span className="auth-eyebrow">ACCOUNT SECURITY</span>
         <h1>Change your password</h1>
-        <p>Set a new password before continuing.</p>
+        <p>Set a new password to continue to your workspace.</p>
         <label>
           New password
           <span className="password-field">
-            <input required minLength={12} type={visible ? "text" : "password"} value={p} onChange={(x) => setP(x.target.value)} />
-            <button type="button" className="text-button" onClick={() => setVisible(!visible)}>
+            <input required autoFocus autoComplete="new-password" minLength={12} type={visible ? "text" : "password"} value={p} onChange={(x) => setP(x.target.value)} />
+            <button type="button" className="text-button" aria-label={visible ? "Hide password" : "Show password"} onClick={() => setVisible(!visible)}>
               {visible ? "Hide" : "Show"}
             </button>
           </span>
@@ -181,18 +203,19 @@ function PasswordChange() {
           Confirm password
           <input
             required
+            autoComplete="new-password"
             minLength={12}
             type={visible ? "text" : "password"}
             value={confirm}
             onChange={(x) => setConfirm(x.target.value)}
           />
         </label>
-        {e && <p className="form-error">{e}</p>}
+        {e && <p className="form-error" role="alert">{e}</p>}
         <button className="button primary" disabled={m.isPending}>
-          Change password
+          {m.isPending ? "Changing password…" : "Change password"}
         </button>
       </form>
-    </div>
+    </AuthFrame>
   );
 }
 function Login() {
@@ -207,7 +230,7 @@ function Login() {
     onError: (x) => setE(s(x, "Unable to sign in")),
   });
   return (
-    <div className="login-page">
+    <AuthFrame>
       <form
         className="login-card"
         onSubmit={(x) => {
@@ -216,14 +239,9 @@ function Login() {
           m.mutate();
         }}
       >
-        <div className="login-brand">
-          <span className="brand-mark">E</span>
-          <div>
-            <strong>EARE</strong>
-            <span>Access review and certification</span>
-          </div>
-        </div>
+        <span className="auth-eyebrow">WELCOME BACK</span>
         <h1>Sign in</h1>
+        <p>Use your EARE account to continue.</p>
         <label>
           Username
           <input
@@ -254,12 +272,12 @@ function Login() {
             </button>
           </span>
         </label>
-        {e && <p className="form-error">{e}</p>}
+        {e && <p className="form-error" role="alert">{e}</p>}
         <button className="button primary" disabled={m.isPending}>
           {m.isPending ? "Signing in…" : "Sign in"}
         </button>
       </form>
-    </div>
+    </AuthFrame>
   );
 }
 const navSections = [
@@ -338,10 +356,6 @@ function Shell({ principal }: { principal: Principal }) {
             ) : null;
           })}
         </nav>
-        <div className="sidebar-footer">
-          <span className="health-dot" />
-          API connected
-        </div>
       </aside>
       <div className="page">
         <header className="topbar">
@@ -352,7 +366,6 @@ function Shell({ principal }: { principal: Principal }) {
             Workspace <ChevronRight size={14} /> Access governance
           </span>
           <div className="top-actions">
-            <span className="environment-pill"><span /> Integration</span>
             <span className="user-name">
               {principal.display_name}
               <span>{principal.role}</span>
@@ -779,7 +792,7 @@ function Table({
         <tbody>
           {rows.length ? (
             rows.map((r, i) => (
-              <tr className={onRow ? "clickable" : ""} onClick={() => onRow?.(i)} key={i}>
+              <tr className={onRow ? "clickable" : ""} onClick={(event) => { if (onRow && !(event.target as HTMLElement).closest("button,a,input,select,textarea")) onRow(i); }} key={i}>
                 {r.map((x, j) => (
                   <td key={j}>{x}</td>
                 ))}
@@ -1064,7 +1077,9 @@ function Home() {
             ))
           ) : (
             <p className="muted">
-              Everything collected matches the expected state, and no campaign is waiting on anyone.
+              {q.data?.collected_at
+                ? "No collected issue or campaign needs attention right now."
+                : <>No collection is available yet. <NavLink to="/sources">Configure and synchronize a source</NavLink> to start reviewing access.</>}
             </p>
           )}
         </section>
@@ -1123,7 +1138,7 @@ function Home() {
               </div>
             ))
           ) : (
-            <p className="muted">No source configured yet.</p>
+            <p className="muted">No source configured yet. <NavLink to="/sources">Configure a source</NavLink> to begin collection.</p>
           )}
         </section>
       </div>
@@ -1202,6 +1217,7 @@ function Identities() {
         sorting={x.sorting}
         filtering={x.filtering}
         q={x.q}
+        onRow={(i) => setSelected((x.q.data?.items ?? [])[i])}
         emptyTitle="No identities found"
         emptyText="No identity matches the current source, status and search filters."
         rows={(x.q.data?.items ?? []).map((r) => [
@@ -1325,6 +1341,7 @@ function Accesses() {
         sorting={x.sorting}
         filtering={x.filtering}
         q={x.q}
+        onRow={(i) => setSelected((x.q.data?.items ?? [])[i])}
         rows={(x.q.data?.items ?? []).map((r) => [
           <button className="link-button" onClick={() => setSelected(r)}>
             {s(r.display_name, s(r.name))}
@@ -2280,8 +2297,9 @@ function CampaignDetail() {
                 ]}
               />
               <p className="muted" style={{ marginTop: 18 }}>
-                Snapshot {s(c.snapshot_id)} · Golden version {s(c.golden_source_version_id, "none")} · scope{" "}
-                {s((c.scope as Row | undefined)?.type, "all")}
+                {s((c.scope as Row | undefined)?.type, "all") === "providers"
+                  ? `Providers: ${vals((c.scope as Row | undefined)?.values).join(", ")}`
+                  : "All providers represented in the snapshot"}
               </p>
             </section>
             <section className="panel">
@@ -3176,7 +3194,11 @@ function Sources() {
     }),
     configs = arr(cfg.data?.sources),
     observed = arr(q.data?.items),
-    sources = configs.map((c) => ({ ...c, ...(observed.find((o) => s(o.name) === s(c.provider)) || {}) }));
+    sources = configs.map((c): Row => ({
+      health: "never_synced",
+      ...c,
+      ...(observed.find((o) => s(o.name) === s(c.provider)) || {}),
+    }));
   useEffect(() => {
     if (jq.data?.status === "SUCCEEDED") void q.refetch();
   }, [jq.data?.status]);
@@ -3226,15 +3248,15 @@ function Sources() {
             </p>
             <div className="source-stats">
               <div>
-                <strong>{s(r.identity_count, "0")}</strong>
+                <strong>{r.latest_snapshot ? s(r.identity_count, "—") : "—"}</strong>
                 <span>Identities</span>
               </div>
               <div>
-                <strong>{s(r.group_count, "0")}</strong>
+                <strong>{r.latest_snapshot ? s(r.group_count, "—") : "—"}</strong>
                 <span>Groups</span>
               </div>
               <div>
-                <strong>{s(r.access_count, "0")}</strong>
+                <strong>{r.latest_snapshot ? s(r.access_count, "—") : "—"}</strong>
                 <span>Accesses</span>
               </div>
             </div>
@@ -3275,7 +3297,11 @@ function Sources() {
           <Status v={jq.data?.status} />
           <p>{s(jq.data?.progress)}</p>
           {jq.data?.status === "SUCCEEDED" && jq.data?.result ? (
-            kind === "preview" ? <SourceImpact result={jq.data.result as Row} /> : <p>Snapshot {s((jq.data.result as Row).snapshot_id)}</p>
+            kind === "preview" ? (
+              <SourceImpact result={jq.data.result as Row} />
+            ) : (
+              <p>Synchronization completed for {s((jq.data.result as Row).provider)}.</p>
+            )
           ) : null}
           {jq.data?.error ? <p className="form-error">{s(jq.data.error)}</p> : null}
           {jq.isError && <p className="form-error">{s(jq.error)}</p>}
