@@ -1,8 +1,10 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, NavLink, Route, Routes, useParams } from "react-router-dom";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowLeft,
   Check,
   ChevronRight,
   Database,
@@ -11,6 +13,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  MoreHorizontal,
   Search,
   Settings,
   ShieldCheck,
@@ -29,7 +32,15 @@ import {
   type Principal,
   type Row,
 } from "./api/client";
-import { campaignCtas, currentStateLabels, pageCount, pageLabel, roleHome } from "./projections";
+import {
+  campaignActionTarget,
+  campaignCtas,
+  pageCount,
+  pageLabel,
+  pendingFirst,
+  roleHome,
+  validProviderScope,
+} from "./projections";
 const s = (v: unknown, f = "—") =>
     v instanceof Error
       ? v.message
@@ -50,6 +61,22 @@ const refText = (v: unknown): string => {
   return row ? s(row.display_name, s(row.identifier, s(row.name, ""))) : "";
 };
 const permissionText = (v: unknown): string => refText(v);
+const providerLabel = (provider: Row): string => {
+  const name = s(provider.name),
+    display = s(provider.display_name, name);
+  return display === name ? name : `${display} · ${name}`;
+};
+const readableDetails = (value: unknown): string => {
+  if (value == null || value === "") return "—";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (Array.isArray(value)) return value.map(readableDetails).join(", ");
+  if (typeof value === "object")
+    return Object.entries(value as Row)
+      .map(([key, item]) => `${key.replaceAll("_", " ")}: ${readableDetails(item)}`)
+      .join(" · ");
+  return String(value);
+};
 const targetText = (v: unknown): string => {
   const target = (v ?? null) as Row | null;
   if (!target) return "";
@@ -119,6 +146,7 @@ function PasswordChange() {
   const c = useQueryClient(),
     [p, setP] = useState(""),
     [confirm, setConfirm] = useState(""),
+    [visible, setVisible] = useState(false),
     [e, setE] = useState("");
   const m = useMutation({
     mutationFn: () => changePassword(p),
@@ -142,14 +170,19 @@ function PasswordChange() {
         <p>Set a new password before continuing.</p>
         <label>
           New password
-          <input required minLength={12} type="password" value={p} onChange={(x) => setP(x.target.value)} />
+          <span className="password-field">
+            <input required minLength={12} type={visible ? "text" : "password"} value={p} onChange={(x) => setP(x.target.value)} />
+            <button type="button" className="text-button" onClick={() => setVisible(!visible)}>
+              {visible ? "Hide" : "Show"}
+            </button>
+          </span>
         </label>
         <label>
           Confirm password
           <input
             required
             minLength={12}
-            type="password"
+            type={visible ? "text" : "password"}
             value={confirm}
             onChange={(x) => setConfirm(x.target.value)}
           />
@@ -278,7 +311,10 @@ function Shell({ principal }: { principal: Principal }) {
       <aside className={c ? "sidebar open" : "sidebar"}>
         <div className="brand">
           <span className="brand-mark">E</span>
-          <span>EARE</span>
+          <div>
+            <span>EARE</span>
+            <small>Access governance</small>
+          </div>
         </div>
         <nav>
           {navSections.map((section) => {
@@ -316,6 +352,7 @@ function Shell({ principal }: { principal: Principal }) {
             Workspace <ChevronRight size={14} /> Access governance
           </span>
           <div className="top-actions">
+            <span className="environment-pill"><span /> Integration</span>
             <span className="user-name">
               {principal.display_name}
               <span>{principal.role}</span>
@@ -334,7 +371,12 @@ function Shell({ principal }: { principal: Principal }) {
         </header>
         <main>
           <Routes>
-            <Route path="/" element={<Home />} />
+            <Route
+              path="/"
+              element={
+                roleHome(principal.role) === "/" ? <Home /> : <Navigate to={roleHome(principal.role)} replace />
+              }
+            />
             <Route path="/reviews" element={<Reviews />} />
             <Route path="/identities" element={<Identities />} />
             <Route path="/accesses" element={<Accesses />} />
@@ -356,12 +398,13 @@ function Shell({ principal }: { principal: Principal }) {
     </div>
   );
 }
-function Head({ title, children }: { title: string; children?: ReactNode }) {
+function Head({ title, subtitle, children }: { title: string; subtitle?: string; children?: ReactNode }) {
   return (
     <div className="page-header">
       <div>
         <div className="eyebrow">EARE</div>
         <h1>{title}</h1>
+        {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
       </div>
       {children}
     </div>
@@ -481,6 +524,47 @@ function SelectFilter({
       {options.map((x) => (
         <option key={x} value={x}>
           {x.replaceAll("_", " ")}
+        </option>
+      ))}
+    </select>
+  );
+}
+function ProviderFilter({
+  value,
+  onChange,
+  placeholder = "Source / application",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  const q = useQuery({ queryKey: ["provider-options"], queryFn: () => getPage("providers", { limit: 500 }) });
+  return (
+    <select className="filter-button" value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="">{placeholder}</option>
+      {arr(q.data?.items).map((provider) => (
+        <option key={s(provider.name)} value={s(provider.name)}>
+          {providerLabel(provider)}
+        </option>
+      ))}
+    </select>
+  );
+}
+function CampaignFilter({
+  value,
+  onChange,
+  campaigns,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  campaigns: Row[];
+}) {
+  return (
+    <select className="filter-button" value={value} onChange={(event) => onChange(event.target.value)}>
+      <option value="">Campaign</option>
+      {campaigns.map((campaign) => (
+        <option key={s(campaign.id)} value={s(campaign.id)}>
+          {s(campaign.display_name, s(campaign.name, s(campaign.id)))}
         </option>
       ))}
     </select>
@@ -607,6 +691,36 @@ function ColumnMenu({
     </div>
   );
 }
+export function ActionMenu({
+  label,
+  actions,
+}: {
+  label: string;
+  actions: { label: string; onClick: () => void; danger?: boolean }[];
+}) {
+  const menu = useRef<HTMLDetailsElement>(null);
+  return (
+    <details className="action-menu" ref={menu}>
+      <summary aria-label={label} title={label}>
+        <MoreHorizontal size={18} />
+      </summary>
+      <div className="action-menu-panel">
+        {actions.map((action) => (
+          <button
+            className={action.danger ? "danger" : ""}
+            key={action.label}
+            onClick={() => {
+              menu.current?.removeAttribute("open");
+              action.onClick();
+            }}
+          >
+            {action.label}
+          </button>
+        ))}
+      </div>
+    </details>
+  );
+}
 function Table({
   cols,
   rows,
@@ -615,6 +729,8 @@ function Table({
   fields,
   sorting,
   filtering,
+  emptyTitle = "No results",
+  emptyText = "No record matches the current search and filters.",
 }: {
   cols: string[];
   rows: ReactNode[][];
@@ -624,6 +740,8 @@ function Table({
   fields?: (string | null)[];
   sorting?: SortState;
   filtering?: FilterState;
+  emptyTitle?: string;
+  emptyText?: string;
 }) {
   if (q?.isLoading)
     return (
@@ -671,8 +789,8 @@ function Table({
             <tr className="empty-row">
               <td colSpan={cols.length}>
                 <div className="empty">
-                  <strong>Nothing to show here</strong>
-                  <span>No record matches the current search and filters.</span>
+                  <strong>{emptyTitle}</strong>
+                  <span>{emptyText}</span>
                 </div>
               </td>
             </tr>
@@ -683,17 +801,107 @@ function Table({
   );
 }
 function Drawer({ title, close, children }: { title: string; close: () => void; children: ReactNode }) {
+  const panel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => event.key === "Escape" && close();
+    document.addEventListener("keydown", escape);
+    panel.current?.focus();
+    return () => document.removeEventListener("keydown", escape);
+  }, [close]);
   return (
     <div className="drawer-backdrop" onClick={close}>
-      <aside className="drawer" onClick={(e) => e.stopPropagation()}>
+      <aside
+        aria-labelledby="drawer-title"
+        aria-modal="true"
+        className="drawer"
+        onClick={(e) => e.stopPropagation()}
+        ref={panel}
+        role="dialog"
+        tabIndex={-1}
+      >
         <div className="drawer-head">
-          <h2>{title}</h2>
-          <button className="icon-button" onClick={close}>
+          <h2 id="drawer-title">{title}</h2>
+          <button aria-label="Close details" className="icon-button" onClick={close}>
             <X />
           </button>
         </div>
         <div className="drawer-body">{children}</div>
       </aside>
+    </div>
+  );
+}
+function AccessPath({
+  direct,
+  paths,
+  identity,
+}: {
+  direct: boolean;
+  paths: Row[];
+  identity?: string;
+}) {
+  if (direct) return <div className="direct-grant">Direct grant</div>;
+  if (!paths.length) return <p className="muted">Provenance unavailable</p>;
+  return (
+    <div className="access-paths">
+      {paths.map((path, index) => {
+        const chain = arr(path.steps ?? path.access_chain);
+        const steps = [
+          ...(identity ? [{ identifier: identity }] : []),
+          ...chain,
+        ];
+        return (
+          <div className="access-path" key={`${index}-${s(path.assignment_id, "path")}`}>
+            {steps.map((step, stepIndex) => (
+              <div className="access-path-step" key={`${stepIndex}-${s(step.identifier ?? step.name)}`}>
+                {stepIndex ? <ArrowDown aria-hidden="true" size={14} /> : null}
+                <span>{s(step.display_name, s(step.name, s(step.identifier)))}</span>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function SourceImpact({ result }: { result: Row }) {
+  const objects = (result.objects ?? {}) as Row;
+  const labels: Record<string, string> = {
+    identities: "Identities",
+    providers: "Sources",
+    accesses: "Access rights",
+    access_assignments: "Access assignments",
+    access_relations: "Access relations",
+  };
+  const rows = Object.entries(objects)
+    .filter(([, value]) => value && typeof value === "object")
+    .map(([key, value]) => ({ key, counts: value as Row }));
+  return (
+    <div className="source-impact">
+      <div className="source-impact-status">
+        <Status v={result.collection_incomplete ? "unknown" : "healthy"} />
+        <strong>{result.collection_incomplete ? "Collection incomplete" : "Collection complete"}</strong>
+      </div>
+      {rows.length ? (
+        <div className="impact-grid">
+          {rows.map(({ key, counts }) => (
+            <div className="impact-card" key={key}>
+              <strong>{labels[key] ?? key.replaceAll("_", " ")}</strong>
+              <div>
+                {Number(counts.added) ? <span className="impact-positive">+{s(counts.added)}</span> : null}
+                {Number(counts.removed) ? <span className="impact-negative">−{s(counts.removed)}</span> : null}
+                {Number(counts.updated) ? <span>{s(counts.updated)} updated</span> : null}
+                {Number(counts.renamed) ? <span>{s(counts.renamed)} renamed</span> : null}
+                {Number(counts.disabled) ? <span>{s(counts.disabled)} disabled</span> : null}
+                {!Object.values(counts).some(Number) ? <span>No change</span> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : <p className="muted">No persisted object would change.</p>}
+      <details>
+        <summary>Technical details</summary>
+        <pre>{JSON.stringify(result, null, 2)}</pre>
+      </details>
     </div>
   );
 }
@@ -884,7 +1092,7 @@ function Home() {
                     </div>
                   </div>
                   <small>
-                    {done} of {total} decided{row.due_at ? ` · due ${s(row.due_at)}` : ""}
+                    {done} of {total} decided{row.due_at ? ` · due ${when(row.due_at)}` : ""}
                   </small>
                 </div>
               );
@@ -976,10 +1184,9 @@ function Identities() {
     <>
       <Head title="Identities" />
       <Filter v={x.search} onChange={x.setSearch}>
-        <SelectFilter
+        <ProviderFilter
           value={provider}
           onChange={setProvider}
-          options={["active_directory", "openldap"]}
           placeholder="Source / IdP"
         />
         <SelectFilter
@@ -995,6 +1202,8 @@ function Identities() {
         sorting={x.sorting}
         filtering={x.filtering}
         q={x.q}
+        emptyTitle="No identities found"
+        emptyText="No identity matches the current source, status and search filters."
         rows={(x.q.data?.items ?? []).map((r) => [
           <>
             <button className="link-button" onClick={() => setSelected(r)}>
@@ -1032,44 +1241,59 @@ function IdentityDrawer({ identity, close }: { identity: Row; close: () => void 
       ...arr(q.data?.effective_accesses).map((r) => ({ ...r, mode: "Effective" })),
     ];
   return (
-    <Drawer title={s(identity.identifier)} close={close}>
-      <h4>IDENTITY</h4>
-      <p>{describeIdentity(identity) || "No description provided by the source."}</p>
-      <p>
-        {s(identity.type).replaceAll("_", " ")} · {s(identity.provider)} · <Status v={identity.status} />
-      </p>
-      {identity.account_owner ? (
-        <p>Account owner: {s((identity.account_owner as Row | undefined)?.identity)}</p>
-      ) : null}
-      <h4>ACCESSES</h4>
-      <Table
-        cols={["Access", "Source", "Permission", "Mode", "State"]}
-        q={q}
-        rows={rows.map((r) => [
-          <>
-            <button
-              className="link-button"
-              onClick={() =>
-                setAccess({
-                  provider: r.access_provider ?? r.provider,
-                  name: r.access_name,
-                  permission: r.permission,
-                  target: r.target,
-                  description: r.description,
-                })
-              }
-            >
-              {s(r.access_name)}
-            </button>
-            <Sub>{describeAccess(r)}</Sub>
-          </>,
-          s(r.access_provider ?? r.provider),
-          permissionText(r.permission) || "—",
-          s(r.mode),
-          <Status v={r.classification ?? "observed"} />,
-        ])}
-      />
-      {access && <AccessDrawer access={access} close={() => setAccess(null)} />}
+    <Drawer title={s(identity.display_name, s(identity.identifier))} close={close}>
+      {access ? (
+        <>
+          <button className="drawer-back" onClick={() => setAccess(null)}>
+            <ArrowLeft size={15} /> {s(identity.display_name, s(identity.identifier))}
+          </button>
+          <div className="drawer-breadcrumb">
+            <span>{s(identity.display_name, s(identity.identifier))}</span>
+            <ChevronRight size={14} />
+            <strong>{s(access.display_name, s(access.name))}</strong>
+          </div>
+          <AccessDetail access={access} />
+        </>
+      ) : (
+        <>
+          <h4>PROFILE</h4>
+          <p>{describeIdentity(identity) || "No description provided by the source."}</p>
+          <p>
+            {s(identity.type).replaceAll("_", " ")} · {s(identity.provider)} · <Status v={identity.status} />
+          </p>
+          {identity.account_owner ? (
+            <p>Account owner: {s((identity.account_owner as Row | undefined)?.identity)}</p>
+          ) : null}
+          <h4>ACCESSES</h4>
+          <Table
+            cols={["Access", "Source", "Permission", "Mode"]}
+            q={q}
+            rows={rows.map((r) => [
+              <>
+                <button
+                  className="link-button"
+                  onClick={() =>
+                    setAccess({
+                      provider: r.access_provider ?? r.provider,
+                      name: r.access_name,
+                      display_name: r.access_display_name,
+                      permission: r.permission,
+                      target: r.target,
+                      description: r.description,
+                    })
+                  }
+                >
+                  {s(r.access_display_name, s(r.access_name))}
+                </button>
+                <Sub>{describeAccess(r)}</Sub>
+              </>,
+              s(r.access_provider ?? r.provider),
+              permissionText(r.permission) || "—",
+              s(r.mode),
+            ])}
+          />
+        </>
+      )}
     </Drawer>
   );
 }
@@ -1081,10 +1305,9 @@ function Accesses() {
     <>
       <Head title="Access" />
       <Filter v={x.search} onChange={x.setSearch}>
-        <SelectFilter
+        <ProviderFilter
           value={provider}
           onChange={setProvider}
-          options={["active_directory", "openldap"]}
           placeholder="Source / application"
         />
       </Filter>
@@ -1110,7 +1333,7 @@ function Accesses() {
           s(r.provider),
           permissionText(r.permission) || "—",
           targetText(r.target) || "—",
-          s(r.assignment_count, "0"),
+          s(r.holder_count, "0"),
           s(r.finding_count, "0"),
         ])}
       />
@@ -1125,7 +1348,7 @@ function Accesses() {
     </>
   );
 }
-function AccessDrawer({ access, close }: { access: Row; close: () => void }) {
+function AccessDetail({ access }: { access: Row }) {
   const [tab, setTab] = useState("overview"),
     provider = s(access.provider),
     name = s(access.name ?? access.access_name),
@@ -1133,11 +1356,13 @@ function AccessDrawer({ access, close }: { access: Row; close: () => void }) {
       queryKey: ["holders", provider, name],
       queryFn: () => getJson(`accesses/${encodeURIComponent(provider)}/${encodeURIComponent(name)}/holders`),
     });
+  const direct = arr(q.data?.holders),
+    effective = arr(q.data?.effective_holders);
   return (
-    <Drawer title={name} close={close}>
+    <>
       <div className="tabs">
-        <button onClick={() => setTab("overview")}>Overview</button>
-        <button onClick={() => setTab("holders")}>Holders</button>
+        <button className={tab === "overview" ? "text-button active" : "text-button"} onClick={() => setTab("overview")}>Overview</button>
+        <button className={tab === "holders" ? "text-button active" : "text-button"} onClick={() => setTab("holders")}>Holders</button>
       </div>
       {tab === "overview" ? (
         <>
@@ -1153,8 +1378,7 @@ function AccessDrawer({ access, close }: { access: Row; close: () => void }) {
           </p>
           <h4>WHO HOLDS IT</h4>
           <p>
-            {arr(q.data?.holders).length} direct · {arr(q.data?.effective_holders).length} effective
-            (inherited included)
+            {direct.length} direct · {effective.length} effective
           </p>
         </>
       ) : (
@@ -1162,15 +1386,26 @@ function AccessDrawer({ access, close }: { access: Row; close: () => void }) {
           cols={["Identity", "Direct / Effective", "Why"]}
           q={q}
           rows={[
-            ...arr(q.data?.holders).map((r) => ({ ...r, mode: "Direct" })),
-            ...arr(q.data?.effective_holders).map((r) => ({ ...r, mode: "Effective" })),
+            ...direct.map((r) => ({ ...r, mode: "Direct" })),
+            ...effective.map((r) => ({ ...r, mode: "Effective" })),
           ].map((r: Row) => [
-            s(r.identity_identifier),
+            <strong>{s(r.identity_display_name, s(r.identity_identifier))}</strong>,
             s(r.mode),
-            r.mode === "Direct" ? "Direct grant" : "Effective provenance",
+            <AccessPath
+              direct={r.mode === "Direct"}
+              identity={s(r.identity_display_name, s(r.identity_identifier))}
+              paths={arr(r.paths)}
+            />,
           ])}
         />
       )}
+    </>
+  );
+}
+function AccessDrawer({ access, close }: { access: Row; close: () => void }) {
+  return (
+    <Drawer title={s(access.display_name, s(access.name ?? access.access_name))} close={close}>
+      <AccessDetail access={access} />
     </Drawer>
   );
 }
@@ -1236,13 +1471,13 @@ function RowDecision({ item, done }: { item: Row; done?: () => void }) {
   return (
     <>
       <div className="row-actions">
-        <button className="link-button" disabled={m.isPending} onClick={() => m.mutate({ value: "approve" })}>
+        <button className="decision-action approve" disabled={m.isPending} onClick={() => m.mutate({ value: "approve" })}>
           Approve
         </button>
-        <button className="link-button" disabled={m.isPending} onClick={() => setAsking("revoke")}>
+        <button className="decision-action revoke" disabled={m.isPending} onClick={() => setAsking("revoke")}>
           Revoke
         </button>
-        <button className="link-button" disabled={m.isPending} onClick={() => setAsking("not_applicable")}>
+        <button className="decision-action" disabled={m.isPending} onClick={() => setAsking("not_applicable")}>
           N/A
         </button>
       </div>
@@ -1290,29 +1525,27 @@ function Reviews() {
     x = useList("review-items", { status: decision, campaign, classification }),
     [selected, setSelected] = useState<Row | null>(null),
     summary = (x.q.data?.summary ?? null) as Row | null,
-    states = ((summary?.classification ?? {}) as Row) || {};
+    states = ((summary?.classification ?? {}) as Row) || {},
+    decisions = ((summary?.decision ?? {}) as Row) || {},
+    completion = Math.round((Number(summary?.decided) / Math.max(1, Number(summary?.total))) * 100);
   return (
     <>
-      <Head title="My Reviews" />
+      <Head title="My Reviews" subtitle="Review and certify the access rights assigned to you." />
       {summary ? (
         <section className="review-summary">
-          <div>
-            <div className="progress-head">
-              <span>
-                {s(summary.decided, "0")} of {s(summary.total, "0")} decided
-              </span>
-              <span>{Math.round((Number(summary.decided) / Math.max(1, Number(summary.total))) * 100)}%</span>
+          <div className="review-summary-main">
+            <div className="review-kpis">
+              <div className="review-kpi pending"><strong>{s(summary.pending, "0")}</strong><span>Pending</span></div>
+              <div className="review-kpi"><strong>{s(decisions.approve, "0")}</strong><span>Approved</span></div>
+              <div className="review-kpi"><strong>{s(decisions.revoke, "0")}</strong><span>Revoked</span></div>
+              <div className="review-kpi"><strong>{s(decisions.not_applicable, "0")}</strong><span>Not applicable</span></div>
             </div>
+            <div className="progress-head"><strong>{completion}% complete</strong><span>{s(summary.decided, "0")} / {s(summary.total, "0")} decided</span></div>
             <div className="review-progress">
               <div>
-                <span
-                  style={{
-                    width: `${(Number(summary.decided) / Math.max(1, Number(summary.total))) * 100}%`,
-                  }}
-                />
+                <span style={{ width: `${completion}%` }} />
               </div>
             </div>
-            <small>{s(summary.pending, "0")} left in this view</small>
           </div>
           <StackedBar
             parts={[
@@ -1322,13 +1555,9 @@ function Reviews() {
               { label: "Not expected", value: Number(states.unexpected) || 0, tone: "bad" },
             ]}
           />
-          <button
-            className={Number(summary.with_findings) ? "button subtle" : "button subtle"}
-            disabled={!Number(summary.with_findings)}
-            onClick={() => x.setSearch("")}
-          >
+          <span className="review-findings">
             {s(summary.with_findings, "0")} with findings
-          </button>
+          </span>
         </section>
       ) : null}
       <Filter v={x.search} onChange={x.setSearch}>
@@ -1338,11 +1567,10 @@ function Reviews() {
           options={Object.keys(states)}
           placeholder="State"
         />
-        <SelectFilter
+        <CampaignFilter
           value={campaign}
           onChange={setCampaign}
-          options={arr(campaigns.data?.items).map((r) => s(r.id))}
-          placeholder="Campaign"
+          campaigns={arr(campaigns.data?.items)}
         />
         <SelectFilter
           value={decision}
@@ -1353,6 +1581,8 @@ function Reviews() {
       </Filter>
       <Table
         cols={["Identity", "Access", "Application", "Classification", "Latest decision", "Decide"]}
+        emptyTitle="No reviews assigned"
+        emptyText="There is currently nothing waiting for your decision in this view."
         fields={[
           "identity_display_name",
           "access_display_name",
@@ -1365,13 +1595,16 @@ function Reviews() {
         filtering={x.filtering}
         q={x.q}
         rows={[...(x.q.data?.items ?? [])]
-          .sort((a, b) => Number(!a.decision) - Number(!b.decision))
+          .sort(pendingFirst)
           .map((r) => [
-            <button className="link-button" onClick={() => setSelected(r)}>
-              {s(r.identity_display_name, s(r.identity_identifier))}
-            </button>,
-            s(r.access_display_name, s(r.access_name)),
-            targetText(r.target) || s(r.access_provider),
+            <>
+              <button className="link-button cell-primary" onClick={() => setSelected(r)}>
+                {s(r.identity_display_name, s(r.identity_identifier))}
+              </button>
+              <Sub>{s(r.identity_identifier)} · {s(r.identity_provider)}</Sub>
+            </>,
+            <><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>{describeAccess(r)}</Sub></>,
+            <><span>{targetText(r.target) || s(r.access_provider)}</span><Sub>{permissionText(r.permission)}</Sub></>,
             <Status v={r.classification} />,
             <Status v={r.decision ?? "pending"} />,
             <RowDecision item={r} />,
@@ -1413,6 +1646,7 @@ function ReviewDrawer({
   const m = useMutation({
     mutationFn: (v: string) => postDecision(s(item.id), v, v === "approve" ? undefined : reason.trim()),
     onSuccess: async () => {
+      toast("ok", `${who}: decision recorded`);
       await c.invalidateQueries({ queryKey: ["review-items"] });
       const i = items.findIndex((r) => r.id === item.id);
       next(items.slice(i + 1).find((r) => !r.decision) || null);
@@ -1423,41 +1657,46 @@ function ReviewDrawer({
   });
   const paths = arr(item.paths),
     who = s(item.identity_display_name, s(item.identity_identifier)),
-    what = s(item.access_display_name, s(item.access_name));
+    what = s(item.access_display_name, s(item.access_name)),
+    latest = (item.latest_decision ?? null) as Row | null;
   return (
-    <Drawer title={`${who} → ${what}`} close={close}>
-      <p className="muted">
-        {s(item.access_provider)} · {s(item.identity_identifier)} · {s(item.access_name)}
-      </p>
-      <h4>WHAT THIS ACCESS ALLOWS</h4>
-      <p>{describeAccess(item) || "The source provided no description for this access."}</p>
+    <Drawer title={who} close={close}>
+      <section className="drawer-section">
+        <h4>WHO</h4>
+        <strong className="drawer-primary">{who}</strong>
+        <p>{s((item.identity as Row | undefined)?.email, s(item.identity_identifier))}</p>
+        <p className="muted">{s(item.identity_provider)}</p>
+      </section>
+      <section className="drawer-section">
+        <h4>WHAT ACCESS</h4>
+        <strong className="drawer-primary">{what}</strong>
+        <p>{describeAccess(item) || "The source provided no description for this access."}</p>
+        <p>{targetText(item.target) || s(item.access_provider)}{permissionText(item.permission) ? ` · ${permissionText(item.permission)}` : ""}</p>
+      </section>
+      <section className="drawer-section">
+        <h4>CURRENT STATE</h4>
+        <div className="state-grid">
+          <div><span>Expected</span><strong>{item.expected ? "Yes" : "No"}</strong></div>
+          <div><span>Observed</span><strong>{item.observed ? "Yes" : "No"}</strong></div>
+        </div>
+      </section>
+      <section className="drawer-section">
+        <h4>CLASSIFICATION</h4>
+        <Status v={item.classification} />
+      </section>
+      <section className="drawer-section">
       <h4>WHY</h4>
-      {item.direct ? (
-        <p>
-          <strong>Direct grant</strong>
-        </p>
-      ) : paths.length ? (
-        <>
-          {paths.map((p, i) => (
-            <p className="path" key={i}>
-              {arr(p.steps ?? p.access_chain).map((z, j) => (
-                <span key={j}>
-                  {j ? " → " : ""}
-                  {s(z.name ?? z.identifier ?? z)}
-                </span>
-              ))}
-            </p>
-          ))}
-        </>
-      ) : (
-        <p>Provenance not available</p>
-      )}
-      <h4>CURRENT STATE</h4>
-      {currentStateLabels(Boolean(item.observed), Boolean(item.expected)).map((v) => (
-        <p key={v}>{v}</p>
-      ))}
-      <h4>CLASSIFICATION</h4>
-      <Status v={item.classification} />
+        <AccessPath direct={Boolean(item.direct)} identity={who} paths={paths} />
+      </section>
+      {vals(item.findings).length ? <section className="drawer-section"><h4>FINDINGS</h4><div className="badge-list">{vals(item.findings).map((finding) => <Status key={finding} v={finding} />)}</div></section> : null}
+      {latest ? (
+        <section className="decision-record">
+          <h4>EXISTING DECISION</h4>
+          <Status v={latest.value} />
+          {latest.comment ? <p>{s(latest.comment)}</p> : null}
+          <small>{s(latest.decided_by, "Unknown reviewer")} · {when(latest.created_at)}</small>
+        </section>
+      ) : null}
       {pending && (
         <div className="reason-form">
           <label>
@@ -1498,15 +1737,19 @@ function List({ path, title }: { path: string; title: string }) {
     [status, setStatus] = useState(""),
     [campaign, setCampaign] = useState(""),
     x = useList(path, { provider, status, campaign }),
-    [selected, setSelected] = useState<Row | null>(null);
+    [selected, setSelected] = useState<Row | null>(null),
+    campaignRows = arr(campaigns.data?.items),
+    selectedCampaignName = s(
+      campaignRows.find((item) => s(item.id) === campaign)?.display_name,
+      s(campaignRows.find((item) => s(item.id) === campaign)?.name, "Current state"),
+    );
   return (
     <>
       <Head title={title} />
       <Filter v={x.search} onChange={x.setSearch}>
-        <SelectFilter
+        <ProviderFilter
           value={provider}
           onChange={setProvider}
-          options={["active_directory", "openldap"]}
           placeholder="Source"
         />
         <SelectFilter
@@ -1515,11 +1758,10 @@ function List({ path, title }: { path: string; title: string }) {
           options={findings ? ["unexpected", "missing", "expected_and_observed"] : ["pending", "exported"]}
           placeholder="Status"
         />
-        <SelectFilter
+        <CampaignFilter
           value={campaign}
           onChange={setCampaign}
-          options={arr(campaigns.data?.items).map((r) => s(r.id))}
-          placeholder="Campaign"
+          campaigns={campaignRows}
         />
       </Filter>
       <Table
@@ -1540,12 +1782,15 @@ function List({ path, title }: { path: string; title: string }) {
           findings
             ? [
                 <Status v={r.classification} />,
-                <button className="link-button" onClick={() => setSelected(r)}>
+                <button
+                  className="link-button"
+                  onClick={() => setSelected({ ...r, campaign_name: selectedCampaignName })}
+                >
                   {s((r.identity as Row | undefined)?.display_name, s(r.identity_identifier))}
                 </button>,
                 s((r.access as Row | undefined)?.display_name, s(r.access_name)),
                 s(r.access_provider),
-                s(r.campaign_id),
+                selectedCampaignName,
                 s(r.observed),
                 s(r.expected),
               ]
@@ -1555,7 +1800,7 @@ function List({ path, title }: { path: string; title: string }) {
                 </button>,
                 s(r.action, s(r.decision)),
                 s(r.access_display_name, s(r.access_name)),
-                s(r.campaign_id),
+                s(r.campaign_name, s(r.campaign_id)),
                 <Status v={r.status} />,
               ],
         )}
@@ -1582,28 +1827,26 @@ function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
       <h4>WHAT HAPPENED</h4>
       <p>{s(vals(row.findings).join(", "), s(row.classification, "No classification"))}</p>
       <h4>CURRENT STATE</h4>
-      <p>
-        Observed: {s(row.observed)} · Expected: {s(row.expected)}
-      </p>
+      <p>Observed: {readableDetails(row.observed)} · Expected: {readableDetails(row.expected)}</p>
       <h4>CONTEXT</h4>
       <p>Identity: {s((row.identity as Row | undefined)?.display_name, s(row.identity_identifier))}</p>
       <p>Access: {s((row.access as Row | undefined)?.display_name, s(row.access_name))}</p>
       <p className="muted">{describeAccess((row.access as Row) ?? row)}</p>
       <p>Source: {s(row.access_provider)}</p>
-      {row.campaign_id != null ? <p>Campaign: {s(row.campaign_id)}</p> : null}
+      {row.campaign_id != null || row.campaign_name ? <p>Campaign: {s(row.campaign_name, s(row.campaign_id))}</p> : null}
     </Drawer>
   );
 }
 function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
   return (
-    <Drawer title={`${s(row.action, s(row.decision))} · ${s(row.access_name)}`} close={close}>
+    <Drawer title={`${s(row.action, s(row.decision))} · ${s(row.access_display_name, s(row.access_name))}`} close={close}>
       <h4>WHAT TO DO</h4>
       <p>Identity: {s(row.identity_display_name, s(row.identity_identifier))}</p>
       <p>Access: {s(row.access_display_name, s(row.access_name))}</p>
       <p>{describeAccess(row) || "No description provided by the source."}</p>
-      <p>Application / target: {targetText(row.target) || s(row.access_name)}</p>
+      <p>Application / target: {targetText(row.target) || s(row.access_display_name, s(row.access_name))}</p>
       <h4>WHY</h4>
-      <p>Campaign: {s(row.campaign_id)}</p>
+      <p>Campaign: {s(row.campaign_name, s(row.campaign_id))}</p>
       <p>Decision: {s(row.decision)}</p>
       <p>Comment: {s(row.comment)}</p>
       <h4>STATUS</h4>
@@ -1638,7 +1881,7 @@ function Campaigns() {
             {pct(r.progress)}%
           </div>,
           s(r.pending, "0"),
-          s(r.due_at),
+          when(r.due_at),
         ])}
       />
       <Pager
@@ -1657,6 +1900,7 @@ function CampaignNew() {
       queryKey: ["golden-versions"],
       queryFn: () => getPage("golden-source-versions", { limit: 100 }),
     }),
+    providerQuery = useQuery({ queryKey: ["campaign-providers"], queryFn: () => getPage("providers", { limit: 500 }) }),
     [form, setForm] = useState<Row>({
       name: "",
       snapshot_id: "",
@@ -1702,7 +1946,9 @@ function CampaignNew() {
       onError: (e) => toast("error", s(e, "Unable to create the campaign")),
     }),
     snapshots = arr(snap.data?.items),
-    versions = arr(gold.data?.items);
+    versions = arr(gold.data?.items),
+    providers = arr(providerQuery.data?.items),
+    providerScopeValid = validProviderScope(s(form.scope_type, "all"), vals(form.providers));
   useEffect(() => {
     if (!form.snapshot_id && snapshots.length)
       setForm((x) => ({ ...x, snapshot_id: s(snapshots[snapshots.length - 1].id) }));
@@ -1716,8 +1962,9 @@ function CampaignNew() {
           Cancel
         </NavLink>
       </Head>
-      <section className="panel">
+      <section className="panel campaign-form">
         <h2>Campaign setup</h2>
+        <p className="muted">Define what will be compared and who will review it. Previewing does not persist anything.</p>
         <form
           className="admin-form"
           onSubmit={(e) => {
@@ -1734,7 +1981,7 @@ function CampaignNew() {
             />
           </label>
           <label>
-            Scope
+            <span className="step-label">1</span> Scope
             <select
               value={s(form.scope_type, "all")}
               onChange={(e) => setForm({ ...form, scope_type: e.target.value })}
@@ -1743,8 +1990,32 @@ function CampaignNew() {
               <option value="providers">Provider(s)</option>
             </select>
           </label>
+          {form.scope_type === "providers" ? (
+            <label className="wide-field">
+              Providers
+              <select
+                multiple
+                required
+                size={Math.min(5, Math.max(2, providers.length))}
+                value={vals(form.providers)}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    providers: Array.from(event.currentTarget.selectedOptions, (option) => option.value),
+                  })
+                }
+              >
+                {providers.map((provider) => (
+                  <option key={s(provider.name)} value={s(provider.name)}>
+                    {providerLabel(provider)}
+                  </option>
+                ))}
+              </select>
+              <span className="field-note">Choose at least one provider. Use Ctrl/Cmd to select several.</span>
+            </label>
+          ) : null}
           <label>
-            Snapshot
+            <span className="step-label">2</span> Observed snapshot
             <select
               required
               value={s(form.snapshot_id, "")}
@@ -1753,13 +2024,13 @@ function CampaignNew() {
               <option value="">Select snapshot</option>
               {snapshots.map((r) => (
                 <option key={s(r.id)} value={s(r.id)}>
-                  {s(r.created_at)} · {s(r.assignment_count, "assignments unavailable")}
+                  {when(r.created_at)} · {s(r.assignment_count, "assignments unavailable")}
                 </option>
               ))}
             </select>
           </label>
           <label>
-            Golden Source version
+            <span className="step-label">3</span> Expected state
             <select
               value={s(form.golden_source_version_id, "")}
               onChange={(e) => setForm({ ...form, golden_source_version_id: e.target.value || undefined })}
@@ -1767,7 +2038,7 @@ function CampaignNew() {
               <option value="">None</option>
               {versions.map((r) => (
                 <option key={s(r.id)} value={s(r.id)}>
-                  v{s(r.version)} · {s(r.id)}
+                  v{s(r.version)} · {s(r.source_type, "Golden Source")}
                 </option>
               ))}
             </select>
@@ -1780,14 +2051,29 @@ function CampaignNew() {
               onChange={(e) => setForm({ ...form, due_at: e.target.value || undefined })}
             />
           </label>
-          <button className="button primary" type="submit" disabled={previewM.isPending}>
-            Preview campaign
-          </button>
+          <div className="button-row wide-field">
+            <button
+              className="button subtle"
+              type="button"
+              disabled={!s(form.name, "") || !s(form.snapshot_id, "") || create.isPending}
+              onClick={() => create.mutate(false)}
+            >
+              Save as draft
+            </button>
+            <button className="button primary" type="submit" disabled={!providerScopeValid || previewM.isPending}>
+              Preview campaign
+            </button>
+          </div>
         </form>
       </section>
       {preview && (
         <section className="panel">
           <h2>Campaign preview</h2>
+          <div className="preview-context">
+            <span><strong>Scope</strong>{form.scope_type === "providers" ? vals(form.providers).join(", ") : "All providers in the collection"}</span>
+            <span><strong>Snapshot</strong>{when(snapshots.find((row) => row.id === form.snapshot_id)?.created_at)}</span>
+            <span><strong>Expected</strong>{versions.find((row) => row.id === form.golden_source_version_id) ? `Golden v${s(versions.find((row) => row.id === form.golden_source_version_id)?.version)}` : "No Golden version"}</span>
+          </div>
           <div className="metrics">
             <div className="metric">
               <strong>{s(preview.total_review_items, "0")}</strong>
@@ -1811,14 +2097,14 @@ function CampaignNew() {
           <div className="button-row">
             <button
               className="button subtle"
-              disabled={(!allow && Number(preview.unresolved_reviewers) > 0) || create.isPending}
+              disabled={create.isPending}
               onClick={() => create.mutate(false)}
             >
               Save as draft
             </button>
             <button
               className="button primary"
-              disabled={(!allow && Number(preview.unresolved_reviewers) > 0) || create.isPending}
+              disabled={!providerScopeValid || (!allow && Number(preview.unresolved_reviewers) > 0) || create.isPending}
               onClick={() => create.mutate(true)}
             >
               Open campaign
@@ -1836,6 +2122,7 @@ function CampaignDetail() {
     [tab, setTab] = useState("overview"),
     [selected, setSelected] = useState<Row | null>(null),
     [selectedFinding, setSelectedFinding] = useState<Row | null>(null),
+    [confirmAction, setConfirmAction] = useState<string | null>(null),
     toast = useToast(),
     m = useMutation({
       mutationFn: (a: string) => postJson("campaigns/" + id + "/" + a),
@@ -1849,6 +2136,7 @@ function CampaignDetail() {
               ? "Promoted to the Golden Source"
               : `Campaign ${action}ed`,
         );
+        setConfirmAction(null);
         q.refetch();
       },
       onError: (e) => toast("error", s(e, "This operation was refused")),
@@ -1873,7 +2161,7 @@ function CampaignDetail() {
       }, {}),
     ).sort((a, b) => b[1] - a[1]),
     status = s(c?.status),
-    pending = reviews.filter((r) => !r.decision).length,
+    pending = Number(c?.pending ?? reviews.filter((r) => !r.decision).length),
     ctas = campaignCtas(status, pending);
   if (!c) return <div className="empty">{q.isLoading ? "Loading..." : "Campaign not found"}</div>;
   return (
@@ -1881,16 +2169,30 @@ function CampaignDetail() {
       <Head title={s(c.name)}>
         <div className="button-row">
           <NavLink to="/campaigns">Back</NavLink>
-          {ctas.map((a) => (
-            <button
-              className="button subtle"
-              key={a}
-              disabled={a === "close-disabled"}
-              onClick={() => m.mutate(a.replace("-disabled", ""))}
-            >
-              {a}
-            </button>
-          ))}
+          {ctas.map((action) => {
+            const target = campaignActionTarget(action, id),
+              labels: Record<string, string> = {
+                open: "Open campaign",
+                cancel: "Cancel campaign",
+                close: "Close campaign",
+                "close-disabled": "Close campaign",
+                promote: "Promote to Golden",
+                report: "Generate report",
+              };
+            return target ? (
+              <NavLink className="button subtle" key={action} to={target}>{labels[action]}</NavLink>
+            ) : (
+              <button
+                className={action === "open" ? "button primary" : "button subtle"}
+                key={action}
+                disabled={action === "close-disabled"}
+                title={action === "close-disabled" ? `${pending} reviews still need a decision` : undefined}
+                onClick={() => ["cancel", "close", "promote"].includes(action) ? setConfirmAction(action) : m.mutate(action)}
+              >
+                {labels[action]}
+              </button>
+            );
+          })}
         </div>
       </Head>
       <div className="tabs">
@@ -1917,8 +2219,8 @@ function CampaignDetail() {
         <>
           <div className="metrics">
             {[
-              ["Reviews", reviews.length, "in this campaign"],
-              ["Decided", reviews.length - pending, "so far"],
+              ["Reviews", Number(c.review_items ?? reviews.length), "in this campaign"],
+              ["Decided", Number(c.review_items ?? reviews.length) - pending, "so far"],
               ["Still waiting", pending, "to be decided"],
               ["With findings", reviews.filter((r) => arr(r.findings).length).length, "need attention"],
             ].map(([label, value, hint]) => (
@@ -1935,7 +2237,7 @@ function CampaignDetail() {
                 <h2>Where the campaign stands</h2>
                 <span className="muted">
                   {pct(c.progress)}% decided
-                  {c.due_at ? ` · due ${s(c.due_at)}` : ""}
+                  {c.due_at ? ` · due ${when(c.due_at)}` : ""}
                 </span>
               </div>
               <StackedBar
@@ -2065,6 +2367,17 @@ function CampaignDetail() {
         <ReviewDrawer item={selected} items={reviews} close={() => setSelected(null)} next={setSelected} />
       )}{" "}
       {selectedFinding && <FindingDrawer row={selectedFinding} close={() => setSelectedFinding(null)} />}
+      {confirmAction ? (
+        <Confirm
+          title={`${confirmAction === "promote" ? "Promote" : confirmAction === "close" ? "Close" : "Cancel"} ${s(c.name)}?`}
+          intro={<p>{confirmAction === "promote" ? "This creates a new immutable Golden Source version from the campaign decisions." : confirmAction === "close" ? "The campaign will stop accepting decisions and remediation actions will be created." : "This draft campaign will be marked cancelled."}</p>}
+          confirmLabel={confirmAction === "promote" ? "Promote to Golden" : confirmAction === "close" ? "Close campaign" : "Cancel campaign"}
+          danger={confirmAction === "cancel"}
+          pending={m.isPending}
+          cancel={() => setConfirmAction(null)}
+          confirm={() => m.mutate(confirmAction)}
+        />
+      ) : null}
     </>
   );
 }
@@ -2073,7 +2386,7 @@ const goldenOrigin = (row: Row) => {
   if (kind === "promoted_campaign")
     return `Promoted from the campaign ${s(row.source_campaign_name, s(row.source_campaign_id, "—"))}`;
   if (kind === "promoted_observed_snapshot" || kind === "snapshot" || kind === "baseline")
-    return `Adopted from what the systems contained on ${s(row.created_at)}`;
+    return `Adopted from what the systems contained on ${when(row.created_at)}`;
   if (kind === "csv") return "Imported from a CSV file";
   if (kind === "manual") return "Edited in the WebUI";
   if (kind === "from_scratch") return "Started empty";
@@ -2116,6 +2429,7 @@ function Golden() {
     [notice, setNotice] = useState<{ tone: string; text: string } | null>(null),
     [name, setName] = useState("Main baseline"),
     [sid, setSid] = useState(""),
+    [createMode, setCreateMode] = useState("snapshot"),
     [tab, setTab] = useState("accesses"),
     [holders, setHolders] = useState<Row | null>(null),
     [adding, setAdding] = useState<Row | null>(null),
@@ -2201,6 +2515,14 @@ function Golden() {
         await refresh();
       },
       onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to create the baseline") }),
+    }),
+    emptyGolden = useMutation({
+      mutationFn: () => postJson("golden-sources/from-scratch", { name, display_name: name }),
+      onSuccess: async (d) => {
+        setNotice({ tone: "ok", text: `Empty Golden Source created · v${s((d.version as Row | undefined)?.version, "1")}` });
+        await refresh();
+      },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to create the Golden Source") }),
     }),
     edit = useMutation({
       mutationFn: (body: Row) => postJson(`golden-sources/${encoded}/assignments`, body),
@@ -2327,19 +2649,24 @@ function Golden() {
           </div>
         </section>
       ) : (
-        notice && <p className={notice.tone === "ok" ? "muted" : "form-error"}>{notice.text}</p>
+        notice && <p className={notice.tone === "ok" ? "form-success" : "form-error"}>{notice.text}</p>
       )}
       {!source ? (
         <section className="panel">
           <h2>No expected state yet</h2>
-          {snapshots.length ? (
+          <p>Define the expected access state from a collection, or start with an empty immutable version.</p>
+          <div className="tabs compact-tabs">
+            <button className={createMode === "snapshot" ? "text-button active" : "text-button"} onClick={() => setCreateMode("snapshot")}>From snapshot</button>
+            <button className={createMode === "scratch" ? "text-button active" : "text-button"} onClick={() => setCreateMode("scratch")}>From scratch</button>
+          </div>
+          {createMode === "snapshot" && snapshots.length ? (
             <>
               <p>
                 Start from what the systems contain today: EARE reads the latest collected state and declares
                 it expected. You can then correct it access by access.
               </p>
               <p className="muted">
-                Latest collection: {s(latest?.created_at)} ·{" "}
+                Latest collection: {when(latest?.created_at)} ·{" "}
                 {s(
                   arr(latest?.providers)
                     .map((x) => s(x.name))
@@ -2357,7 +2684,7 @@ function Golden() {
                   <select value={sid} onChange={(e) => setSid(e.target.value)}>
                     {snapshots.map((r) => (
                       <option key={s(r.id)} value={s(r.id)}>
-                        {s(r.created_at)} ·{" "}
+                        {when(r.created_at)} ·{" "}
                         {arr(r.providers)
                           .map((x) => s(x.name))
                           .join(", ")}
@@ -2374,7 +2701,7 @@ function Golden() {
                 </button>
               </div>
             </>
-          ) : (
+          ) : createMode === "snapshot" ? (
             <>
               <p>Nothing has been collected yet, so there is no state to declare as expected.</p>
               <p className="muted">Synchronize a source first, then come back here.</p>
@@ -2382,21 +2709,37 @@ function Golden() {
                 Go to Sources &amp; IdPs
               </NavLink>
             </>
+          ) : (
+            <div className="admin-form">
+              <label>
+                Golden Source name
+                <input value={name} onChange={(e) => setName(e.target.value)} />
+              </label>
+              <button className="button primary" disabled={!name.trim() || emptyGolden.isPending} onClick={() => emptyGolden.mutate()}>
+                Create empty Golden Source
+              </button>
+              <p className="field-note">Creates an immutable empty v1. Add expected assignments immediately afterwards.</p>
+            </div>
           )}
         </section>
       ) : (
         <>
-          <section className="panel">
-            <h2>{s(source.display_name, sourceName)}</h2>
-            <p>
-              <strong>v{s(content.data?.version, "—")}</strong> · {s(content.data?.total, "0")} expected
-              access(es)
-            </p>
+          <section className="panel golden-hero">
+            <div className="golden-title">
+              <div><span className="eyebrow">Golden Source</span><h2>{s(source.display_name, sourceName)}</h2></div>
+              <Status v={`v${s(content.data?.version, "—")}`} />
+            </div>
             <p className="muted">
               {content.data ? goldenOrigin(content.data as Row) : "Loading…"}
               {covered.length ? ` · covers ${covered.join(", ")}` : ""}
               {content.data?.comment ? ` · ${s(content.data.comment)}` : ""}
             </p>
+            <div className="golden-metrics">
+              <div><strong>{s(content.data?.assignment_count, "0")}</strong><span>Expected assignments</span></div>
+              <div><strong>{s(content.data?.identity_count, "0")}</strong><span>Expected identities</span></div>
+              <div><strong>{s(content.data?.access_count, "0")}</strong><span>Access rights</span></div>
+              <div><strong>{s(content.data?.application_count, "0")}</strong><span>Applications</span></div>
+            </div>
           </section>
           <div className="tabs">
             <button
@@ -2555,18 +2898,18 @@ function Golden() {
                 </>
               ) : (
                 <>
-                  <h2>{counted("added") + counted("removed")} change(s) since the last collection</h2>
+                  <h2>What changed from the expected state?</h2>
                   <div className="diff-summary">
-                    <strong>{counted("added")} to become expected</strong>
-                    <strong>{counted("removed")} no longer present</strong>
-                    <strong>{counted("unchanged")} unchanged</strong>
+                    <span><strong>{counted("added")}</strong> Unexpected</span>
+                    <span><strong>{counted("removed")}</strong> Missing</span>
+                    <span><strong>{counted("unchanged")}</strong> Unchanged</span>
                   </div>
                   <Table
                     cols={["Change", "Identity", "Access", "Source"]}
                     rows={changes
                       .filter((r) => r.status !== "unchanged")
                       .map((r) => [
-                        <Status v={r.status === "added" ? "added" : "removed"} />,
+                        <Status v={r.status === "added" ? "unexpected" : "missing"} />,
                         s(r.identity_identifier),
                         s(r.access_name),
                         s(r.access_provider),
@@ -2653,7 +2996,7 @@ function Golden() {
                 .map((r) => [
                   <strong>v{s(r.version)}</strong>,
                   goldenOrigin(r),
-                  s(r.created_at),
+                  when(r.created_at),
                   s(r.assignments, "0"),
                 ])}
             />
@@ -2816,8 +3159,14 @@ function Sources() {
     }),
     test = useMutation({
       mutationFn: (body: Row) => postJson("system/sources/test", body),
-      onSuccess: (d) => setError(s(d.message, "Connection test succeeded")),
-      onError: (e) => setError(s(e, "Source connection test failed")),
+      onSuccess: (d) => {
+        setError("");
+        toast("ok", s(d.message, "Connection test succeeded"));
+      },
+      onError: (e) => {
+        setError(s(e, "Source connection test failed"));
+        toast("error", s(e, "Source connection test failed"));
+      },
     }),
     jq = useQuery({
       queryKey: ["job", job],
@@ -2828,6 +3177,9 @@ function Sources() {
     configs = arr(cfg.data?.sources),
     observed = arr(q.data?.items),
     sources = configs.map((c) => ({ ...c, ...(observed.find((o) => s(o.name) === s(c.provider)) || {}) }));
+  useEffect(() => {
+    if (jq.data?.status === "SUCCEEDED") void q.refetch();
+  }, [jq.data?.status]);
   const blank = () => ({
     provider: "",
     type: "active_directory",
@@ -2866,7 +3218,7 @@ function Sources() {
           <div className="source-card" key={s(r.provider)}>
             <div className="source-top">
               <Status v={r.health} />
-              <span>{s(r.last_sync, "Never synced")}</span>
+              <span>{r.last_sync ? when(r.last_sync) : "Never collected"}</span>
             </div>
             <h2>{s(r.display_name, s(r.provider))}</h2>
             <p>
@@ -2922,7 +3274,10 @@ function Sources() {
           <p>Collecting… Analysing… Ready when the job completes.</p>
           <Status v={jq.data?.status} />
           <p>{s(jq.data?.progress)}</p>
-          {jq.data?.result ? <pre>{JSON.stringify(jq.data.result, null, 2)}</pre> : null}
+          {jq.data?.status === "SUCCEEDED" && jq.data?.result ? (
+            kind === "preview" ? <SourceImpact result={jq.data.result as Row} /> : <p>Snapshot {s((jq.data.result as Row).snapshot_id)}</p>
+          ) : null}
+          {jq.data?.error ? <p className="form-error">{s(jq.data.error)}</p> : null}
           {jq.isError && <p className="form-error">{s(jq.error)}</p>}
         </section>
       )}
@@ -3041,11 +3396,11 @@ function AuditTrail() {
         cols={["When", "Actor", "Event", "Object", "Details"]}
         q={q}
         rows={arr(q.data?.items).map((r) => [
-          s(r.created_at),
+          when(r.created_at),
           s(r.actor),
           s(r.event_type),
           s(r.object_type) + " / " + s(r.object_id),
-          s(r.details),
+          readableDetails(r.details),
         ])}
       />
       <Pager
@@ -3064,7 +3419,7 @@ function Reports() {
       queryFn: () => getPage("campaigns", { limit: 100 }),
     }),
     campaigns = arr(campaignsQuery.data?.items),
-    [chosen, setChosen] = useState(""),
+    [chosen, setChosen] = useState(() => new URLSearchParams(window.location.search).get("campaign") ?? ""),
     // Reports are read after a campaign is closed: offer that one first.
     selected =
       campaigns.find((r) => s(r.id) === chosen) ??
@@ -3413,6 +3768,13 @@ function UsersPage() {
     setForm(r ? { ...r, scopes: vals(r.scopes).join(", "), password: "" } : blankUser());
     setOpen(true);
   };
+  const confirmUserAction = (action: string, user: Row) => {
+    setError("");
+    setNotice("");
+    setNewPassword("");
+    setReassignTo("");
+    setConfirming({ action, user });
+  };
   const importAccount = (directory: Row, account: Row) => {
     setError("");
     setForm({
@@ -3465,42 +3827,22 @@ function UsersPage() {
             <button className="link-button" onClick={() => edit(r)}>
               Edit
             </button>
-            {s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE && (
-              <button
-                className="link-button"
-                onClick={() => {
-                  setError("");
-                  setNotice("");
-                  setNewPassword("");
-                  setConfirming({ action: "reset-password", user: r });
-                }}
-              >
-                Reset password
-              </button>
-            )}
-            {Number(r.pending_reviews) > 0 && (
-              <button
-                className="link-button"
-                onClick={() => {
-                  setError("");
-                  setNotice("");
-                  setReassignTo("");
-                  setConfirming({ action: "reassign", user: r });
-                }}
-              >
-                Reassign reviews
-              </button>
-            )}
-            <button
-              className="link-button"
-              onClick={() => {
-                setError("");
-                setNotice("");
-                setConfirming({ action: r.enabled ? "disable" : "enable", user: r });
-              }}
-            >
-              {r.enabled ? "Disable" : "Enable"}
-            </button>
+            <ActionMenu
+              label={`More actions for ${s(r.display_name, s(r.username))}`}
+              actions={[
+                ...(s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE
+                  ? [{ label: "Reset password", onClick: () => confirmUserAction("reset-password", r) }]
+                  : []),
+                ...(Number(r.pending_reviews) > 0
+                  ? [{ label: "Reassign reviews", onClick: () => confirmUserAction("reassign", r) }]
+                  : []),
+                {
+                  label: r.enabled ? "Disable" : "Enable",
+                  danger: Boolean(r.enabled),
+                  onClick: () => confirmUserAction(r.enabled ? "disable" : "enable", r),
+                },
+              ]}
+            />
           </div>,
         ])}
       />
@@ -3816,7 +4158,7 @@ function Auth() {
       <p className="muted">
         How people sign in to EARE. The directories EARE audits are configured in Sources &amp; IdPs.
       </p>
-      {notice && <p className={notice.tone === "ok" ? "muted" : "form-error"}>{notice.text}</p>}
+      {notice && <p className={notice.tone === "ok" ? "form-success" : "form-error"}>{notice.text}</p>}
       <section className="panel">
         <h2>Local accounts</h2>
         <Status v="ACTIVE" />
@@ -3955,7 +4297,7 @@ function Auth() {
               />{" "}
               Allow people from this directory to sign in
             </label>
-            {notice && <p className={notice.tone === "ok" ? "muted" : "form-error"}>{notice.text}</p>}
+            {notice && <p className={notice.tone === "ok" ? "form-success" : "form-error"}>{notice.text}</p>}
             <div className="button-row">
               <button
                 type="button"
