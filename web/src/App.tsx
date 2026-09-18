@@ -1206,6 +1206,79 @@ function StackedBar({ parts }: { parts: { label: string; value: number; tone: st
     </div>
   );
 }
+/** Decide straight from the row. A revoke or an N/A still asks for its reason. */
+function RowDecision({ item, done }: { item: Row; done?: () => void }) {
+  const toast = useToast(),
+    c = useQueryClient(),
+    [asking, setAsking] = useState<string | null>(null),
+    [reason, setReason] = useState(""),
+    m = useMutation({
+      mutationFn: (choice: { value: string; comment?: string }) =>
+        postDecision(s(item.id), choice.value, choice.comment),
+      onSuccess: async (_d, choice) => {
+        setAsking(null);
+        setReason("");
+        toast(
+          "ok",
+          `${s(item.identity_display_name, s(item.identity_identifier))}: ${
+            choice.value === "approve"
+              ? "approved"
+              : choice.value === "revoke"
+                ? "revoked"
+                : "marked not applicable"
+          }`,
+        );
+        await c.invalidateQueries({ queryKey: ["review-items"] });
+        done?.();
+      },
+      onError: (e) => toast("error", s(e, "The decision was refused")),
+    });
+  return (
+    <>
+      <div className="row-actions">
+        <button className="link-button" disabled={m.isPending} onClick={() => m.mutate({ value: "approve" })}>
+          Approve
+        </button>
+        <button className="link-button" disabled={m.isPending} onClick={() => setAsking("revoke")}>
+          Revoke
+        </button>
+        <button className="link-button" disabled={m.isPending} onClick={() => setAsking("not_applicable")}>
+          N/A
+        </button>
+      </div>
+      {asking ? (
+        <Confirm
+          title={asking === "revoke" ? "Revoke this access?" : "Mark as not applicable?"}
+          intro={
+            <p>
+              {s(item.identity_display_name, s(item.identity_identifier))} →{" "}
+              {s(item.access_display_name, s(item.access_name))}
+            </p>
+          }
+          confirmLabel={asking === "revoke" ? "Revoke" : "Mark not applicable"}
+          danger={asking === "revoke"}
+          pending={m.isPending}
+          disabled={!reason.trim()}
+          cancel={() => {
+            setAsking(null);
+            setReason("");
+          }}
+          confirm={() => m.mutate({ value: asking, comment: reason.trim() })}
+        >
+          <label>
+            Reason
+            <input
+              autoFocus
+              value={reason}
+              placeholder="Why does this decision apply?"
+              onChange={(e) => setReason(e.target.value)}
+            />
+          </label>
+        </Confirm>
+      ) : null}
+    </>
+  );
+}
 function Reviews() {
   const campaigns = useQuery({
       queryKey: ["review-campaigns"],
@@ -1279,8 +1352,15 @@ function Reviews() {
         />
       </Filter>
       <Table
-        cols={["Identity", "Access", "Application", "Classification", "Latest decision"]}
-        fields={["identity_display_name", "access_display_name", "target", "classification", "decision"]}
+        cols={["Identity", "Access", "Application", "Classification", "Latest decision", "Decide"]}
+        fields={[
+          "identity_display_name",
+          "access_display_name",
+          "target",
+          "classification",
+          "decision",
+          null,
+        ]}
         sorting={x.sorting}
         filtering={x.filtering}
         q={x.q}
@@ -1294,6 +1374,7 @@ function Reviews() {
             targetText(r.target) || s(r.access_provider),
             <Status v={r.classification} />,
             <Status v={r.decision ?? "pending"} />,
+            <RowDecision item={r} />,
           ])}
       />
       <Pager
@@ -1952,7 +2033,7 @@ function CampaignDetail() {
       )}
       {tab === "reviews" && (
         <Table
-          cols={["Identity", "Access", "Classification", "Decision"]}
+          cols={["Identity", "Access", "Classification", "Decision", "Decide"]}
           rows={reviews.map((r) => [
             <button className="link-button" onClick={() => setSelected(r)}>
               {s(r.identity_display_name, s(r.identity_identifier))}
@@ -1960,6 +2041,7 @@ function CampaignDetail() {
             s(r.access_display_name, s(r.access_name)),
             <Status v={r.classification} />,
             <Status v={r.decision ?? "pending"} />,
+            <RowDecision item={r} done={() => q.refetch()} />,
           ])}
         />
       )}{" "}
