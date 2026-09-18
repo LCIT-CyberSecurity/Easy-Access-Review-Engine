@@ -536,6 +536,7 @@ function Pager({
   );
 }
 type SortState = { sort: string; order: string; toggle: (field: string) => void };
+type FilterState = { values: Row; set: (field: string, value: string) => void };
 function Table({
   cols,
   rows,
@@ -543,14 +544,16 @@ function Table({
   onRow,
   fields,
   sorting,
+  filtering,
 }: {
   cols: string[];
   rows: ReactNode[][];
   q?: any;
   onRow?: (i: number) => void;
-  /** Column index → API field name. Only the named columns become sortable. */
+  /** Column index → API field name. Only the named columns become sortable and filterable. */
   fields?: (string | null)[];
   sorting?: SortState;
+  filtering?: FilterState;
 }) {
   if (q?.isLoading)
     return (
@@ -592,6 +595,25 @@ function Table({
               );
             })}
           </tr>
+          {filtering && fields ? (
+            <tr className="filter-row">
+              {cols.map((label, i) => {
+                const field = fields[i];
+                return (
+                  <th key={`filter-${label}`}>
+                    {field ? (
+                      <input
+                        value={s(filtering.values[field], "")}
+                        placeholder="Filter"
+                        aria-label={`Filter on ${label}`}
+                        onChange={(e) => filtering.set(field, e.target.value)}
+                      />
+                    ) : null}
+                  </th>
+                );
+              })}
+            </tr>
+          ) : null}
         </thead>
         <tbody>
           {rows.length ? (
@@ -795,13 +817,31 @@ function useList(path: string, extra: Row = {}) {
     [limit, setLimit] = useState(25),
     [sort, setSort] = useState(""),
     [order, setOrder] = useState("asc"),
-    selected = debounce(search);
+    [columnFilters, setColumnFilters] = useState<Row>({}),
+    selected = debounce(search),
+    appliedFilters = JSON.parse(debounce(JSON.stringify(columnFilters))) as Row;
   const q = useQuery({
-    queryKey: [path, selected, limit, offset, sort, order, extra],
-    queryFn: () => getPage(path, { ...extra, search: selected, limit, offset, sort, order }),
+    queryKey: [path, selected, limit, offset, sort, order, appliedFilters, extra],
+    queryFn: () =>
+      getPage(path, {
+        ...extra,
+        search: selected,
+        limit,
+        offset,
+        sort,
+        order,
+        ...Object.fromEntries(
+          Object.entries(appliedFilters)
+            .filter(([, value]) => s(value, ""))
+            .map(([field, value]) => [`f.${field}`, String(value)]),
+        ),
+      }),
   });
   // Any change of what is being listed sends the reader back to the first page.
-  useEffect(() => setOffset(0), [selected, sort, order, JSON.stringify(extra)]);
+  useEffect(
+    () => setOffset(0),
+    [selected, sort, order, JSON.stringify(appliedFilters), JSON.stringify(extra)],
+  );
   const sorting: SortState = {
     sort,
     order,
@@ -810,7 +850,11 @@ function useList(path: string, extra: Row = {}) {
       setSort(field);
     },
   };
-  return { q, search, setSearch, offset, setOffset, limit, setLimit, sorting };
+  const filtering: FilterState = {
+    values: columnFilters,
+    set: (field, value) => setColumnFilters((all) => ({ ...all, [field]: value })),
+  };
+  return { q, search, setSearch, offset, setOffset, limit, setLimit, sorting, filtering };
 }
 function Identities() {
   const [provider, setProvider] = useState(""),
@@ -838,6 +882,7 @@ function Identities() {
         cols={["Identity", "Type", "Source / IdP", "Status", "Accesses", "Findings"]}
         fields={["display_name", "type", "provider", "status", "access_count", "finding_count"]}
         sorting={x.sorting}
+        filtering={x.filtering}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) => [
           <>
@@ -944,6 +989,7 @@ function Accesses() {
         ]}
         fields={["display_name", "description", "provider", null, null, null, null]}
         sorting={x.sorting}
+        filtering={x.filtering}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) => [
           <button className="link-button" onClick={() => setSelected(r)}>
@@ -1131,6 +1177,7 @@ function Reviews() {
           "decision",
         ]}
         sorting={x.sorting}
+        filtering={x.filtering}
         q={x.q}
         rows={[...(x.q.data?.items ?? [])]
           .sort((a, b) => Number(!a.decision) - Number(!b.decision))
@@ -1301,6 +1348,7 @@ function List({ path, title }: { path: string; title: string }) {
             : ["identity_display_name", "action", "access_display_name", "campaign_id", "status"]
         }
         sorting={x.sorting}
+        filtering={x.filtering}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) =>
           findings
@@ -1391,6 +1439,7 @@ function Campaigns() {
         cols={["Campaign", "Scope", "Status", "Progress", "Pending", "Due date"]}
         fields={["name", null, "status", "progress", "pending", "due_at"]}
         sorting={x.sorting}
+        filtering={x.filtering}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) => [
           <NavLink to={"/campaigns/" + s(r.id)}>{s(r.name)}</NavLink>,
@@ -1850,6 +1899,23 @@ const blankExpected = (): Row => ({
   identity_identifier: "",
   access_permission: "",
 });
+/** Column filters for a screen that holds its own query, turned into f.<field> params. */
+function useColumnFilters() {
+  const [values, setValues] = useState<Row>({}),
+    applied = JSON.parse(debounce(JSON.stringify(values))) as Row;
+  return {
+    filtering: {
+      values,
+      set: (field: string, value: string) => setValues((all) => ({ ...all, [field]: value })),
+    } as FilterState,
+    params: Object.fromEntries(
+      Object.entries(applied)
+        .filter(([, value]) => s(value, ""))
+        .map(([field, value]) => [`f.${field}`, String(value)]),
+    ),
+    key: JSON.stringify(applied),
+  };
+}
 function Golden() {
   const c = useQueryClient(),
     q = useQuery({ queryKey: ["golden"], queryFn: () => getPage("golden-sources", { limit: 100 }) }),
@@ -1873,6 +1939,7 @@ function Golden() {
     [limit, setLimit] = useState(25),
     [sort, setSort] = useState(""),
     [order, setOrder] = useState("asc"),
+    columns = useColumnFilters(),
     sorting: SortState = {
       sort,
       order,
@@ -1883,9 +1950,16 @@ function Golden() {
       },
     },
     accessesQuery = useQuery({
-      queryKey: ["golden-accesses", sourceName, selected, limit, offset, sort, order],
+      queryKey: ["golden-accesses", sourceName, selected, limit, offset, sort, order, columns.key],
       queryFn: () =>
-        getJson(`golden-sources/${encoded}/accesses`, { search: selected, limit, offset, sort, order }),
+        getJson(`golden-sources/${encoded}/accesses`, {
+          search: selected,
+          limit,
+          offset,
+          sort,
+          order,
+          ...columns.params,
+        }),
       enabled: Boolean(sourceName),
       retry: false,
     }),
@@ -1908,9 +1982,16 @@ function Golden() {
       onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to record the authentication policy") }),
     }),
     content = useQuery({
-      queryKey: ["golden-assignments", sourceName, selected, limit, offset, sort, order],
+      queryKey: ["golden-assignments", sourceName, selected, limit, offset, sort, order, columns.key],
       queryFn: () =>
-        getJson(`golden-sources/${encoded}/assignments`, { search: selected, limit, offset, sort, order }),
+        getJson(`golden-sources/${encoded}/assignments`, {
+          search: selected,
+          limit,
+          offset,
+          sort,
+          order,
+          ...columns.params,
+        }),
       enabled: Boolean(sourceName),
       retry: false,
     }),
@@ -2189,6 +2270,7 @@ function Golden() {
                   "expected_identities",
                 ]}
                 sorting={sorting}
+                filtering={columns.filtering}
                 q={accessesQuery}
                 rows={expectedAccesses.map((r) => [
                   <button className="link-button" onClick={() => setHolders(r)}>
@@ -2238,6 +2320,7 @@ function Golden() {
                   null,
                 ]}
                 sorting={sorting}
+                filtering={columns.filtering}
                 q={content}
                 rows={expected.map((r) => [
                   s(r.identity_display_name, s(r.identity_identifier)),
@@ -2811,6 +2894,7 @@ function Reports() {
     [limit, setLimit] = useState(25),
     [sort, setSort] = useState(""),
     [order, setOrder] = useState("asc"),
+    columns = useColumnFilters(),
     sorting: SortState = {
       sort,
       order,
@@ -2833,6 +2917,7 @@ function Reports() {
         offset,
         sort,
         order,
+        columns.key,
       ],
       queryFn: () =>
         getJson(`reports/${encodeURIComponent(id)}/results`, {
@@ -2845,6 +2930,7 @@ function Reports() {
           offset,
           sort,
           order,
+          ...columns.params,
         }),
       enabled: Boolean(id),
     }),
@@ -2963,6 +3049,7 @@ function Reports() {
           "reviewer",
         ]}
         sorting={sorting}
+        filtering={columns.filtering}
         q={q}
         rows={rows.map((r) => [
           <>

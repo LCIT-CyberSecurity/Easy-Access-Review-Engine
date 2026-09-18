@@ -51,6 +51,30 @@ def _is_empty(value: Any) -> bool:
     return value is None or value == "" or value == [] or value == {}
 
 
+def cell_text(value: Any) -> str:
+    """The text a column shows, so filtering matches what the reader sees."""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        for key in ("display_name", "identifier", "name", "identity"):
+            if value.get(key):
+                return str(value[key])
+        return " ".join(cell_text(item) for item in value.values())
+    if isinstance(value, list):
+        return " ".join(cell_text(item) for item in value)
+    return str(value)
+
+
+def apply_field_filters(rows: list[dict[str, Any]], filters: dict[str, str] | None) -> list[dict[str, Any]]:
+    """Keep the rows whose column contains what was typed under that column."""
+    for field, value in (filters or {}).items():
+        needle = str(value).strip().casefold()
+        if not needle:
+            continue
+        rows = [row for row in rows if needle in cell_text(row.get(field)).casefold()]
+    return rows
+
+
 def _sort_key(row: dict[str, Any], field: str) -> tuple[float, str]:
     """Order one column, comparing numbers as numbers and text case-insensitively."""
     value = row.get(field)
@@ -88,7 +112,7 @@ def review_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None) -> dict[str, object]:
+def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, filters: dict[str, str] | None = None) -> dict[str, object]:
     with Repository(db_path) as repo:
         raw = repo.list_payloads(table)
         latest_decisions = _latest_decisions(repo.list_payloads("decisions"))
@@ -163,6 +187,7 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             rows = [row for row in rows if provider in {row.get("provider"), row.get("identity_provider"), row.get("access_provider")}]
         if classification:
             rows = [row for row in rows if row.get("classification") == classification]
+        rows = apply_field_filters(rows, filters)
         summary = review_summary(rows) if table == "review_items" else None
         if sort and any(sort in row for row in rows):
             rows = sorted_rows(rows, sort, order)

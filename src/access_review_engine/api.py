@@ -194,11 +194,15 @@ def create_app(db_path: str | None = None):
     def health():
         return {"status": "ok"}
 
-    def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None):
-        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, classification=classification)
+    def column_filters(request: Request) -> dict[str, str]:
+        """Per-column filters travel as f.<column>=<text>, next to search and sort."""
+        return {key[2:]: value for key, value in request.query_params.items() if key.startswith("f.") and value}
 
-    def scoped_page(principal: WebPrincipal, table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None):
-        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, classification=classification, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=principal.scopes if principal.role == "BUSINESS_ADMIN" else None)
+    def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, filters: dict[str, str] | None = None):
+        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, classification=classification, filters=filters)
+
+    def scoped_page(principal: WebPrincipal, table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, filters: dict[str, str] | None = None):
+        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, classification=classification, filters=filters, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=principal.scopes if principal.role == "BUSINESS_ADMIN" else None)
 
     def require_table_access(principal: WebPrincipal, table: str) -> None:
         if principal.role == "BUSINESS_ADMIN" and table != "remediation_actions":
@@ -578,6 +582,9 @@ def create_app(db_path: str | None = None):
             if search:
                 needle = search.casefold()
                 rows = [row for row in rows if needle in " ".join(str(value or "") for value in row.values()).casefold()]
+            from access_review_engine.web_read_models import apply_field_filters
+
+            rows = apply_field_filters(rows, column_filters(request))
             if sort:
                 from access_review_engine.web_read_models import sorted_rows
 
@@ -697,6 +704,9 @@ def create_app(db_path: str | None = None):
             if search:
                 needle = search.casefold()
                 rows = [row for row in rows if needle in " ".join(str(row.get(field) or "") for field in ("access_display_name", "access_name", "access_description", "access_provider", "access_permission")).casefold()]
+            from access_review_engine.web_read_models import apply_field_filters
+
+            rows = apply_field_filters(rows, column_filters(request))
             if sort:
                 rows = sorted_rows(rows, sort, order)
             bounded, start = max(1, min(limit, 500)), max(0, offset)
@@ -795,6 +805,9 @@ def create_app(db_path: str | None = None):
         if search:
             needle = search.casefold()
             rows = [row for row in rows if needle in " ".join(str(value) for value in row.values()).casefold()]
+        from access_review_engine.web_read_models import apply_field_filters
+
+        rows = apply_field_filters(rows, column_filters(request))
         if sort:
             rows = sorted_rows(rows, sort, order)
         bounded, start = max(1, min(limit, 500)), max(0, offset)
@@ -1097,7 +1110,7 @@ def create_app(db_path: str | None = None):
         def route(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, _table: str = table):
             principal = _require(current_user(request))
             require_table_access(principal, _table)
-            return scoped_page(principal, _table, limit, offset, search, status, provider, campaign, sort, order, classification)
+            return scoped_page(principal, _table, limit, offset, search, status, provider, campaign, sort, order, classification, column_filters(request))
         app.get(f"/api/{path}")(route)
 
     @app.get("/api/findings")
@@ -1133,9 +1146,10 @@ def create_app(db_path: str | None = None):
         if search:
             needle = search.casefold()
             rows = [row for row in rows if needle in json.dumps(row, sort_keys=True).casefold()]
-        if sort:
-            from access_review_engine.web_read_models import sorted_rows
+        from access_review_engine.web_read_models import apply_field_filters, sorted_rows
 
+        rows = apply_field_filters(rows, column_filters(request))
+        if sort:
             rows = sorted_rows(rows, sort, order)
         return {"items": rows[offset : offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower()}
 
