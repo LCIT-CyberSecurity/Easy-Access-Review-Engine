@@ -1929,21 +1929,25 @@ function Golden() {
                 </button>
               </Filter>
               <Table
-                cols={["Identity", "Source", "Access", "Permission", ""]}
+                cols={["Identity", "Access", "What it allows", "Application", "Permission", "Source", ""]}
                 fields={[
                   "identity_display_name",
-                  "access_provider",
                   "access_display_name",
+                  "access_description",
+                  null,
                   "access_permission",
+                  "access_provider",
                   null,
                 ]}
                 sorting={sorting}
                 q={content}
                 rows={expected.map((r) => [
                   s(r.identity_display_name, s(r.identity_identifier)),
-                  s(r.access_provider),
                   s(r.access_display_name, s(r.access_name)),
+                  <Sub>{s(r.access_description, "")}</Sub>,
+                  targetText(r.access_target) || "—",
                   s(r.access_permission),
+                  s(r.access_provider),
                   <button className="link-button" onClick={() => setRemoving(r)}>
                     Remove
                   </button>,

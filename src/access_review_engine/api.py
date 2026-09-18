@@ -540,12 +540,21 @@ def create_app(db_path: str | None = None):
             from access_review_engine.web_read_models import _display_names
 
             identity_names, access_names = _display_names(repo)
+            # What an expected access actually is stays on the Access object, collected once.
+            catalog = {(str(row.get("provider")), str(row.get("name"))): row for row in repo.list_payloads("accesses")}
             rows = []
             for item in sorted(active.assignments, key=lambda entry: entry.key()):
                 row = asdict(item)
                 # Show the names people recognise; collectors key objects by their native id.
                 row["identity_display_name"] = identity_names.get((item.identity_provider, item.identity_identifier)) or item.identity_identifier
                 row["access_display_name"] = access_names.get((item.access_provider, item.access_name)) or item.access_name
+                described = catalog.get((item.access_provider, item.access_name), {})
+                row["access_description"] = described.get("description")
+                row["access_target"] = described.get("target")
+                row["access_owner"] = described.get("access_owner")
+                if not row.get("access_permission"):
+                    permission = described.get("permission")
+                    row["access_permission"] = (permission or {}).get("display_name") or (permission or {}).get("identifier") if isinstance(permission, dict) else permission
                 rows.append(row)
             covered = sorted({str(item.access_provider) for item in active.assignments})
             campaign_name = next((str(row.get("name")) for row in repo.list_payloads("campaigns") if str(row.get("id")) == str(active.source_campaign_id)), None)
