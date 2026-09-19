@@ -13,13 +13,16 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  ChevronDown,
   MoreHorizontal,
+  Palette,
   Search,
   Settings,
   ShieldCheck,
   Users,
   X,
 } from "lucide-react";
+import { applyTheme, readTheme, storeTheme, THEMES, type ThemeId } from "./theme";
 import {
   changePassword,
   getJson,
@@ -233,11 +236,29 @@ function PasswordChange() {
     </AuthFrame>
   );
 }
+const SIGNED_OUT_KEY = "eare.signed-out";
+function markSignedOut() {
+  try {
+    window.sessionStorage.setItem(SIGNED_OUT_KEY, "1");
+  } catch {
+    // A browser that refuses storage simply shows no confirmation.
+  }
+}
+function takeSignedOut(): boolean {
+  try {
+    if (window.sessionStorage.getItem(SIGNED_OUT_KEY) !== "1") return false;
+    window.sessionStorage.removeItem(SIGNED_OUT_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
 function Login() {
   const c = useQueryClient(),
     [u, setU] = useState(""),
     [p, setP] = useState(""),
     [visible, setVisible] = useState(false),
+    [signedOut, setSignedOut] = useState(takeSignedOut),
     [e, setE] = useState("");
   const m = useMutation({
     mutationFn: () => login(u, p),
@@ -251,6 +272,7 @@ function Login() {
         onSubmit={(x) => {
           x.preventDefault();
           setE("");
+          setSignedOut(false);
           m.mutate();
         }}
       >
@@ -287,6 +309,11 @@ function Login() {
             </button>
           </span>
         </label>
+        {signedOut && !e ? (
+          <p className="form-notice" role="status">
+            <Check size={15} /> You have been signed out. Sign in again to continue.
+          </p>
+        ) : null}
         {e && <p className="form-error" role="alert">{e}</p>}
         <button className="button primary" disabled={m.isPending}>
           {m.isPending ? "Signing in…" : "Sign in"}
@@ -343,7 +370,7 @@ function Shell({ principal }: { principal: Principal }) {
     <div className="app-shell">
       <aside className={c ? "sidebar open" : "sidebar"}>
         <div className="brand">
-          <span className="brand-mark">E</span>
+          <img className="brand-logo" src="/lcit-logo.png" alt="LCIT Cybersecurity" />
           <div>
             <span>EARE</span>
             <small>Access governance</small>
@@ -371,6 +398,9 @@ function Shell({ principal }: { principal: Principal }) {
             ) : null;
           })}
         </nav>
+        <div className="sidebar-footer">
+          A product by <strong>LCIT Cybersecurity</strong>
+        </div>
       </aside>
       <div className="page">
         <header className="topbar">
@@ -381,20 +411,14 @@ function Shell({ principal }: { principal: Principal }) {
             Workspace <ChevronRight size={14} /> Access governance
           </span>
           <div className="top-actions">
-            <span className="user-name">
-              {principal.display_name}
-              <span>{principal.role}</span>
-            </span>
-            <button
-              className="icon-button"
-              aria-label="Sign out"
-              onClick={async () => {
+            <UserMenu
+              principal={principal}
+              onSignOut={async () => {
                 await logout();
+                markSignedOut();
                 q.removeQueries({ queryKey: ["session"] });
               }}
-            >
-              <LogOut />
-            </button>
+            />
           </div>
         </header>
         <main>
@@ -717,6 +741,76 @@ function ColumnMenu({
         </>
       ) : null}
     </div>
+  );
+}
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const letters = parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : name.slice(0, 2);
+  return letters.toUpperCase();
+}
+// The account block doubles as the settings entry: the style is a per-viewer preference, so
+// it belongs next to the viewer rather than in the product navigation.
+function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: () => void }) {
+  const menu = useRef<HTMLDetailsElement>(null);
+  const [theme, setTheme] = useState<ThemeId>(readTheme);
+  const close = () => menu.current?.removeAttribute("open");
+  const pick = (next: ThemeId) => {
+    setTheme(next);
+    applyTheme(next);
+    storeTheme(next);
+  };
+  return (
+    <details className="user-menu" ref={menu}>
+      <summary aria-label="Account and settings">
+        <span className="avatar">{initials(principal.display_name)}</span>
+        <span className="user-name">
+          {principal.display_name}
+          <span>{principal.role}</span>
+        </span>
+        <ChevronDown size={15} />
+      </summary>
+      <div className="user-menu-panel">
+        <div className="user-menu-head">
+          <span className="avatar">{initials(principal.display_name)}</span>
+          <span>
+            <strong>{principal.display_name}</strong>
+            <small>{principal.role}</small>
+          </span>
+        </div>
+        <div className="user-menu-section">
+          <span className="user-menu-label">
+            <Palette size={13} /> Style
+          </span>
+          {THEMES.map((option) => (
+            <button
+              className={"style-option" + (theme === option.id ? " active" : "")}
+              key={option.id}
+              type="button"
+              aria-pressed={theme === option.id}
+              onClick={() => pick(option.id)}
+            >
+              <span className={"style-swatch " + option.id} />
+              <span className="style-option-text">
+                <strong>{option.name}</strong>
+                <small>{option.summary}</small>
+              </span>
+              {theme === option.id ? <Check size={15} /> : null}
+            </button>
+          ))}
+        </div>
+        <div className="user-menu-foot">
+          <button
+            type="button"
+            onClick={() => {
+              close();
+              onSignOut();
+            }}
+          >
+            <LogOut size={15} /> Sign out
+          </button>
+        </div>
+      </div>
+    </details>
   );
 }
 export function ActionMenu({

@@ -327,3 +327,139 @@ tbody tr { transition:background-color .12s ease; }
 
 .table-wrap tr.clickable { cursor:pointer; }
 .table-wrap tr.clickable:focus-within { background:#f4f7ff; }
+
+/* Company branding: the product name leads, LCIT signs the rail. */
+.brand-logo { width:38px; height:30px; flex:none; object-fit:contain; }
+.brand > div { display:grid; }
+.brand span { font-size:15px; font-weight:700; letter-spacing:-.01em; line-height:18px; }
+.brand small { color:var(--text-muted); font-size:11px; font-weight:500; letter-spacing:.01em; }
+.sidebar-footer { display:block; padding:14px 10px 2px; font-size:11px; line-height:16px; }
+.sidebar-footer strong { display:block; color:var(--text-primary); font-size:12px; font-weight:640; letter-spacing:-.005em; }
+
+/* Account menu: the viewer's own settings, including the interface style. */
+.user-menu { position:relative; margin:0; padding:0; border:0; }
+.user-menu summary { display:flex; align-items:center; gap:10px; padding:5px 9px 5px 5px; border:1px solid transparent; border-radius:999px; cursor:pointer; list-style:none; }
+.user-menu summary::-webkit-details-marker { display:none; }
+.user-menu summary:hover { background:var(--surface-secondary); }
+.user-menu summary svg { color:var(--text-muted); }
+.user-menu[open] summary { border-color:var(--border); background:var(--surface); }
+.user-menu-panel { position:absolute; z-index:14; top:calc(100% + 9px); right:0; width:288px; display:grid; padding:7px; background:var(--surface); border:1px solid var(--border); border-radius:15px; box-shadow:var(--shadow-md); }
+.user-menu-head { display:flex; align-items:center; gap:11px; padding:10px 10px 13px; border-bottom:1px solid var(--hairline); }
+.user-menu-head strong { display:block; color:var(--text-primary); font-size:13px; font-weight:640; }
+.user-menu-head small { display:block; margin-top:2px; color:var(--text-muted); font-size:11px; letter-spacing:.04em; }
+.user-menu-section { display:grid; gap:2px; padding:9px 0 7px; border-bottom:1px solid var(--hairline); }
+.user-menu-label { display:flex; align-items:center; gap:6px; padding:2px 10px 7px; color:var(--text-muted); font-size:10px; font-weight:750; letter-spacing:.12em; text-transform:uppercase; }
+.style-option { display:flex; align-items:center; gap:11px; padding:8px 10px; border:0; border-radius:10px; background:transparent; text-align:left; color:var(--text-secondary); }
+.style-option:hover { background:var(--surface-secondary); }
+.style-option.active { color:var(--primary); background:var(--primary-soft); }
+.style-option svg { margin-left:auto; flex:none; }
+.style-option-text { display:grid; min-width:0; }
+.style-option-text strong { color:var(--text-primary); font-size:13px; font-weight:620; }
+.style-option.active .style-option-text strong { color:var(--primary); }
+.style-option-text small { color:var(--text-muted); font-size:11px; }
+.style-swatch { width:30px; height:30px; flex:none; border-radius:9px; border:1px solid var(--border); overflow:hidden; }
+.style-swatch.default { background:linear-gradient(115deg,#fff 0 42%,#f1f3f6 42% 72%,#2545d3 72%); }
+.style-swatch.lcit { background:linear-gradient(115deg,#f7f8fd 0 42%,#efe9f8 42% 72%,#7657a9 72%); }
+.user-menu-foot { padding:6px 0 1px; }
+.user-menu-foot button { width:100%; display:flex; align-items:center; gap:9px; padding:9px 10px; border:0; border-radius:10px; background:transparent; color:var(--text-secondary); text-align:left; }
+.user-menu-foot button:hover { color:var(--danger); background:var(--danger-soft); }
+@media (max-width:700px) { .user-menu summary .user-name { display:none; } .user-menu-panel { width:min(288px,calc(100vw - 32px)); } }
+
+/* ---------------------------------------------------------------------------
+   LCIT style. The sign-in screen's own palette and typography, carried across
+   the application. Layout, density and structure are untouched: this file adds
+   colour, depth and type, never geometry.
+   --------------------------------------------------------------------------- */
+:root[data-theme="lcit"] {
+  --background:#eef1f8; --surface:#fff; --surface-secondary:#f1f3f9;
+  --border:#dce2ec; --border-strong:#c5cfdd; --text-primary:#152339;
+  --text-secondary:#4d5c73; --text-muted:#68768b; --primary:#65449c;
+  --primary-hover:#553888; --primary-soft:#efe9f8; --info:#4a6fa5;
+  --hairline:rgba(21,35,57,.07);
+  --shadow-sm:0 1px 2px rgba(16,35,64,.04);
+  --shadow-md:0 2px 8px rgba(16,35,64,.05), 0 24px 60px -24px rgba(8,26,48,.4);
+}
+/* A single cool wash instead of a flat fill: depth without a visible gradient. */
+:root[data-theme="lcit"] body { background:radial-gradient(1200px 460px at 16% -14%, rgba(118,87,169,.15), transparent 62%), radial-gradient(1000px 420px at 92% -10%, rgba(16,43,74,.11), transparent 60%), var(--background); background-attachment:fixed; }
+:root[data-theme="lcit"] ::selection { background:#e1d8f3; }
+:root[data-theme="lcit"] button:focus-visible, :root[data-theme="lcit"] a:focus-visible, :root[data-theme="lcit"] input:focus-visible, :root[data-theme="lcit"] select:focus-visible, :root[data-theme="lcit"] summary:focus-visible { outline-color:#7657a9; }
+
+/* The rail takes the sign-in form panel, not the night panel: light field, violet halo. */
+:root[data-theme="lcit"] .sidebar { background:#f7f8fd; border-right-color:#e0e4ef; overflow:hidden; }
+:root[data-theme="lcit"] .sidebar::before { content:""; position:absolute; width:420px; height:420px; right:-262px; top:-240px; border:1px solid rgba(118,87,169,.16); border-radius:50%; box-shadow:0 0 0 70px rgba(118,87,169,.035), 0 0 0 140px rgba(118,87,169,.022); pointer-events:none; }
+:root[data-theme="lcit"] .brand, :root[data-theme="lcit"] .sidebar nav, :root[data-theme="lcit"] .sidebar-footer { position:relative; z-index:1; }
+:root[data-theme="lcit"] .brand-logo { width:44px; height:36px; padding:4px; border:1px solid #e2dcf0; border-radius:12px; background:#f3effb; }
+:root[data-theme="lcit"] .brand span { color:#152339; font-size:16px; font-weight:700; letter-spacing:.09em; }
+:root[data-theme="lcit"] .brand small { margin-top:2px; color:#7a869b; }
+:root[data-theme="lcit"] .nav-heading { color:#8b96a9; font-weight:750; letter-spacing:.14em; }
+:root[data-theme="lcit"] .nav-link { color:#4d5c73; }
+:root[data-theme="lcit"] .nav-link:hover { color:#152339; background:#eeeff7; }
+:root[data-theme="lcit"] .nav-link.active { color:#54388a; font-weight:640; background:#efe9f8; }
+:root[data-theme="lcit"] .nav-link.active::before { background:#7657a9; }
+:root[data-theme="lcit"] .sidebar-footer { color:#7a869b; border-top-color:#e4e7f0; }
+:root[data-theme="lcit"] .sidebar-footer strong { color:#2a3853; }
+
+/* Chrome and type: the display treatment of the sign-in headline. */
+:root[data-theme="lcit"] .topbar { background:rgba(250,251,254,.76); border-bottom-color:#e4e7f0; }
+:root[data-theme="lcit"] .avatar { background:#65459b; }
+:root[data-theme="lcit"] .user-menu summary:hover, :root[data-theme="lcit"] .user-menu[open] summary { background:rgba(101,68,156,.07); }
+:root[data-theme="lcit"] h1 { font-size:30px; line-height:38px; letter-spacing:-.042em; font-weight:660; }
+:root[data-theme="lcit"] h2, :root[data-theme="lcit"] h3 { letter-spacing:-.028em; font-weight:660; }
+:root[data-theme="lcit"] h4, :root[data-theme="lcit"] th, :root[data-theme="lcit"] .user-menu-label { font-weight:750; letter-spacing:.13em; }
+:root[data-theme="lcit"] .eyebrow { color:#65449c; font-weight:750; letter-spacing:.14em; }
+:root[data-theme="lcit"] .page-subtitle { color:#607087; line-height:22px; }
+
+/* Surfaces: wide radii, hairline edges, one long soft shadow. No inner gloss. */
+:root[data-theme="lcit"] .panel, :root[data-theme="lcit"] .metric, :root[data-theme="lcit"] .table-wrap, :root[data-theme="lcit"] .scopebar, :root[data-theme="lcit"] .review-summary, :root[data-theme="lcit"] .source-card, :root[data-theme="lcit"] .report-row, :root[data-theme="lcit"] .golden-empty, :root[data-theme="lcit"] .user-menu-panel { border-color:#dfe4ee; border-radius:16px; box-shadow:0 1px 2px rgba(16,35,64,.04), 0 18px 40px -22px rgba(8,26,48,.45); }
+:root[data-theme="lcit"] .metric strong { font-size:34px; line-height:42px; letter-spacing:-.038em; font-weight:660; }
+:root[data-theme="lcit"] .metric-icon, :root[data-theme="lcit"] .source-logo, :root[data-theme="lcit"] .report-icon { color:#65449c; background:#efe9f8; border-radius:10px; }
+:root[data-theme="lcit"] th { color:#5d6b82; background:#f6f7fc; border-bottom-color:#e4e8f1; }
+:root[data-theme="lcit"] tbody tr:hover { background:#faf8fd; }
+:root[data-theme="lcit"] .progress-track div, :root[data-theme="lcit"] .table-progress span, :root[data-theme="lcit"] .review-progress span { background:#7657a9; }
+:root[data-theme="lcit"] .status > span { box-shadow:0 0 0 3px rgba(104,118,139,.13); }
+:root[data-theme="lcit"] .status.open > span, :root[data-theme="lcit"] .status.healthy > span, :root[data-theme="lcit"] .status.active > span, :root[data-theme="lcit"] .status.expected-and-observed > span, :root[data-theme="lcit"] .status.approved > span, :root[data-theme="lcit"] .status.exported > span { box-shadow:0 0 0 3px rgba(18,128,92,.15); }
+:root[data-theme="lcit"] .status.unexpected > span, :root[data-theme="lcit"] .status.revoke > span, :root[data-theme="lcit"] .status.overdue > span { box-shadow:0 0 0 3px rgba(193,53,43,.14); }
+:root[data-theme="lcit"] .status.missing > span, :root[data-theme="lcit"] .status.pending > span, :root[data-theme="lcit"] .status.draft > span { box-shadow:0 0 0 3px rgba(181,114,10,.15); }
+
+/* Controls: the sign-in form's own geometry and focus behaviour. */
+:root[data-theme="lcit"] .button { min-height:40px; border-radius:10px; }
+:root[data-theme="lcit"] .button.primary { background:#65459b; box-shadow:0 6px 16px rgba(79,48,134,.2); }
+:root[data-theme="lcit"] .button.primary:hover { background:#553888; }
+:root[data-theme="lcit"] .button.subtle { border-color:#c5cfdd; box-shadow:0 1px 2px rgba(16,35,64,.05); }
+:root[data-theme="lcit"] .button.subtle:hover { border-color:#9eabc0; background:#f4f6fb; }
+:root[data-theme="lcit"] .search, :root[data-theme="lcit"] .filter-button { border-color:#c5cfdd; border-radius:10px; }
+:root[data-theme="lcit"] .search:focus-within { border-color:#7657a9; box-shadow:0 0 0 3px #e1d8f3; }
+:root[data-theme="lcit"] .modal input, :root[data-theme="lcit"] .modal select, :root[data-theme="lcit"] .admin-form input, :root[data-theme="lcit"] .admin-form select, :root[data-theme="lcit"] .inline-form input, :root[data-theme="lcit"] .inline-form select { min-height:44px; padding:0 14px; border-color:#c5cfdd; border-radius:10px; background:#fff; box-shadow:0 1px 2px rgba(16,35,64,.05); }
+:root[data-theme="lcit"] .modal input:hover, :root[data-theme="lcit"] .admin-form input:hover, :root[data-theme="lcit"] .inline-form input:hover { border-color:#9eabc0; }
+:root[data-theme="lcit"] .modal input:focus-visible, :root[data-theme="lcit"] .modal select:focus-visible, :root[data-theme="lcit"] .admin-form input:focus-visible, :root[data-theme="lcit"] .admin-form select:focus-visible, :root[data-theme="lcit"] .inline-form input:focus-visible, :root[data-theme="lcit"] .inline-form select:focus-visible { outline:3px solid #e1d8f3; outline-offset:0; border-color:#7657a9; }
+:root[data-theme="lcit"] .admin-form input[type="checkbox"], :root[data-theme="lcit"] label.checkbox input[type="checkbox"] { min-height:0; box-shadow:none; accent-color:#65449c; }
+:root[data-theme="lcit"] .tabs a.active, :root[data-theme="lcit"] .tabs .text-button.active { color:#65449c; border-color:#65449c; }
+:root[data-theme="lcit"] .form-error { padding:11px 13px; border:1px solid #f0c8c4; border-radius:9px; background:#fff2f0; color:#a22720; }
+
+/* Overlays: the depth of the sign-in card. */
+:root[data-theme="lcit"] .drawer-backdrop, :root[data-theme="lcit"] .modal-backdrop { background:rgba(8,26,48,.42); backdrop-filter:blur(3px); }
+:root[data-theme="lcit"] .drawer { box-shadow:-18px 0 60px rgba(8,26,48,.26); }
+:root[data-theme="lcit"] .modal { border-radius:18px; border-color:#dfe4ee; box-shadow:0 28px 80px rgba(0,8,20,.28); }
+
+.form-notice { display:flex; align-items:center; gap:8px; margin:0; padding:11px 13px; border:1px solid #cfe7dc; border-radius:9px; background:#f0f9f5; color:#12805c; font-size:13px; font-weight:600; }
+.form-notice svg { flex:none; }
+
+/* LCIT style, second pass: the treatment reaches every screen, not only the rail. */
+:root[data-theme="lcit"] { --background:#e9edf8; }
+:root[data-theme="lcit"] .page-header { padding-bottom:18px; border-bottom:1px solid #dfe3f0; }
+:root[data-theme="lcit"] .panel-title { padding-bottom:14px; border-bottom:1px solid var(--hairline); }
+:root[data-theme="lcit"] .tabs { border-bottom-color:#dfe3f0; }
+:root[data-theme="lcit"] a, :root[data-theme="lcit"] .text-button, :root[data-theme="lcit"] .link-button { color:#65449c; }
+:root[data-theme="lcit"] td a, :root[data-theme="lcit"] td strong { color:#152339; font-weight:620; }
+:root[data-theme="lcit"] .cell-sub, :root[data-theme="lcit"] .empty { color:#7a869b; }
+:root[data-theme="lcit"] .badge, :root[data-theme="lcit"] .status, :root[data-theme="lcit"] .theme-badge { border-radius:999px; }
+:root[data-theme="lcit"] .badge { padding:3px 10px; letter-spacing:.02em; }
+:root[data-theme="lcit"] .path, :root[data-theme="lcit"] .access-path, :root[data-theme="lcit"] .access-path-step { color:#54388a; background:#f3effb; }
+:root[data-theme="lcit"] .impact, :root[data-theme="lcit"] .state-grid > div, :root[data-theme="lcit"] .review-kpi { background:#f5f7fc; border-radius:12px; }
+:root[data-theme="lcit"] .drawer-head h2, :root[data-theme="lcit"] .golden-title { letter-spacing:-.03em; font-weight:660; }
+:root[data-theme="lcit"] .scopebar strong, :root[data-theme="lcit"] .source-stats strong, :root[data-theme="lcit"] .review-summary strong { letter-spacing:-.024em; font-weight:660; }
+:root[data-theme="lcit"] .attention-icon, :root[data-theme="lcit"] .impact-card { border-radius:11px; }
+:root[data-theme="lcit"] .decision-action.approve { color:#12805c; background:#e9f6f0; }
+:root[data-theme="lcit"] .decision-action.revoke { color:#b23a30; background:#fdefed; }
+:root[data-theme="lcit"] .form-notice { border-color:#ded5f1; background:#f5f1fc; color:#54388a; }
+:root[data-theme="lcit"] .skeleton { background:#e6eaf4; }

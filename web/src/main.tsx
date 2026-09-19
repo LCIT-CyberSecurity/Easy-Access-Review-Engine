@@ -5,6 +5,10 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "@fontsource-variable/inter";
 import "./styles.css";
+import { applyTheme, readTheme } from "./theme";
+
+// Applied before the first render so a stored theme never flashes the default one.
+applyTheme(readTheme());
 
 const queryClient = new QueryClient();
 createRoot(document.getElementById("root")!).render(
