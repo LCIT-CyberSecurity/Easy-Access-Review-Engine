@@ -1,20 +1,32 @@
-// The interface ships two styles. "default" is the product's own neutral chrome; "lcit"
-// carries the sign-in vocabulary — midnight rail, violet accent, display typography — into
+// The interface ships two styles. "default" is the product's own blue chrome; "violet"
+// carries the sign-in vocabulary — violet accent, display typography, stated colour — into
 // the application. The choice is per browser: it changes nothing the server knows about.
-export type ThemeId = "default" | "lcit";
+export type ThemeId = "default" | "azure" | "violet" | "studio";
 
 export const THEMES: { id: ThemeId; name: string; summary: string; detail: string }[] = [
   {
     id: "default",
-    name: "Default",
+    name: "Blue",
     summary: "Neutral operating chrome",
     detail: "Light rail, blue accent and compact tables. Built for long review sessions where the data carries the page.",
   },
   {
-    id: "lcit",
-    name: "LCIT style",
+    id: "azure",
+    name: "Azure",
+    summary: "The sign-in blue, kept light",
+    detail: "The blue of the sign-in panel used as a tint rather than a field: pale blue canvas, white surfaces, no dark chrome.",
+  },
+  {
+    id: "violet",
+    name: "Violet",
     summary: "The sign-in screen, everywhere",
-    detail: "Midnight rail, violet accent and display typography taken from the LCIT sign-in screen.",
+    detail: "Violet accent and display typography taken from the LCIT sign-in screen.",
+  },
+  {
+    id: "studio",
+    name: "Studio",
+    summary: "Precise, near monochrome, one accent",
+    detail: "Hairline rules instead of shadows, a tightened type scale with Inter's alternate glyphs, a denser grid and a single indigo accent. Built like the tools engineers keep open all day.",
   },
 ];
 

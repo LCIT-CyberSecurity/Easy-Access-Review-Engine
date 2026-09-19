@@ -364,8 +364,7 @@ const navSections = [
   },
 ];
 function Shell({ principal }: { principal: Principal }) {
-  const [c, setC] = useState(false),
-    q = useQueryClient();
+  const [c, setC] = useState(false);
   return (
     <div className="app-shell">
       <aside className={c ? "sidebar open" : "sidebar"}>
@@ -414,9 +413,12 @@ function Shell({ principal }: { principal: Principal }) {
             <UserMenu
               principal={principal}
               onSignOut={async () => {
-                await logout();
+                await logout().catch(() => {});
                 markSignedOut();
-                q.removeQueries({ queryKey: ["session"] });
+                // Dropping the session query alone leaves every other cached page holding
+                // the previous account's data, and react-query does not necessarily refetch
+                // a removed query. A reload is both the correct state and the safe one.
+                window.location.assign("/");
               }}
             />
           </div>
