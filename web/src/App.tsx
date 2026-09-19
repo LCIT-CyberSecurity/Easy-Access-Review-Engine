@@ -926,12 +926,16 @@ function Table({
 }
 function Drawer({ title, close, children }: { title: string; close: () => void; children: ReactNode }) {
   const panel = useRef<HTMLElement>(null);
+  // Callers pass an inline close; reading it through a ref keeps the effect below from
+  // re-running on every render, which would pull focus out of the field being typed in.
+  const closeRef = useRef(close);
+  closeRef.current = close;
   useEffect(() => {
-    const escape = (event: KeyboardEvent) => event.key === "Escape" && close();
+    const escape = (event: KeyboardEvent) => event.key === "Escape" && closeRef.current();
     document.addEventListener("keydown", escape);
     panel.current?.focus();
     return () => document.removeEventListener("keydown", escape);
-  }, [close]);
+  }, []);
   return (
     <div className="drawer-backdrop" onClick={close}>
       <aside
