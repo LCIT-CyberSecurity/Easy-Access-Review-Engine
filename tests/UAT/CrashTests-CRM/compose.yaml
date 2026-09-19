@@ -12,16 +12,48 @@ services:
       - ./seed:/opt/crashtests-crm/seed:ro
     command: ["/bin/sh", "-c", "rm -f /srv/crm/.ready && python3 /opt/crashtests-crm/seed/generate_data.py --root /srv/crm --policy /opt/crashtests-crm/policy && touch /srv/crm/.ready && sleep infinity"]
 
+  crashtests-api:
+    build:
+      context: ../../..
+      dockerfile: docker/backend.Dockerfile
+    image: eare-crashtests-api:python312
+    container_name: eare-crashtests-api
+    # Lab-only bootstrap values. The lab publishes no API port and is recreated on every run.
+    environment:
+      EARE_DB_PATH: /data/access-review.db
+      EARE_SESSION_SECRET: crashtests-crm-lab-session-secret-not-for-production
+      EARE_ADMIN_USERNAME: admin
+      EARE_ADMIN_PASSWORD: crashtests-crm-lab-admin
+      EARE_COOKIE_SECURE: "0"
+    volumes:
+      - crashtests-crm-api-data:/data
+    networks:
+      default:
+        # web/nginx.conf proxies /api to the fixed upstream name `eare-api`.
+        aliases:
+          - eare-api
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      start_period: 15s
+      retries: 15
+
   crashtests-webui:
     build:
       context: ../../../web
       dockerfile: Dockerfile
-    image: eare-crashtests-webui:node22
+    image: eare-crashtests-webui:nginx
     container_name: eare-crashtests-webui
+    depends_on:
+      crashtests-api:
+        condition: service_healthy
     ports:
-      - "4173:4173"
+      - "4174:80"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4173/').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
       interval: 2s
       timeout: 3s
       retries: 15
@@ -29,3 +61,5 @@ services:
 volumes:
   crashtests-crm-data:
     name: eare-crashtests-crm-data
+  crashtests-crm-api-data:
+    name: eare-crashtests-crm-api-data

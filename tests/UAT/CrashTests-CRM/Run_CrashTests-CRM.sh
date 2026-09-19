@@ -16,6 +16,7 @@ capture_diagnostics() {
   docker compose -f "${COMPOSE_FILE}" logs --no-color >"${ARTIFACTS}/docker.log" 2>&1 || true
   docker inspect eare-crashtests-crm >"${ARTIFACTS}/container-inspect.json" 2>/dev/null || true
   docker inspect eare-crashtests-webui >"${ARTIFACTS}/webui-container-inspect.json" 2>/dev/null || true
+  docker inspect eare-crashtests-api >"${ARTIFACTS}/api-container-inspect.json" 2>/dev/null || true
   docker exec eare-crashtests-crm getfacl -R /srv/crm >"${ARTIFACTS}/filesystem-acl.txt" 2>&1 || true
   docker exec eare-crashtests-crm getent passwd >"${ARTIFACTS}/users.txt" 2>&1 || true
   docker exec eare-crashtests-crm getent group >"${ARTIFACTS}/groups.txt" 2>&1 || true

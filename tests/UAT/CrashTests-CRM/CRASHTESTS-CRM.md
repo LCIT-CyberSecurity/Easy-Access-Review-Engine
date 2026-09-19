@@ -57,9 +57,18 @@ debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b625
 The container exposes no network port and uses `network_mode: none`. It does not mount the Docker
 socket, the host home directory, SSH keys, tokens, credentials or environment files.
 
-The Compose lab also builds and runs the EARE Web UI as `eare-crashtests-webui` from `web/Dockerfile`.
-It publishes port `4173` and uses a Node healthcheck to verify that the compiled UI starts and serves
-HTTP before the CRM assertions run.
+The Compose lab also builds and runs the EARE Web UI as `eare-crashtests-webui` from `web/Dockerfile`,
+backed by a lab-only API as `eare-crashtests-api` from `docker/backend.Dockerfile`. `web/nginx.conf`
+proxies `/api` to the fixed upstream name `eare-api`, so the API service carries that network alias;
+without it nginx refuses to start with `host not found in upstream "eare-api"`.
+
+The Web UI publishes port `4174` and uses an nginx healthcheck on `/healthz` to verify that the
+compiled UI starts and serves HTTP before the CRM assertions run. Port `4174` deliberately differs
+from the `4173` of the integration stack in `web/compose.yaml`, so both can run on the same host.
+
+The API bootstrap values are lab-only literals in the Compose file. The lab publishes no API port,
+recreates the `eare-crashtests-crm-api-data` volume content on every run and must never be pointed at
+a real directory or a populated `.env`.
 
 The CRM filesystem is under `/srv/crm` inside the container and is backed by the dedicated Docker
 volume `eare-crashtests-crm-data`. Files are owned by `root:root` inside the container so access is
