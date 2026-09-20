@@ -85,6 +85,12 @@ export async function postJson(path: string, body?: Row): Promise<Row> {
     body: body ? JSON.stringify(body) : undefined,
   }) as Promise<Row>;
 }
+export async function putJson(path: string, body: Row): Promise<Row> {
+  return request(`/api/${path}`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  }) as Promise<Row>;
+}
 export async function postDecision(id: string, value: string, comment?: string): Promise<Row> {
   return postJson(`review-items/${encodeURIComponent(id)}/decision`, {
     value,

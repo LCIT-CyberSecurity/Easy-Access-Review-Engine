@@ -32,6 +32,7 @@ import {
   logout,
   postDecision,
   postJson,
+  putJson,
   type Principal,
   type Row,
 } from "./api/client";
@@ -87,12 +88,50 @@ const targetText = (v: unknown): string => {
     .filter(Boolean)
     .join(" · ");
 };
+const contextField = (context: unknown, field: string): Row => {
+  const root = (context ?? {}) as Row;
+  return ((((root.fields ?? {}) as Row)[field] ?? {}) as Row);
+};
+const contextValue = (context: unknown, field: string, origin: "source" | "manual"): string => {
+  const value = contextField(context, field)[origin] as Row | undefined;
+  return value ? s(value.value, "") : "";
+};
+function BusinessContext({ context }: { context: unknown }) {
+  const rows = [
+    ["Application", "application"],
+    ["Permission", "business_permission"],
+    ["Resource", "resource"],
+    ["Description", "description"],
+    ["Owner", "owner"],
+  ] as const;
+  const visible = rows.filter(([, field]) => contextValue(context, field, "source") || contextValue(context, field, "manual"));
+  if (!visible.length) return <p className="muted">Business context not provided.</p>;
+  return (
+    <div className="business-context">
+      {visible.map(([label, field]) => {
+        const source = contextValue(context, field, "source"),
+          manual = contextValue(context, field, "manual"),
+          conflict = Boolean(contextField(context, field).conflict),
+          sourceEntry = contextField(context, field).source as Row | undefined;
+        return (
+          <div key={field}>
+            <strong>{label}</strong>
+            {manual ? <span>{manual}<small>Manual reference</small></span> : null}
+            {source ? <span>{source}<small>{sourceEntry?.provenance === "native" ? "Native source" : sourceEntry?.provenance === "static" ? "Configured static" : `Source attribute${sourceEntry?.attribute ? `: ${s(sourceEntry.attribute)}` : ""}`}</small></span> : null}
+            {conflict ? <Status v="warning" /> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 /** What this access lets someone do, in words: the collected description, or permission on target. */
 const describeAccess = (row: Row): string => {
   const described = s(row.description, "");
   if (described) return described;
   const permission = permissionText(row.permission),
     target = targetText(row.target);
+  if (permission.toLowerCase() === "member") return "Group membership";
   if (permission && target) return `${permission} on ${target}`;
   return permission || target || "";
 };
@@ -441,7 +480,8 @@ function Shell({ principal }: { principal: Principal }) {
             <Route path="/findings" element={<List path="findings" title="Findings" />} />
             <Route path="/actions" element={<List path="remediation-actions" title="Actions" />} />
             <Route path="/reports" element={<Reports />} />
-            <Route path="/sources" element={<Sources />} />
+            <Route path="/sources" element={<Sources principal={principal} />} />
+            <Route path="/sources/:provider/browse" element={<SourceBrowser />} />
             <Route path="/system/users" element={<UsersPage />} />
             <Route path="/system/authentication" element={<Auth />} />
             <Route path="/system/audit" element={<AuditTrail />} />
@@ -1026,6 +1066,24 @@ function SourceImpact({ result }: { result: Row }) {
           ))}
         </div>
       ) : <p className="muted">No persisted object would change.</p>}
+      {arr(result.access_preview).length ? (
+        <section className="preview-accesses">
+          <h3>Access and business context</h3>
+          {arr(result.access_preview).slice(0, 20).map((access) => {
+            const technical = (access.technical ?? {}) as Row,
+              context = (access.business_context ?? {}) as Row;
+            return (
+              <article key={`${s(access.provider)}:${s(access.access_name)}`}>
+                <strong>{s(access.display_name, s(access.access_name))}</strong>
+                <small>{s(access.provider)} · {s(technical.grant_mechanism)} · technical permission {s(technical.permission)}</small>
+                <BusinessContext context={{ fields: Object.fromEntries(Object.entries(context).map(([field, value]) => [field, { source: value }])) }} />
+                {Object.keys((access.raw_source ?? {}) as Row).length ? <details><summary>Mapped raw source fields</summary><pre>{JSON.stringify(access.raw_source, null, 2)}</pre></details> : null}
+              </article>
+            );
+          })}
+        </section>
+      ) : null}
+      {(result.mapping as Row | undefined)?.warning ? <p className="form-notice">One or more mapped source fields were unavailable in this collected artifact.</p> : null}
       <details>
         <summary>Technical details</summary>
         <pre>{JSON.stringify(result, null, 2)}</pre>
@@ -1481,12 +1539,32 @@ function Accesses() {
   );
 }
 function AccessDetail({ access }: { access: Row }) {
-  const [tab, setTab] = useState("overview"),
-    provider = s(access.provider),
+  const client = useQueryClient(),
+    toast = useToast(),
+    [tab, setTab] = useState("overview"),
+    [editingContext, setEditingContext] = useState(false),
+    [manual, setManual] = useState<Row>(() => {
+      const values = ((access.business_context as Row | undefined)?.manual_context ?? {}) as Row;
+      return Object.fromEntries(["application", "business_permission", "resource", "description", "owner"].map((field) => [field, s((values[field] as Row | undefined)?.value, "")]));
+    }),
+    provider = s(access.provider ?? access.access_provider),
     name = s(access.name ?? access.access_name),
+    accessId = s(access.id ?? access.access_id, ""),
     q = useQuery({
       queryKey: ["holders", provider, name],
       queryFn: () => getJson(`accesses/${encodeURIComponent(provider)}/${encodeURIComponent(name)}/holders`),
+    }),
+    saveContext = useMutation({
+      mutationFn: () => putJson(`accesses/${encodeURIComponent(accessId)}/enrichment`, manual),
+      onSuccess: async () => {
+        setEditingContext(false);
+        toast("ok", "Access information saved");
+        await client.invalidateQueries({ queryKey: ["accesses"] });
+        await client.invalidateQueries({ queryKey: ["golden-accesses"] });
+        await client.invalidateQueries({ queryKey: ["golden-assignments"] });
+        await client.invalidateQueries({ queryKey: ["review-items"] });
+      },
+      onError: (error) => toast("error", s(error, "Unable to save access information")),
     });
   const direct = arr(q.data?.holders),
     effective = arr(q.data?.effective_holders);
@@ -1500,10 +1578,29 @@ function AccessDetail({ access }: { access: Row }) {
         <>
           <h4>WHAT THIS ACCESS ALLOWS</h4>
           <p>{describeAccess(access) || "The source provided no description for this access."}</p>
-          <h4>DETAILS</h4>
-          <p>Source / application: {s(access.provider)}</p>
-          <p>Permission: {permissionText(access.permission) || "—"}</p>
+          <h4>TECHNICAL ENTITLEMENT</h4>
+          <p>Source: {provider}</p>
+          <p>Granted via: {s(access.technical_grant, permissionText(access.permission) === "member" ? "Group membership" : "Direct assignment")}</p>
+          <p>Technical permission: {s(access.technical_permission, permissionText(access.permission) || "—")}</p>
           <p>Target: {targetText(access.target) || "—"}</p>
+          <h4>BUSINESS CONTEXT</h4>
+          <BusinessContext context={access.business_context} />
+          {accessId ? <button className="button subtle" onClick={() => setEditingContext(!editingContext)}>Edit access information</button> : null}
+          {editingContext ? (
+            <div className="admin-form">
+              {[
+                ["Application", "application"],
+                ["Permission", "business_permission"],
+                ["Resource", "resource"],
+                ["Description", "description"],
+                ["Owner", "owner"],
+              ].map(([label, field]) => (
+                <label key={field}>{label}<input value={s(manual[field], "")} onChange={(event) => setManual((current) => ({ ...current, [field]: event.target.value }))} /></label>
+              ))}
+              <button className="button primary" disabled={saveContext.isPending} onClick={() => saveContext.mutate()}>Save manual reference</button>
+            </div>
+          ) : null}
+          <h4>DETAILS</h4>
           <p>
             Owner:{" "}
             {refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, "—")}
@@ -1736,7 +1833,7 @@ function Reviews() {
               <Sub>{s(r.identity_identifier)} · {s(r.identity_provider)}</Sub>
             </>,
             <><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>{describeAccess(r)}</Sub></>,
-            <><span>{targetText(r.target) || s(r.access_provider)}</span><Sub>{permissionText(r.permission)}</Sub></>,
+            <><span>{contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "Unknown"}</span><Sub>{contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "Not provided"}</Sub></>,
             <Status v={r.classification} />,
             <Status v={r.decision ?? "pending"} />,
             <RowDecision item={r} />,
@@ -1776,7 +1873,7 @@ function ReviewDrawer({
     [reason, setReason] = useState(""),
     [pending, setPending] = useState<string | null>(null);
   const m = useMutation({
-    mutationFn: (v: string) => postDecision(s(item.id), v, v === "approve" ? undefined : reason.trim()),
+    mutationFn: (v: string) => postDecision(s(item.id), v, reason.trim() || undefined),
     onSuccess: async () => {
       toast("ok", `${who}: decision recorded`);
       await c.invalidateQueries({ queryKey: ["review-items"] });
@@ -1803,8 +1900,19 @@ function ReviewDrawer({
         <h4>WHAT ACCESS</h4>
         <strong className="drawer-primary">{what}</strong>
         <p>{describeAccess(item) || "The source provided no description for this access."}</p>
-        <p>{targetText(item.target) || s(item.access_provider)}{permissionText(item.permission) ? ` · ${permissionText(item.permission)}` : ""}</p>
+        <p>Source: {s(item.access_provider)}</p>
+        <p>Granted via: {s(item.technical_grant, "Direct assignment")} · Technical permission: {s(item.technical_permission, "—")}</p>
       </section>
+      <section className="drawer-section">
+        <h4>BUSINESS CONTEXT</h4>
+        <BusinessContext context={item.business_context} />
+      </section>
+      {item.golden_comment ? (
+        <section className="drawer-section">
+          <h4>GOLDEN COMMENT</h4>
+          <p>{s(item.golden_comment)}</p>
+        </section>
+      ) : null}
       <section className="drawer-section">
         <h4>CURRENT STATE</h4>
         <div className="state-grid">
@@ -1832,7 +1940,7 @@ function ReviewDrawer({
       {pending && (
         <div className="reason-form">
           <label>
-            Reason *<textarea autoFocus value={reason} onChange={(e) => setReason(e.target.value)} />
+            Review comment {pending === "approve" ? "(optional)" : "*"}<textarea autoFocus value={reason} onChange={(e) => setReason(e.target.value)} />
           </label>
           <button
             onClick={() => {
@@ -1842,8 +1950,8 @@ function ReviewDrawer({
           >
             Cancel
           </button>
-          <button disabled={!reason.trim() || m.isPending} onClick={() => m.mutate(pending)}>
-            Confirm {pending === "revoke" ? "revoke" : "N/A"}
+          <button disabled={(pending !== "approve" && !reason.trim()) || m.isPending} onClick={() => m.mutate(pending)}>
+            Confirm {pending === "revoke" ? "revoke" : pending === "approve" ? "approve" : "N/A"}
           </button>
         </div>
       )}
@@ -1851,7 +1959,7 @@ function ReviewDrawer({
         <div className="drawer-footer">
           <button onClick={() => setPending("not_applicable")}>N/A</button>
           <button onClick={() => setPending("revoke")}>Revoke</button>
-          <button className="button primary" onClick={() => m.mutate("approve")}>
+          <button className="button primary" onClick={() => setPending("approve")}>
             Approve
           </button>
         </div>
@@ -2561,12 +2669,17 @@ function Golden() {
     [compare, setCompare] = useState<Row | null>(null),
     [notice, setNotice] = useState<{ tone: string; text: string } | null>(null),
     [name, setName] = useState("Main baseline"),
+    [globalComment, setGlobalComment] = useState(""),
     [sid, setSid] = useState(""),
     [createMode, setCreateMode] = useState("snapshot"),
     [tab, setTab] = useState("accesses"),
     [holders, setHolders] = useState<Row | null>(null),
     [adding, setAdding] = useState<Row | null>(null),
     [removing, setRemoving] = useState<Row | null>(null),
+    [commenting, setCommenting] = useState<Row | null>(null),
+    [assignmentComment, setAssignmentComment] = useState(""),
+    [editingVersionComment, setEditingVersionComment] = useState(false),
+    [versionComment, setVersionComment] = useState(""),
     [search, setSearch] = useState(""),
     selected = debounce(search),
     [offset, setOffset] = useState(0),
@@ -2639,7 +2752,7 @@ function Golden() {
       ]);
     },
     baseline = useMutation({
-      mutationFn: () => postJson("golden-sources/baseline", { name, snapshot_id: sid }),
+      mutationFn: () => postJson("golden-sources/baseline", { name, snapshot_id: sid, comment: globalComment }),
       onSuccess: async (d) => {
         setNotice({
           tone: "ok",
@@ -2650,7 +2763,7 @@ function Golden() {
       onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to create the baseline") }),
     }),
     emptyGolden = useMutation({
-      mutationFn: () => postJson("golden-sources/from-scratch", { name, display_name: name }),
+      mutationFn: () => postJson("golden-sources/from-scratch", { name, display_name: name, comment: globalComment }),
       onSuccess: async (d) => {
         setNotice({ tone: "ok", text: `Empty Golden Source created · v${s((d.version as Row | undefined)?.version, "1")}` });
         await refresh();
@@ -2669,6 +2782,25 @@ function Golden() {
         await refresh();
       },
       onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to change the Golden Source") }),
+    }),
+    updateVersionComment = useMutation({
+      mutationFn: () => postJson(`golden-sources/${encoded}/version-comment`, { comment: versionComment }),
+      onSuccess: async (data) => {
+        setEditingVersionComment(false);
+        setNotice({ tone: "ok", text: `Golden version comment saved in v${s(data.version)}` });
+        await refresh();
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to save the Golden version comment") }),
+    }),
+    commentAssignment = useMutation({
+      mutationFn: () => postJson(`golden-sources/${encoded}/assignment-comment`, { ...commenting, comment: assignmentComment }),
+      onSuccess: async (data) => {
+        setCommenting(null);
+        setAssignmentComment("");
+        setNotice({ tone: "ok", text: `Comment saved in Golden v${s(data.version)}` });
+        await refresh();
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to save the expected-assignment comment") }),
     }),
     compareMutation = useMutation({
       mutationFn: () => getJson(`golden-sources/${encoded}/compare`),
@@ -2813,6 +2945,10 @@ function Golden() {
                   <input value={name} onChange={(e) => setName(e.target.value)} />
                 </label>
                 <label>
+                  Version comment
+                  <textarea value={globalComment} onChange={(e) => setGlobalComment(e.target.value)} placeholder="Why this expected version exists" />
+                </label>
+                <label>
                   Collected state to adopt
                   <select value={sid} onChange={(e) => setSid(e.target.value)}>
                     {snapshots.map((r) => (
@@ -2848,6 +2984,10 @@ function Golden() {
                 Golden Source name
                 <input value={name} onChange={(e) => setName(e.target.value)} />
               </label>
+              <label>
+                Version comment
+                <textarea value={globalComment} onChange={(e) => setGlobalComment(e.target.value)} placeholder="Why this expected version exists" />
+              </label>
               <button className="button primary" disabled={!name.trim() || emptyGolden.isPending} onClick={() => emptyGolden.mutate()}>
                 Create empty Golden Source
               </button>
@@ -2865,7 +3005,8 @@ function Golden() {
             <p className="muted">
               {content.data ? goldenOrigin(content.data as Row) : "Loading…"}
               {covered.length ? ` · covers ${covered.join(", ")}` : ""}
-              {content.data?.comment ? ` · ${s(content.data.comment)}` : ""}
+              {content.data?.comment ? ` · ${s(content.data.comment)}` : " · No version comment"}
+              <button className="link-button" onClick={() => { setVersionComment(s(content.data?.comment, "")); setEditingVersionComment(true); }}>Edit version comment</button>
             </p>
             <div className="golden-metrics">
               <div><strong>{s(content.data?.assignment_count, "0")}</strong><span>Expected assignments</span></div>
@@ -2946,8 +3087,8 @@ function Golden() {
                       target: r.access_target,
                     })}
                   </Sub>,
-                  targetText(r.access_target) || "—",
-                  s(r.access_permission),
+                  contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "Unknown",
+                  contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "Not provided",
                   s(r.access_owner),
                   s(r.access_provider),
                   <button className="link-button" onClick={() => setHolders(r)}>
@@ -2972,13 +3113,13 @@ function Golden() {
                 </button>
               </Filter>
               <Table
-                cols={["Identity", "Access", "What it allows", "Application", "Permission", "Source", ""]}
+                cols={["Identity", "Access", "Application", "Permission", "Golden comment", "Source", ""]}
                 fields={[
                   "identity_display_name",
                   "access_display_name",
-                  "access_description",
-                  "access_target",
-                  "access_permission",
+                  "business_context",
+                  "business_context",
+                  "golden_comment",
                   "access_provider",
                   null,
                 ]}
@@ -2988,19 +3129,13 @@ function Golden() {
                 rows={expected.map((r) => [
                   s(r.identity_display_name, s(r.identity_identifier)),
                   s(r.access_display_name, s(r.access_name)),
-                  <Sub>
-                    {describeAccess({
-                      description: r.access_description,
-                      permission: r.access_permission,
-                      target: r.access_target,
-                    })}
-                  </Sub>,
-                  targetText(r.access_target) || "—",
-                  s(r.access_permission),
-                  s(r.access_provider),
-                  <button className="link-button" onClick={() => setRemoving(r)}>
-                    Remove
+                  contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "Unknown",
+                  contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "Not provided",
+                  <button className="link-button" onClick={() => { setCommenting(r); setAssignmentComment(s(r.golden_comment, "")); }}>
+                    {s(r.golden_comment, "Add comment")}
                   </button>,
+                  s(r.access_provider),
+                  <button className="link-button" onClick={() => setRemoving(r)}>Remove</button>,
                 ])}
               />
               <Pager
@@ -3151,6 +3286,9 @@ function Golden() {
             {s(holders.access_permission, "") ? ` · ${s(holders.access_permission)}` : ""}
             {s(holders.access_owner, "") ? ` · owner ${s(holders.access_owner)}` : ""}
           </p>
+          <h4>BUSINESS CONTEXT</h4>
+          <BusinessContext context={holders.business_context} />
+          <AccessDetail access={{ ...holders, provider: holders.access_provider, name: holders.access_name, id: holders.access_id, permission: { identifier: holders.access_permission } }} />
           <h4>EXPECTED HOLDERS</h4>
           <Table
             cols={["Identity", "Source", ""]}
@@ -3174,6 +3312,24 @@ function Golden() {
               </button>,
             ])}
           />
+        </Drawer>
+      )}
+      {editingVersionComment && (
+        <Drawer title="Golden version comment" close={() => setEditingVersionComment(false)}>
+          <p className="muted">Explain this expected version. Saving creates a new immutable version and keeps its assignments and assignment comments.</p>
+          <label>Version comment<textarea value={versionComment} onChange={(event) => setVersionComment(event.target.value)} /></label>
+          <button className="button primary" disabled={updateVersionComment.isPending} onClick={() => updateVersionComment.mutate()}>Save in new version</button>
+        </Drawer>
+      )}
+      {commenting && (
+        <Drawer title="Expected-assignment comment" close={() => setCommenting(null)}>
+          <p><strong>{s(commenting.identity_display_name, s(commenting.identity_identifier))}</strong> → {s(commenting.access_display_name, s(commenting.access_name))}</p>
+          <p className="muted">Explain why this identity should have this access. Saving creates a new immutable Golden version.</p>
+          <label>
+            Golden comment
+            <textarea value={assignmentComment} onChange={(event) => setAssignmentComment(event.target.value)} />
+          </label>
+          <button className="button primary" disabled={commentAssignment.isPending} onClick={() => commentAssignment.mutate()}>Save in new version</button>
         </Drawer>
       )}
       {adding && (
@@ -3260,7 +3416,80 @@ function Golden() {
     </>
   );
 }
-function Sources() {
+function SourceBrowser() {
+  const { provider = "" } = useParams(),
+    [kind, setKind] = useState("group"),
+    [search, setSearch] = useState(""),
+    [offset, setOffset] = useState(0),
+    [selected, setSelected] = useState<Row | null>(null),
+    query = useQuery({
+      queryKey: ["source-browser", provider, kind, search, offset],
+      queryFn: () => getJson(`system/sources/${encodeURIComponent(provider)}/inspect/objects`, { kind, search, limit: 25, offset }),
+    }),
+    detail = useQuery({
+      queryKey: ["source-object", provider, kind, selected?.identifier],
+      queryFn: () => getJson(`system/sources/${encodeURIComponent(provider)}/inspect/objects/${kind}/${encodeURIComponent(s(selected?.identifier, ""))}`),
+      enabled: Boolean(selected?.identifier),
+    }),
+    discovery = useQuery({
+      queryKey: ["source-attributes", provider, kind],
+      queryFn: () => getJson(`system/sources/${encodeURIComponent(provider)}/inspect/attributes`, { kind }),
+    }),
+    items = arr(query.data?.items),
+    attributes = ((detail.data?.attributes ?? {}) as Row);
+  return (
+    <>
+      <Head title={`Browse source · ${provider}`}>
+        <NavLink className="button subtle" to="/sources"><ArrowLeft size={15} /> Sources</NavLink>
+      </Head>
+      <p className="muted">Read-only, bounded inspection. EARE cannot create, edit, rename or delete directory objects here.</p>
+      <div className="filterbar">
+        <select value={kind} onChange={(event) => { setKind(event.target.value); setOffset(0); setSelected(null); }}>
+          <option value="group">Groups / access objects</option>
+          <option value="user">Users / identities</option>
+        </select>
+        <input type="search" placeholder="Search this source" value={search} onChange={(event) => { setSearch(event.target.value); setOffset(0); }} />
+      </div>
+      <div className="browser-layout">
+        <section className="panel">
+          <h2>{kind === "group" ? "Groups" : "Users"}</h2>
+          {query.isLoading ? <p>Loading…</p> : items.length ? items.map((item) => (
+            <button className="browser-row" key={s(item.identifier)} onClick={() => setSelected(item)}>
+              <strong>{s(item.display_name)}</strong><small>{s(item.technical_identifier)}</small>
+            </button>
+          )) : <p className="muted">No matching objects.</p>}
+          {query.isError ? <p className="form-error">{s(query.error)}</p> : null}
+          <div className="button-row">
+            <button disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous</button>
+            <button disabled={!query.data?.has_more} onClick={() => setOffset(offset + 25)}>Next</button>
+          </div>
+        </section>
+        <section className="panel">
+          <h2>{selected ? s(selected.display_name) : "Select an object"}</h2>
+          {detail.isLoading ? <p>Loading attributes…</p> : selected ? (
+            <div className="attribute-list">
+              {Object.entries(attributes).map(([name, values]) => (
+                <div key={name}><strong>{name}</strong><span>{vals(values).join(", ")}</span></div>
+              ))}
+            </div>
+          ) : <p className="muted">Safe source attributes will appear here.</p>}
+          {detail.isError ? <p className="form-error">{s(detail.error)}</p> : null}
+        </section>
+      </div>
+      <section className="panel">
+        <h2>Available safe attributes</h2>
+        <p className="muted">Coverage is calculated from a bounded sample, not from a full-directory scan.</p>
+        <div className="attribute-list">
+          {Object.entries((discovery.data?.attributes ?? {}) as Row).map(([name, info]) => {
+            const row = info as Row;
+            return <div key={name}><strong>{name}</strong><span>{s(row.coverage, "0")}% populated · {vals(row.samples).join(", ") || "No sample value"}</span></div>;
+          })}
+        </div>
+      </section>
+    </>
+  );
+}
+function Sources({ principal }: { principal: Principal }) {
   const toast = useToast(),
     q = useQuery({ queryKey: ["providers"], queryFn: () => getPage("providers", { limit: 100 }) }),
     cfg = useQuery({ queryKey: ["source-configs"], queryFn: () => getJson("system/sources") }),
@@ -3268,6 +3497,7 @@ function Sources() {
     [kind, setKind] = useState("preview"),
     [error, setError] = useState(""),
     [editing, setEditing] = useState<Row | null>(null),
+    [testResult, setTestResult] = useState<Row | null>(null),
     start = useMutation({
       mutationFn: (x: { p: string; a: string }) => postJson(`sources/${x.p}/${x.a}`),
       onSuccess: (d, variables) => {
@@ -3294,6 +3524,7 @@ function Sources() {
       mutationFn: (body: Row) => postJson("system/sources/test", body),
       onSuccess: (d) => {
         setError("");
+        setTestResult(d);
         toast("ok", s(d.message, "Connection test succeeded"));
       },
       onError: (e) => {
@@ -3306,6 +3537,12 @@ function Sources() {
       queryFn: () => getJson(`jobs/${job}`),
       enabled: !!job,
       refetchInterval: 1500 as const,
+    }),
+    sourceFields = useQuery({
+      queryKey: ["source-field-picker", editing?.provider],
+      queryFn: () => getJson(`system/sources/${encodeURIComponent(s(editing?.provider, ""))}/inspect/attributes`, { kind: "group" }),
+      enabled: principal.role === "ADMIN" && Boolean(editing?.provider) && arr(cfg.data?.sources).some((row) => s(row.provider) === s(editing?.provider)),
+      retry: false,
     }),
     configs = arr(cfg.data?.sources),
     observed = arr(q.data?.items),
@@ -3323,14 +3560,22 @@ function Sources() {
     connection: { server: "" },
     collection: { timeout: 300, allow_partial: false },
     credentials: { username_env: "", password_env: "" },
+    business_mapping: Object.fromEntries(["display_name", "description", "application", "business_permission", "resource", "owner"].map((field) => [field, { mode: "default" }])),
   });
   const edit = (source?: Row) => {
     setError("");
+    setTestResult(null);
     setEditing(source ? JSON.parse(JSON.stringify(source)) : blank());
   };
   const update = (key: string, value: unknown) => setEditing((x) => (x ? { ...x, [key]: value } : x));
   const updateNested = (section: string, key: string, value: unknown) =>
     setEditing((x) => (x ? { ...x, [section]: { ...((x[section] as Row) || {}), [key]: value } } : x));
+  const updateMapping = (field: string, key: string, value: unknown) =>
+    setEditing((current) => {
+      if (!current) return current;
+      const mapping = (current.business_mapping ?? {}) as Row;
+      return { ...current, business_mapping: { ...mapping, [field]: { ...((mapping[field] ?? {}) as Row), [key]: value } } };
+    });
   return (
     <>
       <Head title="Sources & IdPs">
@@ -3376,6 +3621,7 @@ function Sources() {
               </div>
             </div>
             <div className="source-foot">
+              {principal.role === "ADMIN" ? <NavLink className="button subtle" to={`/sources/${encodeURIComponent(s(r.provider))}/browse`}>Browse source</NavLink> : null}
               <button
                 className="button subtle"
                 onClick={() => edit(configs.find((c) => s(c.provider) === s(r.provider)))}
@@ -3486,6 +3732,41 @@ function Sources() {
                 </label>
               </>
             )}
+            <h4>BUSINESS MAPPING</h4>
+            <p className="field-note">Technical identifiers and group membership remain connector-controlled.</p>
+            {[
+              ["Display name", "display_name"],
+              ["Description", "description"],
+              ["Application", "application"],
+              ["Permission", "business_permission"],
+              ["Resource", "resource"],
+              ["Owner", "owner"],
+            ].map(([label, field]) => {
+              const entry = ((((editing.business_mapping ?? {}) as Row)[field] ?? { mode: "default" }) as Row);
+              const mode = s(entry.mode, "default");
+              return (
+                <div className="mapping-row" key={field}>
+                  <label>{label}
+                    <select value={mode} onChange={(event) => updateMapping(field, "mode", event.target.value)}>
+                      <option value="default">Default</option>
+                      <option value="attribute">Source field</option>
+                      <option value="static">Static value</option>
+                      <option value="none">Not configured</option>
+                    </select>
+                  </label>
+                  {mode === "attribute" ? (
+                    <label>Source field
+                      <input list="safe-source-fields" value={s(entry.attribute, "")} onChange={(event) => updateMapping(field, "attribute", event.target.value)} />
+                    </label>
+                  ) : mode === "static" ? (
+                    <label>Static value<input value={s(entry.value, "")} onChange={(event) => updateMapping(field, "value", event.target.value)} /></label>
+                  ) : null}
+                </div>
+              );
+            })}
+            <datalist id="safe-source-fields">
+              {Object.keys((sourceFields.data?.attributes ?? {}) as Row).map((name) => <option value={name} key={name} />)}
+            </datalist>
             <h4>SECRET REFERENCES</h4>
             <label>
               Username environment variable
@@ -3503,6 +3784,14 @@ function Sources() {
                 onChange={(e) => updateNested("credentials", "password_env", e.target.value || undefined)}
               />
             </label>
+            {testResult ? (
+              <section className="mapping-diagnostics">
+                <p className="form-success">Connection: {s((testResult.connection as Row | undefined)?.status, "success")}</p>
+                {arr((testResult.mapping as Row | undefined)?.diagnostics).map((row) => (
+                  <p key={s(row.field)}><strong>{s(row.field).replaceAll("_", " ")}</strong> · {s(row.attribute, s(row.mode))} · {s(row.coverage, "—")}% · <Status v={row.status} /></p>
+                ))}
+              </section>
+            ) : null}
             <div className="button-row">
               <button
                 type="button"
