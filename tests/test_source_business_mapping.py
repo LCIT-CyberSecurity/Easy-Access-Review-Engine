@@ -183,3 +183,45 @@ def test_connector_capabilities_are_explicit_and_mapping_provenance_is_factual()
     diagnostic = next(row for row in rows if row["field"] == "business_permission")
     assert diagnostic["mapping_mode"] == "configured"
     assert diagnostic["coverage"] == 50
+
+
+def test_default_diagnostics_choose_first_populated_candidate_without_reordering() -> None:
+    rows = mapping_diagnostics(
+        "active_directory",
+        None,
+        {
+            "Name": {"coverage": 0, "samples": []},
+            "SamAccountName": {"coverage": 100, "samples": ["alice"]},
+        },
+    )
+    display_name = next(row for row in rows if row["field"] == "display_name")
+    assert display_name["attribute"] == "SamAccountName"
+    assert display_name["coverage"] == 100
+
+    preferred = mapping_diagnostics(
+        "active_directory",
+        None,
+        {"Name": {"coverage": 90}, "SamAccountName": {"coverage": 100}},
+    )
+    assert next(row for row in preferred if row["field"] == "display_name")["attribute"] == "Name"
+
+    empty = mapping_diagnostics(
+        "active_directory",
+        None,
+        {"Name": {"coverage": 0}, "SamAccountName": {"coverage": 0}},
+    )
+    empty_display = next(row for row in empty if row["field"] == "display_name")
+    assert empty_display["attribute"] == "Name"
+    assert empty_display["coverage"] == 0
+
+
+def test_explicit_attribute_diagnostics_never_fall_back_to_default() -> None:
+    rows = mapping_diagnostics(
+        "active_directory",
+        {"business_mapping": {"display_name": {"mode": "attribute", "attribute": "extensionAttribute6"}}},
+        {"Name": {"coverage": 100}, "extensionAttribute6": {"coverage": 0}},
+    )
+    display_name = next(row for row in rows if row["field"] == "display_name")
+    assert display_name["attribute"] == "extensionAttribute6"
+    assert display_name["coverage"] == 0
+    assert display_name["status"] == "warning"

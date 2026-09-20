@@ -270,7 +270,7 @@ flowchart LR
 
 ## Persistence, API and read models
 
-The MVP keeps the Repository's SQLite JSON-payload style. Two tables are added:
+The MVP keeps the Repository's SQLite JSON-payload style. Three sidecar tables are added:
 
 | Table | Key | Contents |
 | --- | --- | --- |
@@ -302,7 +302,9 @@ flowchart LR
     ENRICH[access_enrichments] --> GREAD
     ANNOT[golden_assignment_annotations] --> GREAD
     SNAP[Campaign Snapshot] --> RREAD[Review read model]
-    ENRICH --> RREAD
+    CAPTURE[Campaign opened] -->|copies once per Access| FROZEN[campaign_access_contexts]
+    ENRICH --> CAPTURE
+    FROZEN --> RREAD
     ANNOT --> RREAD
     DEC[Latest Decision and comment] --> RREAD
     GREAD --> UI[Semantic UI]

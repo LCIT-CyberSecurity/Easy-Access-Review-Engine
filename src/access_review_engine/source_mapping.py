@@ -271,7 +271,11 @@ def mapping_diagnostics(
             if mode == "attribute"
             else _DEFAULT_ATTRIBUTES[kind][field]
         )
-        selected = next((by_name[item.casefold()] for item in candidates if item.casefold() in by_name), None)
+        available = [by_name[item.casefold()] for item in candidates if item.casefold() in by_name]
+        selected = next(
+            (candidate for candidate in available if int(candidate[1].get("coverage", 0)) > 0),
+            available[0] if available else None,
+        )
         if selected is None:
             rows.append({
                 "field": field,

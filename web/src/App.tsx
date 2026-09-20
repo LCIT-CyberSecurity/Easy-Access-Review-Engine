@@ -3492,6 +3492,13 @@ function SourceBrowser() {
     </>
   );
 }
+export function sourceSupportsAttributeMapping(capabilities: unknown, connectorType: unknown): boolean {
+  const declared = capabilities as Row | null | undefined;
+  return typeof declared?.attribute_mapping === "boolean"
+    ? declared.attribute_mapping
+    : ["active_directory", "openldap"].includes(s(connectorType, "active_directory"));
+}
+
 function Sources({ principal }: { principal: Principal }) {
   const toast = useToast(),
     q = useQuery({ queryKey: ["providers"], queryFn: () => getPage("providers", { limit: 100 }) }),
@@ -3579,6 +3586,7 @@ function Sources({ principal }: { principal: Principal }) {
       const mapping = (current.business_mapping ?? {}) as Row;
       return { ...current, business_mapping: { ...mapping, [field]: { ...((mapping[field] ?? {}) as Row), [key]: value } } };
     });
+  const supportsAttributeMapping = sourceSupportsAttributeMapping(editing?.capabilities, editing?.type);
   return (
     <>
       <Head title="Sources & IdPs">
@@ -3735,16 +3743,17 @@ function Sources({ principal }: { principal: Principal }) {
                 </label>
               </>
             )}
-            <h4>BUSINESS MAPPING</h4>
-            <p className="field-note">Technical identifiers and group membership remain connector-controlled. Suggestions are bounded; safe custom attribute names can also be typed and are validated when saved.</p>
-            {[
+            {supportsAttributeMapping ? <>
+              <h4>BUSINESS MAPPING</h4>
+              <p className="field-note">Technical identifiers and group membership remain connector-controlled. Suggestions are bounded; safe custom attribute names can also be typed and are validated when saved.</p>
+              {[
               ["Display name", "display_name"],
               ["Description", "description"],
               ["Application", "application"],
               ["Permission", "business_permission"],
               ["Resource", "resource"],
               ["Owner", "owner"],
-            ].map(([label, field]) => {
+              ].map(([label, field]) => {
               const entry = ((((editing.business_mapping ?? {}) as Row)[field] ?? { mode: "default" }) as Row);
               const mode = s(entry.mode, "default");
               return (
@@ -3766,10 +3775,11 @@ function Sources({ principal }: { principal: Principal }) {
                   ) : null}
                 </div>
               );
-            })}
-            <datalist id="safe-source-fields">
-              {Object.entries((sourceFields.data?.attributes ?? {}) as Row).filter(([, info]) => (info as Row).mappable !== false).map(([name]) => <option value={name} key={name} />)}
-            </datalist>
+              })}
+              <datalist id="safe-source-fields">
+                {Object.entries((sourceFields.data?.attributes ?? {}) as Row).filter(([, info]) => (info as Row).mappable !== false).map(([name]) => <option value={name} key={name} />)}
+              </datalist>
+            </> : null}
             <h4>SECRET REFERENCES</h4>
             <label>
               Username environment variable
