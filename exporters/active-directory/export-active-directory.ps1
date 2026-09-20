@@ -2,6 +2,7 @@ param(
   [string]$ProviderName,
   [string]$Output,
   [string]$Server,
+  [string]$AdditionalGroupProperties = "",
   [int]$OperationTimeoutSeconds = 300,
   [switch]$AllowPartial,
   [switch]$CheckOnly
@@ -201,6 +202,7 @@ function Invoke-ActiveDirectoryExport {
     [Parameter(Mandatory=$true)][string]$ProviderName,
     [Parameter(Mandatory=$true)][string]$Output,
     [string]$Server,
+    [string]$AdditionalGroupProperties = "",
     [int]$OperationTimeoutSeconds = 300,
     [switch]$AllowPartial,
     [switch]$CheckOnly
@@ -256,7 +258,25 @@ try {
     @{Name='ServicePrincipalName';Expression={ ConvertTo-AdCsvMultiValue $_.ServicePrincipalName }} |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/users.csv"
 
-  $groupProps = @('SamAccountName','Name','SID','DistinguishedName','Description','GroupScope','GroupCategory')
+  $extraGroupProps = @()
+  $forbiddenGroupProps = @(
+    'unicodepwd','supplementalcredentials','userpassword','authpassword','ntpwdhistory',
+    'dbcspwd','passwordhash','accesstoken','refreshtoken','clientsecret','apikey',
+    'privatekey','credentials','sid','objectsid','objectguid','primarygroupid',
+    'distinguishedname','dn','entryuuid','member','uniquemember','memberuid',
+    'samaccountname','userprincipalname','uid'
+  )
+  foreach ($property in @($AdditionalGroupProperties -split ',')) {
+    $property = $property.Trim()
+    if (-not $property) { continue }
+    if ($property -notmatch '^[A-Za-z][A-Za-z0-9-]{0,63}$') { throw "Invalid additional AD group property" }
+    $normalized = ($property -replace '[^A-Za-z0-9]', '').ToLowerInvariant()
+    if ($forbiddenGroupProps -contains $normalized -or $normalized -match '(password|token|secret|privatekey|credential)') {
+      throw "Forbidden additional AD group property"
+    }
+    $extraGroupProps += $property
+  }
+  $groupProps = @('SamAccountName','Name','SID','DistinguishedName','Description','GroupScope','GroupCategory','managedBy') + $extraGroupProps | Select-Object -Unique
   try {
     $groups = Invoke-AdCollectorOperation -Operation 'Get-ADGroup' -OperationTimeoutSeconds $OperationTimeoutSeconds -ScriptBlock {
       param($OperationArgs)
@@ -268,7 +288,7 @@ try {
     $groups = @()
     $errors += New-CollectionError -ObjectType 'group' -ObjectIdentifier '*' -ObjectSID $null -Operation 'Get-ADGroup -Filter *' -ErrorRecord $_
   }
-  $groups | Select-Object SamAccountName,Name,SID,DistinguishedName,Description,GroupScope,GroupCategory |
+  $groups | Select-Object -Property $groupProps |
     Export-Csv -NoTypeInformation -Encoding UTF8 "$tmp/groups.csv"
 
   $svcProps = @('SamAccountName','SID','DistinguishedName','Enabled','Description','ServicePrincipalName','ObjectClass','ObjectGUID','Name','DisplayName','PrimaryGroupID')
@@ -370,4 +390,4 @@ finally {
 if ($MyInvocation.InvocationName -eq '.') { return }
 if (-not $ProviderName) { throw "ProviderName is required" }
 if (-not $Output) { throw "Output is required" }
-Invoke-ActiveDirectoryExport -ProviderName $ProviderName -Output $Output -Server $Server -OperationTimeoutSeconds $OperationTimeoutSeconds -AllowPartial:$AllowPartial -CheckOnly:$CheckOnly
+Invoke-ActiveDirectoryExport -ProviderName $ProviderName -Output $Output -Server $Server -AdditionalGroupProperties $AdditionalGroupProperties -OperationTimeoutSeconds $OperationTimeoutSeconds -AllowPartial:$AllowPartial -CheckOnly:$CheckOnly

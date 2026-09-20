@@ -23,6 +23,10 @@ from access_review_engine.domain import (
     ProviderType,
     stable_checksum,
 )
+from access_review_engine.source_mapping import (
+    map_access_business_context,
+    required_mapping_attributes,
+)
 from access_review_engine.importers.ad import ImportResult
 
 REQUIRED_OPENLDAP_FILES = {"manifest.yaml", "directory.ldif"}
@@ -43,6 +47,7 @@ USED_LDIF_ATTRIBUTES = {
     "cn",
     "mail",
     "description",
+    "owner",
     "member",
     "uniquemember",
     "memberuid",
@@ -58,10 +63,14 @@ DEFAULT_OPENLDAP_FILTER = (
 )
 
 
-def import_openldap_ldif(path: str | Path, provider_name: str = "openldap") -> ImportResult:
+def import_openldap_ldif(
+    path: str | Path,
+    provider_name: str = "openldap",
+    source_config: dict[str, object] | None = None,
+) -> ImportResult:
     text = Path(path).read_text(encoding="utf-8-sig")
     return _import_openldap_entries(
-        _parse_ldif(text),
+        _parse_ldif(text, required_mapping_attributes(source_config, "openldap")),
         provider_name=provider_name,
         source_type="openldap_ldif",
         completeness=str(Completeness.UNKNOWN),
@@ -69,6 +78,7 @@ def import_openldap_ldif(path: str | Path, provider_name: str = "openldap") -> I
         trusted_export=False,
         manifest=None,
         collection_errors=[],
+        source_config=source_config,
     )
 
 
@@ -78,6 +88,7 @@ def import_openldap_zip(
     max_file_bytes: int = DEFAULT_OPENLDAP_FILE_BYTES,
     max_ldif_file_bytes: int = DEFAULT_OPENLDAP_LDIF_BYTES,
     max_uncompressed_bytes: int = DEFAULT_OPENLDAP_UNCOMPRESSED_BYTES,
+    source_config: dict[str, object] | None = None,
 ) -> ImportResult:
     archive = Path(path)
     if archive.stat().st_size > max_size_bytes:
@@ -105,7 +116,10 @@ def import_openldap_zip(
             provider_name = manifest.get("provider") or manifest.get("provider_name")
             if not provider_name:
                 raise ValueError("manifest.yaml must define provider")
-            entries = _parse_ldif(zf.read("directory.ldif").decode("utf-8-sig"))
+            entries = _parse_ldif(
+                zf.read("directory.ldif").decode("utf-8-sig"),
+                required_mapping_attributes(source_config, "openldap"),
+            )
             collection_errors = _read_collection_errors(zf.read("collection-errors.csv").decode("utf-8-sig")) if "collection-errors.csv" in unique_names else []
     except BadZipFile as exc:
         raise ValueError("Invalid ZIP archive") from exc
@@ -120,6 +134,7 @@ def import_openldap_zip(
         trusted_export=True,
         manifest=manifest,
         collection_errors=collection_errors,
+        source_config=source_config,
     )
 
 
@@ -153,6 +168,7 @@ def _import_openldap_entries(
     trusted_export: bool,
     manifest: dict[str, object] | None,
     collection_errors: list[dict[str, str]],
+    source_config: dict[str, object] | None,
 ) -> ImportResult:
     provider = Provider(name=provider_name, type=ProviderType.OPENLDAP, display_name=provider_name)
     by_dn = {_canonical_dn(_first(entry, "dn") or ""): entry for entry in entries if _first(entry, "dn")}
@@ -189,15 +205,16 @@ def _import_openldap_entries(
         cn = _first(group, "cn") or _first(group, "dn") or group_identity.identifier
         description = _first(group, "description")
         access_name = f"{group_identity.identifier}:member"
+        access = Access(
+            name=access_name,
+            provider=provider.name,
+            control_object=ControlObject("group", group_identity.identifier, group_identity.native_id, cn, description),
+            permission=Permission("member", "Member"),
+            display_name=f"{cn}:member",
+            description=description,
+        )
         accesses.append(
-            Access(
-                name=access_name,
-                provider=provider.name,
-                control_object=ControlObject("group", group_identity.identifier, group_identity.native_id, cn, description),
-                permission=Permission("member", "Member"),
-                display_name=f"{cn}:member",
-                description=description,
-            )
+            map_access_business_context(access, "openldap", group, source_config)
         )
         for attr in ("member", "uniquemember"):
             for member_value in group.get(attr, []):
@@ -512,7 +529,11 @@ def _read_collection_errors(text: str) -> list[dict[str, str]]:
     return rows
 
 
-def _parse_ldif(text: str) -> list[dict[str, list[str]]]:
+def _parse_ldif(
+    text: str,
+    extra_attributes: tuple[str, ...] = (),
+) -> list[dict[str, list[str]]]:
+    allowed_attributes = USED_LDIF_ATTRIBUTES | {item.casefold() for item in extra_attributes}
     entries: list[dict[str, list[str]]] = []
     current: dict[str, list[str]] = {}
     last_key: str | None = None
@@ -532,7 +553,7 @@ def _parse_ldif(text: str) -> list[dict[str, list[str]]]:
         separator = "::" if "::" in line and line.index("::") < line.index(":") + 2 else ":"
         key, value = line.split(separator, 1)
         attr = _attr_key(key)
-        if attr not in USED_LDIF_ATTRIBUTES:
+        if attr not in allowed_attributes:
             last_key = None
             continue
         if separator == "::":

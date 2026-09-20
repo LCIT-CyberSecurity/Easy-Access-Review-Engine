@@ -5,7 +5,7 @@ ENV_FILE="${ENV_FILE:-.env}"
 if [[ -f "$ENV_FILE" ]]; then
   # The dotenv file supplies defaults; explicit process environment values win.
   declare -A provided_environment=()
-  for variable_name in LDAP_URI BASE_DN PROVIDER_NAME BIND_DN LDAP_PASSWORD LDAP_PASSWORD_FILE LDAP_CA_CERT SEARCH_SCOPE LDAP_FILTER START_TLS ALLOW_ANONYMOUS ALLOW_PARTIAL PAGE_SIZE CONNECTION_TIMEOUT_SECONDS SEARCH_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS CHECK_ONLY OUTPUT; do
+  for variable_name in LDAP_URI BASE_DN PROVIDER_NAME BIND_DN LDAP_PASSWORD LDAP_PASSWORD_FILE LDAP_CA_CERT SEARCH_SCOPE LDAP_FILTER START_TLS ALLOW_ANONYMOUS ALLOW_PARTIAL PAGE_SIZE CONNECTION_TIMEOUT_SECONDS SEARCH_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS CHECK_ONLY EXTRA_GROUP_ATTRIBUTES OUTPUT; do
     if [[ ${!variable_name+x} ]]; then
       provided_environment["$variable_name"]="${!variable_name}"
     fi
@@ -35,12 +35,35 @@ CONNECTION_TIMEOUT_SECONDS="${CONNECTION_TIMEOUT_SECONDS:-10}"
 SEARCH_TIMEOUT_SECONDS="${SEARCH_TIMEOUT_SECONDS:-120}"
 COMMAND_TIMEOUT_SECONDS="${COMMAND_TIMEOUT_SECONDS:-180}"
 CHECK_ONLY="${CHECK_ONLY:-0}"
+EXTRA_GROUP_ATTRIBUTES="${EXTRA_GROUP_ATTRIBUTES:-}"
 OUTPUT="${1:-openldap-export.zip}"
 if [[ "$OUTPUT" != /* ]]; then
   OUTPUT="$PWD/$OUTPUT"
 fi
 COLLECTOR_VERSION="1"
-LDIF_ATTRIBUTES=(objectClass entryUUID uid cn mail description member uniqueMember memberUid pwdMinLength pwdInHistory pwdMinAge pwdMaxAge pwdMaxFailure pwdFailureCountInterval pwdLockout pwdLockoutDuration pwdMustChange pwdAllowUserChange pwdSafeModify pwdPolicySubentry)
+LDIF_ATTRIBUTES=(objectClass entryUUID uid cn mail description owner member uniqueMember memberUid pwdMinLength pwdInHistory pwdMinAge pwdMaxAge pwdMaxFailure pwdFailureCountInterval pwdLockout pwdLockoutDuration pwdMustChange pwdAllowUserChange pwdSafeModify pwdPolicySubentry)
+
+IFS=',' read -r -a configured_extra_attributes <<< "$EXTRA_GROUP_ATTRIBUTES"
+for attribute in "${configured_extra_attributes[@]}"; do
+  [[ -z "$attribute" ]] && continue
+  if ! [[ "$attribute" =~ ^[A-Za-z][A-Za-z0-9-]{0,63}$ ]]; then
+    echo "Invalid additional OpenLDAP attribute" >&2
+    exit 2
+  fi
+  normalized="${attribute,,}"
+  normalized="${normalized//-/}"
+  case "$normalized" in
+    unicodepwd|supplementalcredentials|userpassword|authpassword|ntpwdhistory|dbcspwd|passwordhash|accesstoken|refreshtoken|clientsecret|apikey|privatekey|credentials|sid|objectsid|objectguid|primarygroupid|distinguishedname|dn|entryuuid|member|uniquemember|memberuid|samaccountname|userprincipalname|uid)
+      echo "Forbidden additional OpenLDAP attribute" >&2
+      exit 2
+      ;;
+  esac
+  if [[ "$normalized" =~ (password|token|secret|privatekey|credential) ]]; then
+    echo "Forbidden additional OpenLDAP attribute" >&2
+    exit 2
+  fi
+  LDIF_ATTRIBUTES+=("$attribute")
+done
 
 for value_name in PAGE_SIZE CONNECTION_TIMEOUT_SECONDS SEARCH_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS; do
   value="${!value_name}"

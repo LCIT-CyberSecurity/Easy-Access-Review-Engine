@@ -27,6 +27,7 @@ from access_review_engine.domain import (
     ProviderType,
     stable_checksum,
 )
+from access_review_engine.source_mapping import map_access_business_context
 
 REQUIRED_AD_FILES = {"manifest.yaml", "users.csv", "groups.csv", "memberships.csv"}
 OPTIONAL_AD_FILES = {"service_accounts.csv", "computers.csv", "collection-errors.csv", "authentication-posture.json"}
@@ -72,6 +73,7 @@ def import_ad_zip(
     max_memberships_file_bytes: int = DEFAULT_AD_MEMBERSHIPS_FILE_BYTES,
     max_uncompressed_bytes: int = DEFAULT_AD_UNCOMPRESSED_BYTES,
     classification_rules: dict[str, object] | None = None,
+    source_config: dict[str, object] | None = None,
 ) -> ImportResult:
     archive = Path(path)
     if archive.stat().st_size > max_size_bytes:
@@ -129,6 +131,8 @@ def import_ad_zip(
     identities.extend(_computer_identity(provider.name, row) for row in computers)
     identities.extend(_group_identity(provider.name, row) for row in groups)
 
+    group_row_by_sid = {row.get("SID", ""): row for row in groups if row.get("SID")}
+    group_row_by_name = {row.get("SamAccountName", ""): row for row in groups if row.get("SamAccountName")}
     identity_by_sid = {identity.native_id: identity for identity in identities if identity.native_id}
     global_by_sid = _global_identity_index([*(known_identities or []), *identities])
     group_by_sid = {identity.native_id: identity for identity in identities if identity.type == IdentityType.GROUP}
@@ -155,7 +159,12 @@ def import_ad_zip(
             continue
         access_name = f"{group.identifier}:member"
         if access_name not in seen_accesses:
-            accesses.append(_group_access(provider.name, group))
+            group_row = (
+                group_row_by_sid.get(group.native_id or "")
+                or group_row_by_name.get(group.identifier)
+                or {}
+            )
+            accesses.append(_group_access(provider.name, group, group_row, source_config))
             seen_accesses.add(access_name)
         member_provider, member_identifier, raw_flags = _resolve_member(provider.name, row, identity_by_sid, global_by_sid)
         if not member_identifier:
@@ -451,8 +460,13 @@ def _group_identity(provider: str, row: dict[str, str]) -> Identity:
     )
 
 
-def _group_access(provider: str, group: Identity) -> Access:
-    return Access(
+def _group_access(
+    provider: str,
+    group: Identity,
+    attributes: dict[str, str],
+    source_config: dict[str, object] | None,
+) -> Access:
+    access = Access(
         name=f"{group.identifier}:member",
         provider=provider,
         control_object=ControlObject(
@@ -469,6 +483,7 @@ def _group_access(provider: str, group: Identity) -> Access:
         permission=Permission(identifier="member", display_name="Member"),
         description=group.description,
     )
+    return map_access_business_context(access, "active_directory", attributes, source_config)
 
 
 def _resolve_member(

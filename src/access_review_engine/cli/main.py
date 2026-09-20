@@ -352,12 +352,12 @@ def connector_command(a: argparse.Namespace) -> int:
                 with tempfile.TemporaryDirectory() as d:
                     artifact = Path(d) / output.name
                     run_checked(data, artifact)
-                    dry_import(artifact, a, str(name))
+                    dry_import(artifact, a, str(name), data)
             else:
                 run_checked(data, output)
                 print(f"{name} collected {output}")
                 if a.command == "sync":
-                    import_real(output, a, str(name))
+                    import_real(output, a, str(name), data)
         except (ConfigError, RunnerError, ValueError) as exc:
             failures += 1
             print(f"{name} FAILED {exc}", file=sys.stderr)
@@ -381,20 +381,22 @@ def import_command(a: argparse.Namespace) -> int:
         elif path.suffix.lower() in {".ldif", ".ldap"}: import_openldap_ldif(path)
         else: raise ValueError("Unsupported validation file type")
         print("valid"); return 0
+    config_path = connector_path(a.provider)
+    source_config = load_connector(a.provider, config_path) if config_path.is_file() else None
     if a.dry_run:
-        dry_import(Path(a.file), a, a.provider)
+        dry_import(Path(a.file), a, a.provider, source_config)
     else:
-        with repository(a.db) as repo: snapshot = import_file_to_repository(repo, a.file, provider_name=a.provider, classification_rules=load_classification_rules(a.classification_rules))
+        with repository(a.db) as repo: snapshot = import_file_to_repository(repo, a.file, provider_name=a.provider, classification_rules=load_classification_rules(a.classification_rules), source_config=source_config)
         print(f"imported provider={snapshot.providers[0].name if snapshot.providers else a.provider} snapshot={snapshot.id}")
     return 0
 
-def import_real(path: Path, a: argparse.Namespace, provider: str) -> None:
+def import_real(path: Path, a: argparse.Namespace, provider: str, source_config: dict[str, object] | None = None) -> None:
     with repository(a.db) as repo:
-        snapshot = import_file_to_repository(repo, path, provider_name=provider)
+        snapshot = import_file_to_repository(repo, path, provider_name=provider, source_config=source_config)
     print(f"imported provider={provider} snapshot={snapshot.id}")
 
-def dry_import(path: Path, a: argparse.Namespace, provider: str) -> None:
-    result = preview_import(a.db, path, provider=provider, classification_rules=getattr(a, "classification_rules", None))
+def dry_import(path: Path, a: argparse.Namespace, provider: str, source_config: dict[str, object] | None = None) -> None:
+    result = preview_import(a.db, path, provider=provider, classification_rules=getattr(a, "classification_rules", None), source_config=source_config)
     print(f"EARE DRY RUN {provider}")
     print(f"Changes: {json.dumps(result.tables, sort_keys=True)}")
     print(f"Objects: {json.dumps(result.objects, sort_keys=True)}")

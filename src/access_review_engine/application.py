@@ -25,6 +25,7 @@ from access_review_engine.importers.openldap import (
     import_openldap_zip,
 )
 from access_review_engine.services import create_snapshot, reconcile_identities
+from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
 from access_review_engine.storage import (
     Repository,
     hydrate_access,
@@ -42,6 +43,7 @@ def import_file_to_repository(
     provider_name: str = "openldap",
     golden_version: GoldenSourceVersion | None = None,
     classification_rules: dict[str, object] | None = None,
+    source_config: dict[str, object] | None = None,
 ):
     file_path = Path(path)
     known_identities = _load_identities(repo)
@@ -51,14 +53,15 @@ def import_file_to_repository(
             result = import_ad_zip(
                 file_path,
                 known_identities=known_identities,
+                source_config=source_config,
                 classification_rules=classification_rules,
             )
         elif source_type == "openldap":
-            result = import_openldap_zip(file_path)
+            result = import_openldap_zip(file_path, source_config=source_config)
         else:
             raise ValueError(f"Unsupported ZIP source_type: {source_type or 'missing'}")
     else:
-        result = import_openldap_ldif(file_path, provider_name)
+        result = import_openldap_ldif(file_path, provider_name, source_config=source_config)
     return persist_import_result(repo, result, golden_version=golden_version)
 
 
@@ -396,7 +399,18 @@ def _enrich_access(existing: Access, incoming: Access) -> Access:
             **incoming.control_object.metadata,
         }
     existing.display_name = incoming.display_name or existing.display_name
-    existing.description = incoming.description or existing.description
+    has_source_business_context = BUSINESS_CONTEXT_METADATA_KEY in incoming.metadata
+    if has_source_business_context:
+        existing.metadata[BUSINESS_CONTEXT_METADATA_KEY] = deepcopy(
+            incoming.metadata[BUSINESS_CONTEXT_METADATA_KEY]
+        )
+        # Directory mappings are refreshed as a complete observation. This also clears a
+        # previously mapped description/display name when the source field disappears.
+        existing.description = incoming.description
+        existing.display_name = incoming.display_name
+    else:
+        existing.description = incoming.description or existing.description
+        existing.display_name = incoming.display_name or existing.display_name
     existing.metadata = {**existing.metadata, **incoming.metadata}
     return existing
 

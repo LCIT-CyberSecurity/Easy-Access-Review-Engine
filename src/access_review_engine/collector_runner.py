@@ -4,6 +4,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from .config_loader import secret_environment
+from .source_mapping import required_mapping_attributes
 
 @dataclass
 class RunnerResult:
@@ -34,6 +35,9 @@ def build_command(config: dict[str, object], output: Path, root: str | Path | No
     base = Path(root).resolve() if root is not None else exporter_root()
     if kind == "active_directory":
         command = ["pwsh", str(base / "exporters/active-directory/export-active-directory.ps1"), "-ProviderName", str(config["provider"]), "-Output", str(output), "-Server", str(connection["server"]), "-OperationTimeoutSeconds", str(collection.get("timeout", 300))]
+        extra_attributes = required_mapping_attributes(config, kind)
+        if extra_attributes:
+            command.extend(["-AdditionalGroupProperties", ",".join(extra_attributes)])
         if collection.get("allow_partial"): command.append("-AllowPartial")
         if config.get("_check_only"): command.append("-CheckOnly")
         return command, os.environ.copy()
@@ -44,6 +48,9 @@ def build_command(config: dict[str, object], output: Path, root: str | Path | No
         names = {"search_scope": "SEARCH_SCOPE", "page_size": "PAGE_SIZE", "connection_timeout": "CONNECTION_TIMEOUT_SECONDS", "search_timeout": "SEARCH_TIMEOUT_SECONDS", "command_timeout": "COMMAND_TIMEOUT_SECONDS", "filter": "LDAP_FILTER"}
         for key, variable in names.items():
             if key in collection: env[variable] = str(collection[key])
+        extra_attributes = required_mapping_attributes(config, kind)
+        if extra_attributes:
+            env["EXTRA_GROUP_ATTRIBUTES"] = ",".join(extra_attributes)
         if collection.get("allow_partial"): env["ALLOW_PARTIAL"] = "1"
         if config.get("_check_only"): env["CHECK_ONLY"] = "1"
         return ["bash", str(base / "exporters/openldap/export-openldap.sh"), str(output)], env

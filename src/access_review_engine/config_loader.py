@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any
 import yaml
 
+from access_review_engine.source_mapping import validate_business_mapping
+
 class ConfigError(ValueError):
     pass
 
@@ -40,6 +42,10 @@ def validate_connector(data: Any, expected_name: str | None = None) -> None:
     missing = [key for key in required if not connection.get(key)]
     if missing:
         raise ConfigError("Missing connection settings: " + ", ".join(missing))
+    try:
+        data["business_mapping"] = validate_business_mapping(kind, data.get("business_mapping"))
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
     validate_no_plaintext_secrets(data)
 
 def validate_no_plaintext_secrets(data: Any, path: str = "") -> None:
@@ -82,7 +88,7 @@ def secret_environment(data: dict[str, Any]) -> dict[str, str]:
 
 def template(provider: str, kind: str) -> dict[str, Any]:
     if kind == "active_directory":
-        return {"provider": provider, "type": kind, "connection": {"server": ""}, "collection": {"timeout": 300, "allow_partial": False}}
+        return {"provider": provider, "type": kind, "connection": {"server": ""}, "collection": {"timeout": 300, "allow_partial": False}, "business_mapping": validate_business_mapping(kind, None)}
     if kind == "openldap":
-        return {"provider": provider, "type": kind, "connection": {"uri": "ldaps://", "base_dn": "", "bind_dn": ""}, "collection": {"search_scope": "sub", "page_size": 1000, "connection_timeout": 10, "search_timeout": 120, "command_timeout": 180, "allow_partial": False}}
+        return {"provider": provider, "type": kind, "connection": {"uri": "ldaps://", "base_dn": "", "bind_dn": ""}, "collection": {"search_scope": "sub", "page_size": 1000, "connection_timeout": 10, "search_timeout": 120, "command_timeout": 180, "allow_partial": False}, "business_mapping": validate_business_mapping(kind, None)}
     raise ConfigError(f"Unsupported connector type: {kind}")
