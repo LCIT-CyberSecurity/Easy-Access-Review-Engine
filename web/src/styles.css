@@ -626,3 +626,7 @@ tbody tr { transition:background-color .12s ease; }
   .browser-layout, .mapping-row { grid-template-columns:1fr; }
   .business-context > div { grid-template-columns:1fr; }
 }
+
+.api-key-once { display: grid; gap: 6px; padding: 8px 10px; overflow-wrap: anywhere; }
+.api-key-once code { font-size: 11px; user-select: all; }
+.check-row { display: flex; align-items: center; gap: 8px; }

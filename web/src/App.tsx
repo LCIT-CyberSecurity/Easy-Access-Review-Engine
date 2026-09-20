@@ -25,6 +25,7 @@ import {
 import { applyTheme, readTheme, storeTheme, THEMES, type ThemeId } from "./theme";
 import {
   changePassword,
+  deleteJson,
   getJson,
   getPage,
   getSession,
@@ -795,9 +796,68 @@ function initials(name: string) {
 }
 // The account block doubles as the settings entry: the style is a per-viewer preference, so
 // it belongs next to the viewer rather than in the product navigation.
+function ApiTokenPanel({ menuOpen }: { menuOpen: boolean }) {
+  const client = useQueryClient();
+  const [issuedKey, setIssuedKey] = useState("");
+  useEffect(() => {
+    if (!menuOpen) setIssuedKey("");
+  }, [menuOpen]);
+  const status = useQuery({ queryKey: ["my-api-token"], queryFn: () => getJson("me/api-token") });
+  const issue = useMutation({
+    mutationFn: () => postJson("me/api-token"),
+    onSuccess: async (result) => {
+      setIssuedKey(s(result.api_key, ""));
+      await client.invalidateQueries({ queryKey: ["my-api-token"] });
+    },
+  });
+  const revoke = useMutation({
+    mutationFn: () => deleteJson("me/api-token"),
+    onSuccess: async () => {
+      setIssuedKey("");
+      await client.invalidateQueries({ queryKey: ["my-api-token"] });
+    },
+  });
+  const token = (status.data?.token ?? {}) as Row;
+  const authorized = Boolean(status.data?.api_access_enabled),
+    globallyEnabled = Boolean(status.data?.external_user_api_enabled);
+  return (
+    <div className="user-menu-section">
+      <span className="user-menu-label"><KeyRound size={13} /> API access</span>
+      {status.isLoading ? <small className="muted">Loading API key status…</small> : null}
+      {!status.isLoading && !authorized ? <small className="muted">API access is disabled by an administrator.</small> : null}
+      {!status.isLoading && authorized && !globallyEnabled ? <small className="muted">External API is currently disabled.</small> : null}
+      {authorized && globallyEnabled ? (
+        <>
+          {token.active ? (
+            <small className="muted">
+              {s(token.prefix)} · created {s(token.created_at)} · expires {s(token.expires_at)} · last used {s(token.last_used_at, "never")}
+            </small>
+          ) : <small className="muted">No active API key.</small>}
+          {issuedKey ? (
+            <div className="api-key-once">
+              <strong>Copy this key now. It will not be displayed again.</strong>
+              <code>{issuedKey}</code>
+              <button className="button subtle" type="button" onClick={() => { if (navigator.clipboard) void navigator.clipboard.writeText(issuedKey); }}>Copy key</button>
+            </div>
+          ) : null}
+          {(issue.error || revoke.error) ? <small className="form-error">{s(issue.error || revoke.error)}</small> : null}
+          <div className="button-row">
+            <button className="button subtle" type="button" disabled={issue.isPending} onClick={() => issue.mutate()}>
+              {token.active ? "Generate new API key" : "Generate API key"}
+            </button>
+            {token.active ? <button className="button subtle" type="button" disabled={revoke.isPending} onClick={() => revoke.mutate()}>Revoke key</button> : null}
+          </div>
+          {token.active ? <small className="muted">Generating a new key immediately revokes the current key.</small> : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: () => void }) {
   const menu = useRef<HTMLDetailsElement>(null);
   const [theme, setTheme] = useState<ThemeId>(readTheme);
+  const [menuOpen, setMenuOpen] = useState(false);
   const close = () => menu.current?.removeAttribute("open");
   const pick = (next: ThemeId) => {
     setTheme(next);
@@ -805,7 +865,7 @@ function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: (
     storeTheme(next);
   };
   return (
-    <details className="user-menu" ref={menu}>
+    <details className="user-menu" ref={menu} onToggle={(event) => setMenuOpen(event.currentTarget.open)}>
       <summary aria-label="Account and settings">
         <span className="avatar">{initials(principal.display_name)}</span>
         <span className="user-name">
@@ -822,6 +882,7 @@ function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: (
             <small>{principal.role}</small>
           </span>
         </div>
+        <ApiTokenPanel menuOpen={menuOpen} />
         <div className="user-menu-section">
           <span className="user-menu-label">
             <Palette size={13} /> Style
@@ -4115,6 +4176,7 @@ const blankUser = (source = LOCAL_SOURCE): Row => ({
   scopes: [],
   password: "",
   enabled: true,
+  api_access_enabled: false,
   auth_source: source,
 });
 function Confirm({
@@ -4200,6 +4262,15 @@ function UsersPage() {
       },
       onError: (e) => setError(s(e, "Unable to save user")),
     }),
+    globalApi = useMutation({
+      mutationFn: (enabled: boolean) => putJson("system/settings/external-user-api", { enabled }),
+      onSuccess: async (d) => {
+        setError("");
+        setNotice(`External user API ${d.external_user_api_enabled ? "enabled" : "disabled"}`);
+        await c.invalidateQueries({ queryKey: ["system"] });
+      },
+      onError: (e) => setError(s(e, "Unable to update external API setting")),
+    }),
     lifecycle = useMutation({
       mutationFn: ({ action, user }: { action: string; user: Row }) =>
         postJson(
@@ -4216,7 +4287,9 @@ function UsersPage() {
             ? `${name} can no longer sign in`
             : variables.action === "enable"
               ? `${name} can sign in again`
-              : `New password set for ${name}. They must change it at their next sign-in.`,
+              : variables.action === "api-token/revoke"
+                ? `${name}'s API key was revoked`
+                : `New password set for ${name}. They must change it at their next sign-in.`,
         );
         await c.invalidateQueries({ queryKey: ["system"] });
       },
@@ -4272,6 +4345,10 @@ function UsersPage() {
     <>
       <Head title="Users & permissions">
         <div className="button-row">
+          <Status v={q.data?.external_user_api_enabled ? "enabled" : "disabled"} />
+          <button className="button subtle" onClick={() => globalApi.mutate(!q.data?.external_user_api_enabled)} disabled={globalApi.isPending}>
+            {q.data?.external_user_api_enabled ? "Disable external user API" : "Enable external user API"}
+          </button>
           {directories.map((d) => (
             <button className="button subtle" key={s(d.id)} onClick={() => setPicking(d)}>
               + From {s(d.name)}
@@ -4292,7 +4369,7 @@ function UsersPage() {
       {error && !open && !confirming && <p className="form-error">{error}</p>}
       <Filter v={search} onChange={setSearch} />
       <Table
-        cols={["User", "Username", "Signs in with", "Role", "Authorized domains", "Pending reviews", "Status", "Actions"]}
+        cols={["User", "Username", "Signs in with", "Role", "Authorized domains", "API access", "Pending reviews", "Status", "Actions"]}
         q={q}
         rows={users.map((r) => [
           s(r.display_name),
@@ -4300,6 +4377,10 @@ function UsersPage() {
           s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE ? "Local account" : s(r.auth_source),
           <Status v={r.role} />,
           s(r.role) === "ADMIN" ? "All domains" : s(r.role) === "GROUP_OWNER" ? "Assigned reviews" : s(vals(r.scopes).join(", "), "None"),
+          <div>
+            <Status v={r.api_access_enabled ? "enabled" : "disabled"} />
+            {r.api_token_active ? <small className="field-note">{s(r.api_token_prefix)} · last used {s(r.api_token_last_used_at, "never")}</small> : null}
+          </div>,
           Number(r.pending_reviews) > 0 ? s(r.pending_reviews) : "—",
           <>
             <Status v={r.enabled ? "enabled" : "disabled"} />
@@ -4314,6 +4395,9 @@ function UsersPage() {
               actions={[
                 ...(s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE
                   ? [{ label: "Reset password", onClick: () => confirmUserAction("reset-password", r) }]
+                  : []),
+                ...(r.api_token_active
+                  ? [{ label: "Revoke API key", danger: true, onClick: () => confirmUserAction("api-token/revoke", r) }]
                   : []),
                 ...(Number(r.pending_reviews) > 0
                   ? [{ label: "Reassign reviews", onClick: () => confirmUserAction("reassign", r) }]
@@ -4396,6 +4480,18 @@ function UsersPage() {
             </select>
           </label>
         </Confirm>
+      )}
+      {confirming && confirming.action === "api-token/revoke" && (
+        <Confirm
+          title={`Revoke ${s(confirming.user.display_name, s(confirming.user.username))}'s API key?`}
+          intro={<p>The key stops working immediately. The user can generate a new key if API access remains enabled.</p>}
+          confirmLabel="Revoke API key"
+          danger
+          pending={lifecycle.isPending}
+          error={error}
+          cancel={() => setConfirming(null)}
+          confirm={() => lifecycle.mutate(confirming)}
+        />
       )}
       {confirming && confirming.action === "reset-password" && (
         <Confirm
@@ -4520,6 +4616,16 @@ function UsersPage() {
                 />
               </label>
             )}
+            <h4>EXTERNAL USER API</h4>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={Boolean(form.api_access_enabled)}
+                onChange={(e) => setForm({ ...form, api_access_enabled: e.target.checked })}
+              />
+              Allow this account to use the external read-only API
+            </label>
+            <p className="field-note">Disabling API access revokes existing API keys. The user must generate a new key after re-enablement.</p>
             <h4>STATUS</h4>
             {form.id ? (
               <div className="status-row">
