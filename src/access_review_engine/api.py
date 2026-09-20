@@ -1490,8 +1490,10 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/identities/{identity_id}/accesses")
     def identity_accesses(identity_id: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         identity, snapshot = _identity_owner(identity_id)
+        if principal.role != "ADMIN" and not principal.can_access(str(identity.get("provider") or "")):
+            raise HTTPException(status_code=403, detail="Scope is not authorized")
         assignments = [row for row in snapshot.get("access_assignments", []) if row.get("identity_provider") == identity.get("provider") and row.get("identity_identifier") == identity.get("identifier")]
         hydrated = hydrate_snapshot(snapshot)
         evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
@@ -1506,7 +1508,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/accesses/{provider}/{access_name}/holders")
     def access_holders(provider: str, access_name: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
         snapshot = _snapshot_covering(provider)
         rows = [row for row in snapshot.get("access_assignments", []) if row.get("provider") == provider and row.get("access_name") == access_name]
         hydrated = hydrate_snapshot(snapshot)

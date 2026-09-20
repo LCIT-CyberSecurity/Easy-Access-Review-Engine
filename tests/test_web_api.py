@@ -296,6 +296,48 @@ if TestClient is not None:
         assert client.put("/api/accesses/missing/enrichment", json={"application": "No access"}).status_code == 404
 
 
+    def test_identity_access_and_access_holders_routes_enforce_provider_scope(tmp_path):
+        db = tmp_path / "detail-route-scopes.db"
+        app = create_app(str(db))
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        upsert_user(conn, {"username": "detail-admin", "role": "ADMIN", "password": "admin-password"})
+        upsert_user(conn, {"username": "detail-operator", "role": "OPERATOR", "scopes": ["provider-a"], "password": "operator-password"})
+        conn.close()
+        identities = [
+            Identity("provider-a", "alice", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE),
+            Identity("provider-b", "bob", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE),
+        ]
+        snapshot = create_snapshot(
+            [Provider("provider-a", "generic"), Provider("provider-b", "generic")],
+            identities,
+            [],
+            [],
+            [],
+            ["import-a", "import-b"],
+        )
+        with Repository(db) as repo:
+            for identity in identities:
+                repo.upsert("identities", identity)
+            repo.upsert("snapshots", snapshot)
+
+        client = TestClient(app)
+        _login(client, "detail-admin", "admin-password")
+        for identity in identities:
+            assert client.get(f"/api/identities/{identity.id}/accesses").status_code == 200
+        assert client.get("/api/accesses/provider-a/group/holders").status_code == 200
+        assert client.get("/api/accesses/provider-b/group/holders").status_code == 200
+
+        client.cookies.clear()
+        _login(client, "detail-operator", "operator-password")
+        assert client.get(f"/api/identities/{identities[0].id}/accesses").status_code == 200
+        assert client.get("/api/identities/bob/accesses").status_code == 403
+        assert client.get("/api/accesses/provider-a/group/holders").status_code == 200
+        assert client.get("/api/accesses/provider-b/group/holders").status_code == 403
+        assert client.get("/api/identities/missing/accesses").status_code == 404
+
+
     def test_invalid_golden_assignment_comment_has_no_partial_writes(tmp_path):
         db = tmp_path / "golden-comment-validation.db"
         app = create_app(str(db))
