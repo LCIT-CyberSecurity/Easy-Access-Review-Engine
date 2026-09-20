@@ -886,30 +886,51 @@ def promote_campaign(
     decisions: list[Decision],
     previous_version: GoldenSourceVersion | None,
     mode: str = "replace_scope",
+    observed_snapshot: Snapshot | None = None,
 ) -> GoldenSourceVersion:
     latest = latest_decisions(decisions)
     if any(item.id not in latest for item in review_items):
         raise ValueError("Cannot promote campaign with pending decisions")
     base = set(previous_version.assignments) if previous_version else set()
-    scoped_keys = {
-        (item.access_provider, item.access_name, item.identity_provider, item.identity_identifier)
+    identities = {
+        identity_key(identity): identity for identity in (observed_snapshot.identities if observed_snapshot else [])
+    }
+    accesses = {
+        access_key(access): access for access in (observed_snapshot.accesses if observed_snapshot else [])
+    }
+    candidates = {
+        item.id: _golden_assignment_from_review(item, identities, accesses)
+        for item in review_items
+    }
+    previous_matches = {
+        item.id: _matching_previous_assignment(base, candidates[item.id])
         for item in review_items
     }
     if mode == "full_replace":
         result: set[GoldenSourceAssignment] = set()
     elif mode == "replace_scope":
-        result = {item for item in base if item.key() not in scoped_keys}
+        reviewed = {match for match in previous_matches.values() if match is not None}
+        result = base - reviewed
     else:
         raise ValueError("mode must be replace_scope or full_replace")
     for item in review_items:
         decision = latest[item.id]
-        assignment = GoldenSourceAssignment(
-            item.access_provider, item.access_name, item.identity_provider, item.identity_identifier
-        )
+        assignment = candidates[item.id]
+        previous = previous_matches[item.id]
+        if previous is not None:
+            assignment = GoldenSourceAssignment(
+                access_provider=assignment.access_provider,
+                access_name=assignment.access_name,
+                identity_provider=assignment.identity_provider,
+                identity_identifier=assignment.identity_identifier,
+                access_native_id=assignment.access_native_id or previous.access_native_id,
+                access_permission=assignment.access_permission or previous.access_permission,
+                identity_native_id=assignment.identity_native_id or previous.identity_native_id,
+            )
         if decision.value == DecisionValue.APPROVE:
             result.add(assignment)
-        elif decision.value == DecisionValue.REVOKE:
-            result.discard(assignment)
+        elif decision.value == DecisionValue.REVOKE and previous is not None:
+            result.discard(previous)
     return create_golden_version(
         golden_source,
         result,
@@ -918,6 +939,66 @@ def promote_campaign(
         source_campaign_id=campaign.id,
         parent_version_id=previous_version.id if previous_version else None,
     )
+
+
+def _golden_assignment_from_review(
+    item: ReviewItem,
+    identities: dict[tuple[str, str], Identity],
+    accesses: dict[tuple[str, str], Access],
+) -> GoldenSourceAssignment:
+    access = accesses.get((item.access_provider, item.access_name))
+    identity = identities.get((item.identity_provider, item.identity_identifier))
+    control_object = access.control_object if access else None
+    permission = access.permission if access else None
+    return GoldenSourceAssignment(
+        access_provider=item.access_provider,
+        access_name=item.access_name,
+        identity_provider=item.identity_provider,
+        identity_identifier=item.identity_identifier,
+        access_native_id=(
+            control_object.native_id
+            if control_object
+            else str(item.control_object.get("native_id") or "") or None
+        ),
+        access_permission=(
+            permission.identifier
+            if permission
+            else str(item.permission.get("identifier") or "") or None
+        ),
+        identity_native_id=identity.native_id if identity else None,
+    )
+
+
+def _matching_previous_assignment(
+    assignments: set[GoldenSourceAssignment],
+    candidate: GoldenSourceAssignment,
+) -> GoldenSourceAssignment | None:
+    stable_key = candidate.stable_key()
+    if stable_key is not None:
+        stable = [item for item in assignments if item.stable_key() == stable_key]
+        if len(stable) == 1:
+            return stable[0]
+    legacy = [
+        item
+        for item in assignments
+        if item.key() == candidate.key() and _stable_metadata_is_compatible(item, candidate)
+    ]
+    return legacy[0] if len(legacy) == 1 else None
+
+
+def _stable_metadata_is_compatible(
+    previous: GoldenSourceAssignment,
+    candidate: GoldenSourceAssignment,
+) -> bool:
+    """Allow legacy-key matching only when any overlapping stable facts agree."""
+    for old_value, new_value in (
+        (previous.access_native_id, candidate.access_native_id),
+        (previous.identity_native_id, candidate.identity_native_id),
+        (previous.access_permission, candidate.access_permission),
+    ):
+        if old_value and new_value and old_value != new_value:
+            return False
+    return True
 
 
 def remediation_from_decisions(

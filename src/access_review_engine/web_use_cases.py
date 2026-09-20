@@ -18,6 +18,7 @@ from typing import Any
 from access_review_engine.application import import_file_to_repository, load_classification_rules
 from access_review_engine.domain import Campaign, Finding, GoldenSourceVersion, Snapshot
 from access_review_engine.services import compare_snapshot, open_campaign
+from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY, connector_business_mapping
 from access_review_engine.storage import Repository
 
 
@@ -27,6 +28,8 @@ class PreviewSyncResult:
     objects: dict[str, dict[str, int]]
     comparison: dict[str, int]
     collection_incomplete: bool
+    access_preview: list[dict[str, object]]
+    mapping: dict[str, object]
     persisted: bool = False
 
     def as_dict(self) -> dict[str, object]:
@@ -160,6 +163,7 @@ def preview_import(
     *,
     provider: str = "openldap",
     classification_rules: str | Path | None = None,
+    source_config: dict[str, object] | None = None,
 ) -> PreviewSyncResult:
     """Run the real import engine against a SQLite backup and discard the backup."""
     source = Path(db_path)
@@ -175,6 +179,7 @@ def preview_import(
                 input_path,
                 provider_name=provider,
                 classification_rules=load_classification_rules(classification_rules),
+                source_config=source_config,
             )
         finally:
             repo.close()
@@ -192,11 +197,55 @@ def preview_import(
             Finding.COLLECTION_INCOMPLETE in row.get("findings", [])
             for row in snapshot.comparison_states
         )
+        access_preview: list[dict[str, object]] = []
+        for access in snapshot.accesses[:100]:
+            context = access.metadata.get(BUSINESS_CONTEXT_METADATA_KEY, {})
+            raw_source = {
+                str(value.get("attribute")): value.get("value")
+                for value in context.values()
+                if isinstance(value, dict) and value.get("attribute")
+            }
+            permission = access.permission.identifier if access.permission else None
+            access_preview.append({
+                "provider": access.provider,
+                "access_name": access.name,
+                "display_name": access.display_name,
+                "raw_source": raw_source,
+                "technical": {
+                    "permission": permission,
+                    "entitlement": "Member" if str(permission or "").casefold() == "member" else permission,
+                    "grant_mechanism": "Group membership" if str(permission or "").casefold() == "member" else "Direct assignment",
+                },
+                "business_context": context,
+            })
+        mapping_report: dict[str, object] = {"warning": False, "diagnostics": []}
+        if source_config is not None and str(source_config.get("type")) in {"active_directory", "openldap"}:
+            kind = str(source_config["type"])
+            configured = connector_business_mapping(source_config, kind)
+            diagnostics = []
+            for field, entry in configured.items():
+                if entry["mode"] != "attribute":
+                    continue
+                available = any(
+                    field in access.metadata.get(BUSINESS_CONTEXT_METADATA_KEY, {})
+                    for access in snapshot.accesses
+                )
+                diagnostics.append({
+                    "field": field,
+                    "attribute": entry.get("attribute"),
+                    "status": "available" if available else "unavailable_in_artifact",
+                })
+            mapping_report = {
+                "warning": any(row["status"] == "unavailable_in_artifact" for row in diagnostics),
+                "diagnostics": diagnostics,
+            }
         return PreviewSyncResult(
             tables=changed,
             objects=object_deltas(source, target),
             comparison=states,
             collection_incomplete=incomplete,
+            access_preview=access_preview,
+            mapping=mapping_report,
         )
     finally:
         shutil.rmtree(target_parent, ignore_errors=True)

@@ -49,6 +49,8 @@ TABLES = {
     "decisions",
     "audit_events",
     "remediation_actions",
+    "access_enrichments",
+    "golden_assignment_annotations",
 }
 
 

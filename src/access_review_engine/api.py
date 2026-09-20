@@ -24,11 +24,15 @@ except ModuleNotFoundError:  # pragma: no cover
     Body = Request = Response = HTTPException = StreamingResponse = None  # type: ignore[assignment,misc]
 
 from access_review_engine.application import import_file_to_repository
+from access_review_engine.access_context import access_context_for_payload, access_enrichment, save_access_enrichment
 from access_review_engine.authentication import compare_authentication_posture
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import connector_path, load_connector, secret_environment, validate_connector
+from access_review_engine.golden_annotations import annotation_for_assignment, copy_assignment_annotations, set_assignment_annotation
 from access_review_engine.reporting import build_report_rows, report_summary, write_reports
 from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
+from access_review_engine.source_inspector import SourceInspectorError, discover_source_attributes, get_source_object, search_source_objects, source_object_kinds
+from access_review_engine.source_mapping import mapping_diagnostics
 from access_review_engine.storage import Repository, hydrate_authentication_posture, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_read_models import projected_rows
@@ -433,10 +437,17 @@ def create_app(db_path: str | None = None):
         _require(current_user(request), ("ADMIN",))
         candidate = _validate_web_connector(payload)
         path = connector_path(str(candidate["provider"]), connector_directory)
+        previous_mapping = None
+        if path.is_file():
+            try:
+                previous_mapping = load_connector(str(candidate["provider"]), path).get("business_mapping")
+            except ValueError:
+                previous_mapping = None
         connector_directory.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump(candidate, sort_keys=False), encoding="utf-8")
         with Repository(db_path) as repo:
-            record_audit(repo, request, "source.configuration_saved", "provider", str(candidate["provider"]), {"type": candidate["type"]})
+            event_type = "source.mapping_changed" if previous_mapping != candidate.get("business_mapping") else "source.configuration_saved"
+            record_audit(repo, request, event_type, "provider", str(candidate["provider"]), {"type": candidate["type"], "mapping_changed": previous_mapping != candidate.get("business_mapping")})
         return _public_connector(load_connector(str(candidate["provider"]), path))
 
     @app.post("/api/system/sources/test")
@@ -456,7 +467,50 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=502, detail="Source connection test failed") from exc
         if result.returncode:
             raise HTTPException(status_code=502, detail="Source connection test failed")
-        return {"status": "healthy", "provider": candidate["provider"], "message": "Connection test succeeded"}
+        try:
+            discovered = discover_source_attributes(candidate, "group")
+            diagnostics = mapping_diagnostics(str(candidate["type"]), candidate, discovered)
+            mapping_warning = any(row.get("status") == "not_found" for row in diagnostics)
+        except SourceInspectorError:
+            diagnostics = []
+            mapping_warning = True
+        return {
+            "status": "healthy",
+            "connection": {"status": "success", "message": "Connection test succeeded"},
+            "provider": candidate["provider"],
+            "mapping": {"warning": mapping_warning, "diagnostics": diagnostics},
+            "message": "Connection test succeeded",
+        }
+
+    @app.get("/api/system/sources/{provider}/inspect/kinds")
+    def source_inspector_kinds(provider: str, request: Request):
+        _require(current_user(request), ("ADMIN",))
+        return {"items": source_object_kinds(_load_web_connector(provider))}
+
+    @app.get("/api/system/sources/{provider}/inspect/objects")
+    def source_inspector_search(provider: str, request: Request, kind: str = "group", search: str = "", limit: int = 25, offset: int = 0):
+        _require(current_user(request), ("ADMIN",))
+        try:
+            return search_source_objects(_load_web_connector(provider), kind, search, limit, offset)
+        except SourceInspectorError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/system/sources/{provider}/inspect/objects/{kind}/{identifier:path}")
+    def source_inspector_detail(provider: str, kind: str, identifier: str, request: Request):
+        _require(current_user(request), ("ADMIN",))
+        try:
+            return get_source_object(_load_web_connector(provider), kind, identifier)
+        except SourceInspectorError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/api/system/sources/{provider}/inspect/attributes")
+    def source_inspector_attributes(provider: str, request: Request, kind: str = "group"):
+        _require(current_user(request), ("ADMIN",))
+        try:
+            attributes = discover_source_attributes(_load_web_connector(provider), kind)
+        except SourceInspectorError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"kind": kind, "attributes": attributes}
 
     @app.post("/api/golden-sources/baseline")
     def create_baseline(request: Request, payload: dict[str, Any] | None = Body(default=None)):
@@ -482,6 +536,8 @@ def create_app(db_path: str | None = None):
                 version = promote_snapshot(source, snapshot, previous)
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            version.comment = str(requested.get("comment") or "").strip() or version.comment
+            copy_assignment_annotations(repo, max(previous, key=lambda item: item.version) if previous else None, version)
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
@@ -505,7 +561,7 @@ def create_app(db_path: str | None = None):
                 source,
                 [],
                 "from_scratch",
-                comment="Empty expected state created in the WebUI",
+                comment=str(requested.get("comment") or "Empty expected state created in the WebUI"),
             )
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
@@ -565,6 +621,8 @@ def create_app(db_path: str | None = None):
                 version = promote_snapshot(source, snapshot, versions)
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            version.comment = str(payload.get("comment") or "").strip() or version.comment
+            copy_assignment_annotations(repo, active, version)
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
@@ -592,22 +650,38 @@ def create_app(db_path: str | None = None):
 
             identity_names, access_names = _display_names(repo)
             # What an expected access actually is stays on the Access object, collected once.
-            catalog = {(str(row.get("provider")), str(row.get("name"))): row for row in repo.list_payloads("accesses")}
+            access_payloads = repo.list_payloads("accesses")
+            catalog = {(str(row.get("provider")), str(row.get("name"))): row for row in access_payloads}
+            catalog_by_native = {
+                (str(row.get("provider")), str((row.get("control_object") or {}).get("native_id"))): row
+                for row in access_payloads
+                if isinstance(row.get("control_object"), dict) and (row.get("control_object") or {}).get("native_id")
+            }
             rows = []
             for item in sorted(active.assignments, key=lambda entry: entry.key()):
                 row = asdict(item)
                 # Show the names people recognise; collectors key objects by their native id.
                 row["identity_display_name"] = identity_names.get((item.identity_provider, item.identity_identifier)) or item.identity_identifier
                 row["access_display_name"] = access_names.get((item.access_provider, item.access_name)) or item.access_name
-                described = catalog.get((item.access_provider, item.access_name), {})
+                described = catalog.get((item.access_provider, item.access_name)) or catalog_by_native.get((item.access_provider, str(item.access_native_id))) or {}
                 row["access_description"] = described.get("description")
                 row["access_target"] = described.get("target")
                 row["access_owner"] = described.get("access_owner")
+                row["access_id"] = described.get("id")
+                row["business_context"] = access_context_for_payload(repo, described)
+                annotation = annotation_for_assignment(repo, active.id, item)
+                row["golden_comment"] = annotation.get("comment") if annotation else None
                 if not row.get("access_permission"):
                     permission = described.get("permission")
                     row["access_permission"] = (permission or {}).get("display_name") or (permission or {}).get("identifier") if isinstance(permission, dict) else permission
                 rows.append(row)
             covered = sorted({str(item.access_provider) for item in active.assignments})
+            applications = {
+                str(row.get("business_context", {}).get("fields", {}).get("application", {}).get(origin, {}).get("value"))
+                for row in rows
+                for origin in ("manual", "source")
+                if row.get("business_context", {}).get("fields", {}).get("application", {}).get(origin, {}).get("value")
+            }
             expected_identities = {
                 (str(item.identity_provider), str(item.identity_identifier))
                 for item in active.assignments
@@ -651,7 +725,7 @@ def create_app(db_path: str | None = None):
                 "assignment_count": len(active.assignments),
                 "identity_count": len(expected_identities),
                 "access_count": len(expected_accesses),
-                "application_count": len(covered),
+                "application_count": len(applications),
                 "collected_providers": collected,
                 "collected_at": snapshots[-1].get("created_at") if snapshots else None,
                 "versions": [{"id": item.id, "version": item.version, "source_type": item.source_type, "created_at": item.created_at, "assignments": len(item.assignments), "comment": item.comment} for item in sorted(versions, key=lambda item: item.version)],
@@ -700,6 +774,7 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=409, detail="No collection has reported an authentication posture yet")
             posture = hydrate_authentication_posture(observed_payload)
             version = create_golden_version(source, set(active.assignments), "manual", versions, parent_version_id=active.id, comment=str((payload or {}).get("comment") or "Authentication policy taken from the collected posture"), golden_authentication_policy=posture)
+            copy_assignment_annotations(repo, active, version)
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
@@ -717,13 +792,19 @@ def create_app(db_path: str | None = None):
             if active is None:
                 raise HTTPException(status_code=409, detail="Golden Source has no version yet")
             identity_names, access_names = _display_names(repo)
-            catalog = {(str(row.get("provider")), str(row.get("name"))): row for row in repo.list_payloads("accesses")}
+            access_payloads = repo.list_payloads("accesses")
+            catalog = {(str(row.get("provider")), str(row.get("name"))): row for row in access_payloads}
+            catalog_by_native = {
+                (str(row.get("provider")), str((row.get("control_object") or {}).get("native_id"))): row
+                for row in access_payloads
+                if isinstance(row.get("control_object"), dict) and (row.get("control_object") or {}).get("native_id")
+            }
             grouped: dict[tuple[str, str], dict[str, Any]] = {}
             for item in active.assignments:
                 key = (item.access_provider, item.access_name)
                 row = grouped.get(key)
                 if row is None:
-                    described = catalog.get(key, {})
+                    described = catalog.get(key) or catalog_by_native.get((item.access_provider, str(item.access_native_id))) or {}
                     permission = described.get("permission")
                     row = grouped[key] = {
                         "access_provider": item.access_provider,
@@ -733,6 +814,9 @@ def create_app(db_path: str | None = None):
                         "access_target": described.get("target"),
                         "access_owner": (described.get("access_owner") or {}).get("identity") if isinstance(described.get("access_owner"), dict) else None,
                         "access_permission": item.access_permission or ((permission or {}).get("display_name") or (permission or {}).get("identifier") if isinstance(permission, dict) else permission),
+                        "access_id": described.get("id"),
+                        "business_context": access_context_for_payload(repo, described),
+                        "technical_grant": "Group membership" if str((permission or {}).get("identifier") if isinstance(permission, dict) else permission).casefold() == "member" else "Direct assignment",
                         "expected_identities": 0,
                         "identities": [],
                     }
@@ -796,11 +880,100 @@ def create_app(db_path: str | None = None):
                 version = create_golden_version(source, assignments, origin, versions, parent_version_id=active.id if active else None, comment=comment, golden_authentication_policy=active.golden_authentication_policy if active else None)
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+            copy_assignment_annotations(repo, active, version)
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
             record_audit(repo, request, "golden_source.version_edited", "golden_source_version", version.id, {"source_id": source.id, "version": version.version, "assignments": len(version.assignments)})
             return {"version": version.version, "version_id": version.id, "assignments": len(version.assignments)}
+
+    @app.post("/api/golden-sources/{name}/version-comment")
+    def golden_version_comment(name: str, request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        comment = payload.get("comment")
+        if comment is not None and not isinstance(comment, str):
+            raise HTTPException(status_code=400, detail="Golden version comment must be text")
+        comment = (comment or "").strip()
+        if len(comment) > 4000:
+            raise HTTPException(status_code=400, detail="Golden version comment is too long")
+        with Repository(db_path) as repo:
+            source, versions, active = _golden_context(repo, name)
+            if active is None:
+                raise HTTPException(status_code=409, detail="Golden Source has no version yet")
+            if comment == (active.comment or ""):
+                raise HTTPException(status_code=409, detail="This Golden version comment is unchanged")
+            version = create_golden_version(
+                source,
+                set(active.assignments),
+                "manual",
+                versions,
+                parent_version_id=active.id,
+                comment=comment or None,
+                golden_authentication_policy=active.golden_authentication_policy,
+            )
+            copy_assignment_annotations(repo, active, version, principal.subject)
+            source.active_version_id = version.id
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+            record_audit(repo, request, "golden_source.version_comment_changed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
+            return {"version": version.version, "version_id": version.id, "comment": version.comment}
+
+    @app.post("/api/golden-sources/{name}/assignment-comment")
+    def golden_assignment_comment(name: str, request: Request, payload: dict[str, Any] = Body(...)):
+        """Version one expected-assignment comment without mutating historical evidence."""
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        from access_review_engine.domain import GoldenSourceAssignment
+
+        try:
+            requested = GoldenSourceAssignment(
+                access_provider=str(payload.get("access_provider") or "").strip(),
+                access_name=str(payload.get("access_name") or "").strip(),
+                identity_provider=str(payload.get("identity_provider") or "").strip(),
+                identity_identifier=str(payload.get("identity_identifier") or "").strip(),
+                access_native_id=str(payload.get("access_native_id") or "") or None,
+                access_permission=str(payload.get("access_permission") or "") or None,
+                identity_native_id=str(payload.get("identity_native_id") or "") or None,
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid expected assignment") from exc
+        if not all(requested.key()):
+            raise HTTPException(status_code=400, detail="Expected assignment reference is required")
+        with Repository(db_path) as repo:
+            source, versions, active = _golden_context(repo, name)
+            if active is None:
+                raise HTTPException(status_code=409, detail="Golden Source has no version yet")
+            stable = [item for item in active.assignments if requested.stable_key() and item.stable_key() == requested.stable_key()]
+            if requested.stable_key() is not None:
+                matches = stable
+            else:
+                matches = [item for item in active.assignments if item.key() == requested.key() and item.stable_key() is None]
+            if len(matches) != 1:
+                raise HTTPException(status_code=404, detail="Expected assignment not found or ambiguous")
+            current = matches[0]
+            old = annotation_for_assignment(repo, active.id, current)
+            comment = payload.get("comment")
+            normalized = str(comment).strip() if isinstance(comment, str) else comment
+            if (old or {}).get("comment") == (normalized or None):
+                raise HTTPException(status_code=409, detail="This comment is unchanged")
+            version = create_golden_version(
+                source,
+                set(active.assignments),
+                "manual",
+                versions,
+                parent_version_id=active.id,
+                comment=str(payload.get("version_comment") or "Expected assignment comment updated"),
+                golden_authentication_policy=active.golden_authentication_policy,
+            )
+            copy_assignment_annotations(repo, active, version)
+            try:
+                annotation = set_assignment_annotation(repo, version, current, comment, principal.subject)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            source.active_version_id = version.id
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+            record_audit(repo, request, "golden_source.assignment_comment_changed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
+            return {"version": version.version, "version_id": version.id, "annotation": annotation}
 
     @app.get("/api/golden-sources/{name}/export")
     def export_baseline(name: str, request: Request):
@@ -1168,12 +1341,21 @@ def create_app(db_path: str | None = None):
             items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
             decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
             try:
-                version = promote_campaign(source, campaign, items, decisions, previous, mode="replace_scope")
+                version = promote_campaign(
+                    source,
+                    campaign,
+                    items,
+                    decisions,
+                    previous,
+                    mode="replace_scope",
+                    observed_snapshot=_snapshot(repo, campaign.snapshot_id),
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             # Promotion changes who is expected to have what, not how people authenticate.
             if version.golden_authentication_policy is None and previous is not None:
                 version.golden_authentication_policy = previous.golden_authentication_policy
+            copy_assignment_annotations(repo, previous, version)
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
@@ -1313,6 +1495,28 @@ def create_app(db_path: str | None = None):
         ]
         return {"access": {"provider": provider, "name": access_name}, "holders": rows, "effective_holders": effective, "paths": [path for item in effective for path in item.get("paths", [])]}
 
+    @app.get("/api/accesses/{access_id}/enrichment")
+    def get_access_enrichment(access_id: str, request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            access = repo.get_payload("accesses", access_id)
+            if access is None:
+                raise HTTPException(status_code=404, detail="Access not found")
+            return {"access_id": access_id, "enrichment": access_enrichment(repo, access_id), "business_context": access_context_for_payload(repo, access)}
+
+    @app.put("/api/accesses/{access_id}/enrichment")
+    def put_access_enrichment(access_id: str, request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            try:
+                enrichment = save_access_enrichment(repo, access_id, payload, principal.subject)
+            except ValueError as exc:
+                status = 404 if str(exc) == "Access not found" else 400
+                raise HTTPException(status_code=status, detail=str(exc)) from exc
+            access = repo.get_payload("accesses", access_id)
+            record_audit(repo, request, "access.enrichment_changed", "access", access_id, {"fields": sorted(key for key, value in payload.items() if value not in (None, ""))})
+            return {"access_id": access_id, "enrichment": enrichment, "business_context": access_context_for_payload(repo, access)}
+
     @app.post("/api/sources/{provider}/sync", status_code=202)
     def sync(provider: str, request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
@@ -1329,7 +1533,7 @@ def create_app(db_path: str | None = None):
                     raise RunnerError(result.stderr.strip() or "Collector failed")
                 update_progress(db_path, job_id, "Importing and creating snapshot")
                 with Repository(db_path) as repo:
-                    snapshot = import_file_to_repository(repo, artifact, provider_name=provider)
+                    snapshot = import_file_to_repository(repo, artifact, provider_name=provider, source_config=config)
                     record_audit(repo, request, "source.sync_completed", "snapshot", snapshot.id, {"provider": provider})
                 return {"snapshot_id": snapshot.id, "provider": provider}
             finally:
@@ -1351,7 +1555,7 @@ def create_app(db_path: str | None = None):
                 if result.returncode:
                     raise RunnerError(result.stderr.strip() or "Collector failed")
                 update_progress(db_path, job_id, "Analysing collected data")
-                preview = preview_import(db_path, artifact, provider=provider).as_dict()
+                preview = preview_import(db_path, artifact, provider=provider, source_config=config).as_dict()
                 with Repository(db_path) as repo:
                     record_audit(repo, request, "source.preview_completed", "provider", provider)
                 return preview
@@ -1362,7 +1566,11 @@ def create_app(db_path: str | None = None):
     @app.post("/api/sources/{provider}/sync/preview")
     def sync_preview(provider: str, request: Request, input_path: str, classification_rules: str | None = None):
         _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
-        return preview_import(db_path, input_path, provider=provider, classification_rules=classification_rules).as_dict()
+        source_config = None
+        config_path = connector_path(provider, connector_directory)
+        if config_path.is_file():
+            source_config = _load_web_connector(provider)
+        return preview_import(db_path, input_path, provider=provider, classification_rules=classification_rules, source_config=source_config).as_dict()
 
     @app.get("/api/jobs/{job_id}")
     def job(job_id: str, request: Request):

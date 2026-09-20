@@ -4,8 +4,11 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any, Iterable
 
+from access_review_engine.access_context import access_enrichment, business_context_view
+from access_review_engine.domain import GoldenSourceAssignment
+from access_review_engine.golden_annotations import annotation_for_assignment
 from access_review_engine.services import calculate_effective_accesses
-from access_review_engine.storage import Repository, hydrate_snapshot
+from access_review_engine.storage import Repository, hydrate_golden_version, hydrate_snapshot
 
 
 def _latest_decisions(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -72,6 +75,12 @@ def _add_review_provenance(
     campaigns = {str(row.get("id")): row for row in repo.list_payloads("campaigns")}
     snapshots = {str(row.get("id")): row for row in repo.list_payloads("snapshots")}
     evaluations: dict[str, dict[tuple[str, str, str, str], dict[str, Any]]] = {}
+    snapshot_accesses: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    snapshot_identities: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    golden_versions = {
+        str(payload.get("id")): hydrate_golden_version(payload)
+        for payload in repo.list_payloads("golden_source_versions")
+    }
     for row in rows:
         campaign = campaigns.get(str(row.get("campaign_id")), {})
         snapshot_id = str(campaign.get("snapshot_id") or "")
@@ -83,6 +92,16 @@ def _add_review_provenance(
             evaluations[snapshot_id] = {}
             continue
         snapshot = hydrate_snapshot(payload)
+        snapshot_accesses[snapshot_id] = {
+            (str(access.get("provider")), str(access.get("name"))): access
+            for access in payload.get("accesses", [])
+            if isinstance(access, dict)
+        }
+        snapshot_identities[snapshot_id] = {
+            (str(identity.get("provider")), str(identity.get("identifier"))): identity
+            for identity in payload.get("identities", [])
+            if isinstance(identity, dict)
+        }
         effective = calculate_effective_accesses(
             snapshot.access_assignments,
             snapshot.access_relations,
@@ -104,6 +123,55 @@ def _add_review_provenance(
         effective = evaluations.get(snapshot_id, {}).get(key)
         row["direct"] = bool(effective and effective.get("direct"))
         row["paths"] = list(effective.get("paths", [])) if effective else []
+        observed_access = snapshot_accesses.get(snapshot_id, {}).get((key[2], key[3]), {})
+        access_id = str(observed_access.get("id") or "")
+        row["business_context"] = business_context_view(
+            observed_access,
+            access_enrichment(repo, access_id) if access_id else None,
+        )
+        permission = observed_access.get("permission")
+        technical_permission = (
+            (permission.get("display_name") or permission.get("identifier"))
+            if isinstance(permission, dict)
+            else permission
+        )
+        row["technical_permission"] = technical_permission
+        row["technical_grant"] = "Group membership" if str(technical_permission or "").casefold() == "member" else "Direct assignment"
+        version = golden_versions.get(str(campaign.get("golden_source_version_id") or ""))
+        if version is not None:
+            observed_identity = snapshot_identities.get(snapshot_id, {}).get((key[0], key[1]), {})
+            control_object = observed_access.get("control_object")
+            control_object = control_object if isinstance(control_object, dict) else {}
+            permission_payload = observed_access.get("permission")
+            permission_payload = permission_payload if isinstance(permission_payload, dict) else {}
+            candidate = GoldenSourceAssignment(
+                access_provider=key[2],
+                access_name=key[3],
+                identity_provider=key[0],
+                identity_identifier=key[1],
+                access_native_id=str(control_object.get("native_id") or "") or None,
+                access_permission=str(permission_payload.get("identifier") or "") or None,
+                identity_native_id=str(observed_identity.get("native_id") or "") or None,
+            )
+            assignment = next(
+                (
+                    item for item in version.assignments
+                    if item.stable_key() is not None
+                    and candidate.stable_key() is not None
+                    and item.stable_key() == candidate.stable_key()
+                ),
+                None,
+            ) or next(
+                (
+                    item for item in version.assignments
+                    if item.key() == candidate.key()
+                    and item.stable_key() is None
+                    and candidate.stable_key() is None
+                ),
+                None,
+            )
+            annotation = annotation_for_assignment(repo, version.id, assignment) if assignment else None
+            row["golden_comment"] = annotation.get("comment") if annotation else None
 
 
 def _is_empty(value: Any) -> bool:
@@ -271,6 +339,18 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                     for state in current_states
                     if (state.get("access_provider"), state.get("access_name")) == key
                 )
+                row["business_context"] = business_context_view(
+                    row,
+                    access_enrichment(repo, str(row.get("id") or "")),
+                )
+                permission = row.get("permission")
+                technical_permission = (
+                    (permission.get("display_name") or permission.get("identifier"))
+                    if isinstance(permission, dict)
+                    else permission
+                )
+                row["technical_permission"] = technical_permission
+                row["technical_grant"] = "Group membership" if str(technical_permission or "").casefold() == "member" else "Direct assignment"
         if table == "campaigns":
             items = repo.list_payloads("review_items")
             for row in rows:
