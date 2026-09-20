@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import os
 import json
@@ -13,8 +13,12 @@ LOCAL_SOURCE = "local"
 
 def init_system(conn: sqlite3.Connection) -> None:
     conn.executescript("""
-    CREATE TABLE IF NOT EXISTS system_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, password_hash TEXT, must_change_password INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS system_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, password_hash TEXT, must_change_password INTEGER NOT NULL DEFAULT 0, api_access_enabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS identity_provider_configs (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, endpoint TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, settings TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_prefix TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT);
+    CREATE INDEX IF NOT EXISTS ix_api_tokens_user ON api_tokens(user_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_api_tokens_one_active ON api_tokens(user_id) WHERE revoked_at IS NULL;
     """)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(system_users)")}
     if "password_hash" not in columns:
@@ -25,10 +29,116 @@ def init_system(conn: sqlite3.Connection) -> None:
         conn.execute(f"ALTER TABLE system_users ADD COLUMN auth_source TEXT NOT NULL DEFAULT '{LOCAL_SOURCE}'")
     if "external_id" not in columns:
         conn.execute("ALTER TABLE system_users ADD COLUMN external_id TEXT")
+    if "api_access_enabled" not in columns:
+        conn.execute("ALTER TABLE system_users ADD COLUMN api_access_enabled INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
 def list_users(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    return [{**dict(row), "scopes": json.loads(row["scopes"]), "must_change_password": bool(row["must_change_password"])} for row in conn.execute("SELECT id, username, display_name, role, scopes, enabled, must_change_password, auth_source, external_id, created_at FROM system_users ORDER BY username")]
+    now = datetime.now(timezone.utc).isoformat()
+    rows = conn.execute("""SELECT u.id, u.username, u.display_name, u.role, u.scopes, u.enabled,
+        u.must_change_password, u.api_access_enabled, u.auth_source, u.external_id, u.created_at,
+        t.token_prefix, t.last_used_at
+        FROM system_users u LEFT JOIN api_tokens t ON t.id = (
+            SELECT id FROM api_tokens WHERE user_id = u.id AND revoked_at IS NULL AND expires_at > ?
+            ORDER BY created_at DESC LIMIT 1
+        ) ORDER BY u.username""", (now,))
+    return [{
+        **dict(row),
+        "scopes": json.loads(row["scopes"]),
+        "must_change_password": bool(row["must_change_password"]),
+        "api_access_enabled": bool(row["api_access_enabled"]),
+        "api_token_active": row["token_prefix"] is not None,
+        "api_token_prefix": row["token_prefix"],
+        "api_token_last_used_at": row["last_used_at"],
+    } for row in rows]
+
+def external_user_api_enabled(conn: sqlite3.Connection) -> bool:
+    row = conn.execute("SELECT value FROM system_settings WHERE key = ?", ("external_user_api_enabled",)).fetchone()
+    return bool(row and row["value"] == "true")
+
+
+def set_external_user_api_enabled(conn: sqlite3.Connection, enabled: bool) -> None:
+    conn.execute(
+        "INSERT INTO system_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ("external_user_api_enabled", "true" if enabled else "false"),
+    )
+    conn.commit()
+
+
+def revoke_api_tokens(conn: sqlite3.Connection, user_id: str) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        "UPDATE api_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+        (now, user_id),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
+def api_token_summary(conn: sqlite3.Connection, user_id: str) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    row = conn.execute(
+        "SELECT token_prefix, created_at, expires_at, last_used_at FROM api_tokens "
+        "WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT 1",
+        (user_id, now),
+    ).fetchone()
+    if row is None:
+        return {"active": False, "prefix": None, "created_at": None, "expires_at": None, "last_used_at": None}
+    return {"active": True, "prefix": row["token_prefix"], "created_at": row["created_at"], "expires_at": row["expires_at"], "last_used_at": row["last_used_at"]}
+
+
+def create_api_token(conn: sqlite3.Connection, user_id: str) -> dict[str, Any]:
+    user = conn.execute("SELECT enabled, api_access_enabled FROM system_users WHERE id = ?", (user_id,)).fetchone()
+    if user is None or not user["enabled"] or not user["api_access_enabled"]:
+        raise ValueError("API access is not enabled for this account")
+    token = "eare_pat_" + secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    created_at = now.isoformat()
+    expires_at = (now + timedelta(days=90)).isoformat()
+    token_id = secrets.token_hex(16)
+    prefix = token[:16]
+    conn.execute("UPDATE api_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL", (created_at, user_id))
+    conn.execute(
+        "INSERT INTO api_tokens(id, user_id, token_prefix, token_hash, created_at, expires_at) VALUES(?,?,?,?,?,?)",
+        (token_id, user_id, prefix, hashlib.sha256(token.encode("utf-8")).hexdigest(), created_at, expires_at),
+    )
+    conn.commit()
+    return {"token": token, "id": token_id, "prefix": prefix, "created_at": created_at, "expires_at": expires_at}
+
+
+def authenticate_api_token(conn: sqlite3.Connection, token: str) -> dict[str, Any] | None:
+    if not isinstance(token, str) or not token.startswith("eare_pat_") or len(token) > 128:
+        return None
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    row = conn.execute("""SELECT t.id AS token_id, t.token_hash, t.token_prefix, t.expires_at, t.revoked_at,
+        u.id, u.username, u.display_name, u.role, u.scopes, u.enabled, u.api_access_enabled,
+        u.must_change_password
+        FROM api_tokens t JOIN system_users u ON u.id = t.user_id WHERE t.token_hash = ?""", (digest,)).fetchone()
+    if row is None or not secrets.compare_digest(str(row["token_hash"]), digest):
+        return None
+    if row["revoked_at"] is not None or not row["enabled"] or not row["api_access_enabled"]:
+        return None
+    try:
+        if datetime.fromisoformat(str(row["expires_at"])) <= datetime.now(timezone.utc):
+            return None
+    except ValueError:
+        return None
+    if not external_user_api_enabled(conn):
+        return None
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("UPDATE api_tokens SET last_used_at = ? WHERE id = ?", (now, row["token_id"]))
+    conn.commit()
+    return {
+        "subject": str(row["id"]),
+        "username": str(row["username"]),
+        "display_name": str(row["display_name"]),
+        "role": str(row["role"]),
+        "scopes": json.loads(row["scopes"]),
+        "must_change_password": bool(row["must_change_password"]),
+        "token_id": str(row["token_id"]),
+        "token_prefix": str(row["token_prefix"]),
+    }
+
 
 def _password_hash(password: str, salt: bytes | None = None) -> str:
     salt = salt or secrets.token_bytes(16)
@@ -89,6 +199,12 @@ def upsert_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any
     if role == "ADMIN": scopes = ["*"]
     source = str(data.get("auth_source") or LOCAL_SOURCE).strip() or LOCAL_SOURCE
     external_id = str(data.get("external_id") or "").strip() or None
+    existing = conn.execute("SELECT api_access_enabled FROM system_users WHERE username = ?", (username,)).fetchone()
+    current_api_access = bool(existing["api_access_enabled"]) if existing is not None else False
+    raw_api_access = data.get("api_access_enabled", current_api_access)
+    if not isinstance(raw_api_access, bool):
+        raise ValueError("api_access_enabled must be a boolean")
+    api_access_enabled = raw_api_access
     password = data.get("password")
     if source != LOCAL_SOURCE and password:
         raise ValueError("directory accounts authenticate against their directory, not a stored password")
@@ -98,11 +214,22 @@ def upsert_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any
     # clear a pending password change.
     must_change = data.get("must_change_password")
     must_change = None if must_change is None else int(bool(must_change) and source == LOCAL_SOURCE)
-    record = {"id": username, "username": username, "display_name": str(data.get("display_name") or username), "role": role, "scopes": scopes, "enabled": bool(data.get("enabled", True)), "auth_source": source, "external_id": external_id, "created_at": datetime.now(timezone.utc).isoformat()}
+    record = {"id": username, "username": username, "display_name": str(data.get("display_name") or username), "role": role, "scopes": scopes, "enabled": bool(data.get("enabled", True)), "api_access_enabled": api_access_enabled, "auth_source": source, "external_id": external_id, "created_at": datetime.now(timezone.utc).isoformat()}
     password_hash = _password_hash(password) if isinstance(password, str) and source == LOCAL_SOURCE else None
-    conn.execute("""INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, must_change_password, auth_source, external_id, created_at) VALUES(?,?,?,?,?,?,?,COALESCE(?,0),?,?,?) ON CONFLICT(username) DO UPDATE SET display_name=excluded.display_name, role=excluded.role, scopes=excluded.scopes, enabled=excluded.enabled, password_hash=CASE WHEN excluded.auth_source <> ? THEN NULL ELSE COALESCE(excluded.password_hash, system_users.password_hash) END, must_change_password=COALESCE(?, system_users.must_change_password), auth_source=excluded.auth_source, external_id=COALESCE(excluded.external_id, system_users.external_id)""", (record["id"], record["username"], record["display_name"], record["role"], json.dumps(scopes), int(record["enabled"]), password_hash, must_change, source, external_id, record["created_at"], LOCAL_SOURCE, must_change))
+    conn.execute("""INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, must_change_password, api_access_enabled, auth_source, external_id, created_at)
+        VALUES(?,?,?,?,?,?,?,COALESCE(?,0),?,?,?,?)
+        ON CONFLICT(username) DO UPDATE SET display_name=excluded.display_name, role=excluded.role, scopes=excluded.scopes,
+        enabled=excluded.enabled, api_access_enabled=excluded.api_access_enabled,
+        password_hash=CASE WHEN excluded.auth_source <> ? THEN NULL ELSE COALESCE(excluded.password_hash, system_users.password_hash) END,
+        must_change_password=COALESCE(?, system_users.must_change_password), auth_source=excluded.auth_source,
+        external_id=COALESCE(excluded.external_id, system_users.external_id)""",
+        (record["id"], record["username"], record["display_name"], record["role"], json.dumps(scopes),
+         int(record["enabled"]), password_hash, must_change, int(api_access_enabled), source, external_id,
+         record["created_at"], LOCAL_SOURCE, must_change))
     conn.commit()
     record["must_change_password"] = bool(conn.execute("SELECT must_change_password FROM system_users WHERE username = ?", (username,)).fetchone()[0])
+    if not api_access_enabled:
+        revoke_api_tokens(conn, username)
     return record
 
 def set_enabled(conn: sqlite3.Connection, username: str, enabled: bool) -> dict[str, Any]:
@@ -112,6 +239,8 @@ def set_enabled(conn: sqlite3.Connection, username: str, enabled: bool) -> dict[
         raise ValueError("user not found")
     conn.execute("UPDATE system_users SET enabled = ? WHERE username = ?", (int(bool(enabled)), normalized))
     conn.commit()
+    if not enabled:
+        revoke_api_tokens(conn, normalized)
     return {"username": normalized, "enabled": bool(enabled)}
 
 def reset_password(conn: sqlite3.Connection, username: str, password: str) -> dict[str, Any]:

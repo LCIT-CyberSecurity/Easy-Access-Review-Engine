@@ -17,11 +17,14 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from fastapi import Body, FastAPI, HTTPException, Request, Response
-    from fastapi.responses import StreamingResponse
+    from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
+    from fastapi.openapi.docs import get_swagger_ui_html
+    from fastapi.responses import HTMLResponse, StreamingResponse
+    from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 except ModuleNotFoundError:  # pragma: no cover
     FastAPI = None  # type: ignore[assignment]
-    Body = Request = Response = HTTPException = StreamingResponse = None  # type: ignore[assignment,misc]
+    Body = Depends = Request = Response = HTTPException = HTMLResponse = StreamingResponse = None  # type: ignore[assignment,misc]
+    get_swagger_ui_html = HTTPAuthorizationCredentials = HTTPBearer = None  # type: ignore[assignment,misc]
 
 from access_review_engine.application import import_file_to_repository
 from access_review_engine.access_context import access_context_for_payload, access_enrichment, capture_campaign_access_contexts, save_access_enrichment
@@ -37,10 +40,10 @@ from access_review_engine.source_inspector import SourceInspectorError, discover
 from access_review_engine.source_mapping import mapping_diagnostics
 from access_review_engine.storage import Repository, hydrate_access, hydrate_authentication_posture, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
-from access_review_engine.web_read_models import projected_rows
+from access_review_engine.web_read_models import _add_review_provenance, _display_names, _latest_decisions, projected_rows, review_item_view, review_summary
 from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import, snapshot_collection_scope
 from access_review_engine.directory_auth import DirectoryError, authenticate as directory_authenticate, search_accounts as directory_accounts, test_directory, validate_directory
-from access_review_engine.system_admin import LOCAL_SOURCE, authenticate_user, change_password as update_password, enabled_admins, ensure_bootstrap_user, init_system, list_idps, list_users, reset_password, set_enabled, upsert_idp, upsert_user
+from access_review_engine.system_admin import LOCAL_SOURCE, api_token_summary, authenticate_api_token, authenticate_user, change_password as update_password, create_api_token, enabled_admins, ensure_bootstrap_user, external_user_api_enabled, init_system, list_idps, list_users, reset_password, revoke_api_tokens, set_enabled, set_external_user_api_enabled, upsert_idp, upsert_user
 
 
 SESSION_COOKIE = "eare_session"
@@ -101,7 +104,7 @@ def create_app(db_path: str | None = None):
     if FastAPI is None:
         raise RuntimeError("Install the 'app' extra to use the REST API")
     db_path = db_path or os.environ.get("EARE_DB_PATH", "access-review.db")
-    app = FastAPI(title="Easy Access Review Engine", version="0.3.0")
+    app = FastAPI(title="Easy Access Review Engine", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
     system_conn = sqlite3.connect(db_path, check_same_thread=False)
     system_conn.row_factory = sqlite3.Row
     init_system(system_conn)
@@ -155,6 +158,28 @@ def create_app(db_path: str | None = None):
             principal.username,
             str(stored.get("display_name", principal.display_name)),
             bool(stored.get("must_change_password", False)),
+        )
+
+    api_bearer = HTTPBearer(auto_error=False, scheme_name="BearerToken")
+
+    def current_api_user(
+        credentials: HTTPAuthorizationCredentials | None = Depends(api_bearer),
+    ) -> WebPrincipal:
+        """Authenticate only the external v1 routes; session auth remains cookie-only."""
+        if credentials is None or credentials.scheme.casefold() != "bearer":
+            raise HTTPException(status_code=401, detail="Bearer API key required", headers={"WWW-Authenticate": "Bearer"})
+        authenticated = authenticate_api_token(system_conn, credentials.credentials)
+        if authenticated is None:
+            raise HTTPException(status_code=401, detail="Invalid or inactive API key", headers={"WWW-Authenticate": "Bearer"})
+        if authenticated.get("must_change_password"):
+            raise HTTPException(status_code=403, detail="Password change required")
+        return WebPrincipal(
+            str(authenticated["subject"]),
+            str(authenticated["role"]),
+            frozenset(str(scope) for scope in authenticated.get("scopes", [])),
+            str(authenticated["username"]),
+            str(authenticated["display_name"]),
+            bool(authenticated.get("must_change_password", False)),
         )
 
     def _directory_config(name: str, *, require_enabled: bool = True) -> dict[str, Any] | None:
@@ -274,6 +299,59 @@ def create_app(db_path: str | None = None):
     def me(request: Request):
         return asdict(_require(current_user(request)))
 
+    @app.get("/api/me/api-token")
+    def me_api_token(request: Request):
+        principal = _require(current_user(request))
+        stored = _stored_user(principal.username)
+        if stored is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        return {
+            "api_access_enabled": bool(stored.get("api_access_enabled")),
+            "external_user_api_enabled": external_user_api_enabled(system_conn),
+            "token": api_token_summary(system_conn, str(stored["id"])),
+        }
+
+    @app.post("/api/me/api-token")
+    def me_api_token_create(request: Request, response: Response):
+        principal = _require(current_user(request))
+        stored = _stored_user(principal.username)
+        if stored is None or not stored.get("enabled"):
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if not stored.get("api_access_enabled"):
+            raise HTTPException(status_code=403, detail="API access is disabled by an administrator")
+        if not external_user_api_enabled(system_conn):
+            raise HTTPException(status_code=403, detail="External user API is currently disabled")
+        previous_token = system_conn.execute(
+            "SELECT id, token_prefix FROM api_tokens WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
+            (str(stored["id"]),),
+        ).fetchone()
+        try:
+            created = create_api_token(system_conn, str(stored["id"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        with Repository(db_path) as repo:
+            if previous_token is not None:
+                record_audit(repo, request, "api.token_revoked", "api_token", str(previous_token["id"]), {"token_prefix": str(previous_token["token_prefix"]), "reason": "rotated"})
+            record_audit(repo, request, "api.token_created", "api_token", created["id"], {"user_id": stored["id"], "token_prefix": created["prefix"]})
+        response.headers["Cache-Control"] = "no-store"
+        return {"api_key": created["token"], "prefix": created["prefix"], "created_at": created["created_at"], "expires_at": created["expires_at"]}
+
+    @app.delete("/api/me/api-token")
+    def me_api_token_revoke(request: Request):
+        principal = _require(current_user(request))
+        stored = _stored_user(principal.username)
+        if stored is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        token = system_conn.execute(
+            "SELECT id, token_prefix FROM api_tokens WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
+            (str(stored["id"]),),
+        ).fetchone()
+        revoked = revoke_api_tokens(system_conn, str(stored["id"]))
+        if token is not None:
+            with Repository(db_path) as repo:
+                record_audit(repo, request, "api.token_revoked", "api_token", str(token["id"]), {"token_prefix": str(token["token_prefix"])})
+        return {"revoked": revoked > 0}
+
     def _authorized_domain_options(repo: Repository) -> list[dict[str, Any]]:
         """Combine observed providers with configured connector instances without exposing config."""
         safe_fields = ("id", "name", "type", "display_name", "health", "last_sync", "identity_count", "access_count")
@@ -314,6 +392,35 @@ def create_app(db_path: str | None = None):
                     counts[identity] = counts.get(identity, 0) + 1
         return counts
 
+    @app.put("/api/system/settings/external-user-api")
+    def system_external_api_toggle(request: Request, payload: dict[str, Any] = Body(...)):
+        _require(current_user(request), ("ADMIN",))
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise HTTPException(status_code=400, detail="enabled must be a boolean")
+        previous = external_user_api_enabled(system_conn)
+        set_external_user_api_enabled(system_conn, enabled)
+        if previous != enabled:
+            with Repository(db_path) as repo:
+                record_audit(repo, request, "api.global_enabled" if enabled else "api.global_disabled", "system_setting", "external_user_api_enabled")
+        return {"external_user_api_enabled": enabled}
+
+    @app.post("/api/system/users/{username}/api-token/revoke")
+    def system_user_api_token_revoke(username: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN",))
+        stored = _stored_user(username)
+        if stored is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        token = system_conn.execute(
+            "SELECT id, token_prefix FROM api_tokens WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1",
+            (str(stored["id"]),),
+        ).fetchone()
+        revoked = revoke_api_tokens(system_conn, str(stored["id"]))
+        if token is not None:
+            with Repository(db_path) as repo:
+                record_audit(repo, request, "api.token_revoked", "api_token", str(token["id"]), {"user_id": stored["id"], "token_prefix": str(token["token_prefix"]), "revoked_by": principal.username})
+        return {"revoked": revoked > 0}
+
     @app.get("/api/system")
     def system_overview(request: Request):
         _require(current_user(request), ("ADMIN",))
@@ -321,7 +428,7 @@ def create_app(db_path: str | None = None):
         users = [{**user, "pending_reviews": pending.get(str(user.get("username", "")).lower(), 0)} for user in list_users(system_conn)]
         with Repository(db_path) as repo:
             providers = _authorized_domain_options(repo)
-        return {"users": users, "identity_providers": list_idps(system_conn), "providers": providers, "roles": sorted(ROLES)}
+        return {"users": users, "identity_providers": list_idps(system_conn), "providers": providers, "roles": sorted(ROLES), "external_user_api_enabled": external_user_api_enabled(system_conn)}
 
     @app.post("/api/system/users/{username}/reassign-reviews")
     def system_user_reassign_reviews(username: str, request: Request, payload: dict[str, Any] = Body(...)):
@@ -385,10 +492,17 @@ def create_app(db_path: str | None = None):
             requested = {value.strip() for value in raw_scopes if value.strip()}
             if "*" in requested or requested - configured:
                 raise HTTPException(status_code=400, detail="Authorized domains must be configured providers")
+        previous_user = _stored_user(str(payload.get("username", "")))
+        previous_api_access = bool(previous_user and previous_user.get("api_access_enabled"))
+        previous_token = api_token_summary(system_conn, str(previous_user["id"])) if previous_user else {"active": False}
         try:
             result = upsert_user(system_conn, payload)
             with Repository(db_path) as repo:
                 record_audit(repo, request, "system.user_upserted", "user", str(result.get("username", "")), {"role": result.get("role", ""), "auth_source": result.get("auth_source", LOCAL_SOURCE)})
+                if previous_user is not None and previous_api_access != bool(result.get("api_access_enabled")):
+                    record_audit(repo, request, "api.access_enabled" if result.get("api_access_enabled") else "api.access_disabled", "user", str(result.get("username", "")))
+                    if previous_token.get("active") and not result.get("api_access_enabled"):
+                        record_audit(repo, request, "api.token_revoked", "user", str(result.get("username", "")), {"reason": "api_access_disabled"})
             return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -397,12 +511,16 @@ def create_app(db_path: str | None = None):
     def system_user_disable(username: str, request: Request):
         principal = _require(current_user(request), ("ADMIN",))
         _guard_admin_access(principal, username, enabled=False)
+        previous_user = _stored_user(username)
+        previous_token = api_token_summary(system_conn, str(previous_user["id"])) if previous_user else {"active": False}
         try:
             result = set_enabled(system_conn, username, False)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         with Repository(db_path) as repo:
             record_audit(repo, request, "system.user_disabled", "user", result["username"])
+            if previous_token.get("active"):
+                record_audit(repo, request, "api.token_revoked", "user", result["username"], {"reason": "account_disabled"})
         return result
 
     @app.post("/api/system/users/{username}/enable")
@@ -1847,5 +1965,245 @@ def create_app(db_path: str | None = None):
             repo.insert_append_only("decisions", result)
             record_audit(repo, request, "review.decision_recorded", "review_item", item.id, {"decision": result.value})
         return asdict(result)
+
+    def _api_page(limit: int, offset: int) -> tuple[int, int]:
+        return max(1, min(limit, 500)), max(0, offset)
+
+    def _api_require_campaign_role(principal: WebPrincipal) -> None:
+        if principal.role not in {"ADMIN", "OPERATOR"}:
+            raise HTTPException(status_code=403, detail="This role cannot access campaigns")
+
+    def _api_golden_context(repo: Repository, source_id: str):
+        payload = repo.get_payload("golden_sources", source_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Golden Source not found")
+        source = hydrate_golden_source(payload)
+        versions = [
+            hydrate_golden_version(row)
+            for row in repo.list_payloads("golden_source_versions")
+            if str(row.get("golden_source_id")) == source_id
+        ]
+        active = next((item for item in versions if item.id == source.active_version_id), None)
+        return source, versions, active
+
+    def _api_require_golden_access(principal: WebPrincipal, versions) -> None:
+        if principal.role not in {"ADMIN", "OPERATOR"}:
+            raise HTTPException(status_code=403, detail="This role cannot access Golden Sources")
+        providers = {
+            provider
+            for version in versions
+            for assignment in version.assignments
+            for provider in (assignment.access_provider, assignment.identity_provider)
+            if provider
+        }
+        if principal.role != "ADMIN" and not can_access_campaign(principal.role, principal.scopes, providers):
+            raise HTTPException(status_code=403, detail="Golden Source includes providers outside your authorized domains")
+
+    @app.get("/api/v1/me", tags=["External User API"])
+    def external_me(principal: WebPrincipal = Depends(current_api_user)):
+        return {
+            "id": principal.subject,
+            "username": principal.username,
+            "display_name": principal.display_name,
+            "role": principal.role,
+            "authorized_domains": sorted(principal.scopes),
+        }
+
+    @app.get("/api/v1/golden-sources", tags=["External User API"])
+    def external_golden_sources(principal: WebPrincipal = Depends(current_api_user), limit: int = 100, offset: int = 0, search: str | None = None):
+        if principal.role not in {"ADMIN", "OPERATOR"}:
+            raise HTTPException(status_code=403, detail="This role cannot access Golden Sources")
+        bounded, start = _api_page(limit, offset)
+        with Repository(db_path) as repo:
+            versions = repo.list_payloads("golden_source_versions")
+            items = []
+            for payload in repo.list_payloads("golden_sources"):
+                source_versions = [hydrate_golden_version(row) for row in versions if str(row.get("golden_source_id")) == str(payload.get("id"))]
+                try:
+                    _api_require_golden_access(principal, source_versions)
+                except HTTPException as exc:
+                    if exc.status_code == 403:
+                        continue
+                    raise
+                active = next((row for row in source_versions if row.id == payload.get("active_version_id")), None)
+                items.append({
+                    "id": payload.get("id"),
+                    "name": payload.get("name"),
+                    "display_name": payload.get("display_name"),
+                    "active_version": ({"id": active.id, "version": active.version, "comment": active.comment, "created_at": active.created_at, "assignment_count": len(active.assignments)} if active else None),
+                })
+        if search:
+            needle = search.casefold()
+            items = [row for row in items if needle in f"{row.get('name', '')} {row.get('display_name', '')}".casefold()]
+        items.sort(key=lambda row: str(row.get("name") or "").casefold())
+        return {"items": items[start:start + bounded], "total": len(items), "limit": bounded, "offset": start}
+
+    @app.get("/api/v1/golden-sources/{source_id}", tags=["External User API"])
+    def external_golden_source(source_id: str, principal: WebPrincipal = Depends(current_api_user)):
+        with Repository(db_path) as repo:
+            source, versions, active = _api_golden_context(repo, source_id)
+            _api_require_golden_access(principal, versions)
+            active_view = None
+            if active is not None:
+                active_view = {
+                    "id": active.id, "version": active.version, "created_at": active.created_at,
+                    "source_type": active.source_type, "comment": active.comment,
+                    "assignment_count": len(active.assignments),
+                }
+            return {"source": asdict(source), "active_version": active_view}
+
+    @app.get("/api/v1/golden-sources/{source_id}/versions", tags=["External User API"])
+    def external_golden_versions(source_id: str, principal: WebPrincipal = Depends(current_api_user), limit: int = 100, offset: int = 0):
+        bounded, start = _api_page(limit, offset)
+        with Repository(db_path) as repo:
+            _, versions, _ = _api_golden_context(repo, source_id)
+            _api_require_golden_access(principal, versions)
+            versions.sort(key=lambda item: item.version, reverse=True)
+            rows = [{"id": item.id, "version": item.version, "created_at": item.created_at, "source_type": item.source_type, "comment": item.comment, "assignment_count": len(item.assignments)} for item in versions]
+        return {"items": rows[start:start + bounded], "total": len(rows), "limit": bounded, "offset": start}
+
+    @app.get("/api/v1/golden-sources/{source_id}/versions/{version_id}", tags=["External User API"])
+    def external_golden_version(source_id: str, version_id: str, principal: WebPrincipal = Depends(current_api_user), limit: int = 100, offset: int = 0):
+        bounded, start = _api_page(limit, offset)
+        with Repository(db_path) as repo:
+            _, versions, _ = _api_golden_context(repo, source_id)
+            _api_require_golden_access(principal, versions)
+            version = next((item for item in versions if item.id == version_id), None)
+            if version is None:
+                raise HTTPException(status_code=404, detail="Golden Source version not found")
+            assignments = []
+            for assignment in sorted(version.assignments, key=lambda item: item.key()):
+                row = asdict(assignment)
+                annotation = annotation_for_assignment(repo, version.id, assignment)
+                row["comment"] = annotation.get("comment") if annotation else None
+                assignments.append(row)
+            return {
+                "version": {"id": version.id, "version": version.version, "created_at": version.created_at, "source_type": version.source_type, "comment": version.comment},
+                "assignments": assignments[start:start + bounded],
+                "total_assignments": len(assignments), "limit": bounded, "offset": start,
+            }
+
+    @app.get("/api/v1/campaigns", tags=["External User API"])
+    def external_campaigns(principal: WebPrincipal = Depends(current_api_user), limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None):
+        _api_require_campaign_role(principal)
+        bounded, start = _api_page(limit, offset)
+        with Repository(db_path) as repo:
+            allowed = _authorized_campaign_ids(principal, repo)
+        page_result = projected_rows(
+            db_path, "campaigns", limit=bounded, offset=start,
+            allowed_campaign_ids=allowed, search=search, status=status,
+        )
+        return page_result
+
+    def _external_campaign_view(principal: WebPrincipal, campaign_id: str) -> dict[str, Any]:
+        _api_require_campaign_role(principal)
+        _require_campaign_id_access(principal, campaign_id)
+        page_result = projected_rows(db_path, "campaigns", limit=1, offset=0, filters={"id": campaign_id})
+        view = next((row for row in page_result["items"] if row.get("id") == campaign_id), None)
+        if view is None:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        return view
+
+    @app.get("/api/v1/campaigns/{campaign_id}", tags=["External User API"])
+    def external_campaign(campaign_id: str, principal: WebPrincipal = Depends(current_api_user)):
+        campaign_view = _external_campaign_view(principal, campaign_id)
+        return {"campaign": campaign_view}
+
+    @app.get("/api/v1/campaigns/{campaign_id}/summary", tags=["External User API"])
+    def external_campaign_summary(campaign_id: str, principal: WebPrincipal = Depends(current_api_user)):
+        campaign_view = _external_campaign_view(principal, campaign_id)
+        reviews = projected_rows(db_path, "review_items", limit=1, offset=0, campaign=campaign_id)
+        return {
+            "campaign_id": campaign_id,
+            "summary": reviews.get("summary", review_summary([])),
+            "reviewer_resolution": campaign_view.get("reviewer_resolution", {"resolved": 0, "unresolved": 0}),
+            "campaign": {key: campaign_view.get(key) for key in ("name", "status", "due_at", "opened_at", "closed_at")},
+        }
+
+    @app.get("/api/v1/campaigns/{campaign_id}/review-items", tags=["External User API"])
+    def external_campaign_review_items(campaign_id: str, principal: WebPrincipal = Depends(current_api_user), limit: int = 100, offset: int = 0):
+        if principal.role == "BUSINESS_ADMIN":
+            raise HTTPException(status_code=403, detail="This role cannot access campaign reviews")
+        if principal.role == "OPERATOR":
+            _require_campaign_id_access(principal, campaign_id)
+        elif principal.role == "GROUP_OWNER":
+            with Repository(db_path) as repo:
+                if not any(
+                    str(row.get("campaign_id")) == campaign_id
+                    and str((row.get("reviewer") or {}).get("identity", "")).casefold() == principal.username.casefold()
+                    for row in repo.list_payloads("review_items")
+                ):
+                    raise HTTPException(status_code=404, detail="Review items not found")
+        elif principal.role != "ADMIN":
+            raise HTTPException(status_code=403, detail="This role cannot access campaign reviews")
+        bounded, start = _api_page(limit, offset)
+        result = projected_rows(
+            db_path, "review_items", limit=bounded, offset=start, campaign=campaign_id,
+            reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None,
+        )
+        return result
+
+    @app.get("/api/v1/review-items/{review_item_id}", tags=["External User API"])
+    def external_review_item(review_item_id: str, principal: WebPrincipal = Depends(current_api_user)):
+        if principal.role == "BUSINESS_ADMIN":
+            raise HTTPException(status_code=403, detail="This role cannot access review items")
+        with Repository(db_path) as repo:
+            payload = repo.get_payload("review_items", review_item_id)
+            if payload is None:
+                raise HTTPException(status_code=404, detail="Review item not found")
+            if principal.role == "GROUP_OWNER":
+                reviewer = (payload.get("reviewer") or {}).get("identity")
+                if str(reviewer or "").casefold() != principal.username.casefold():
+                    raise HTTPException(status_code=403, detail="Review item is not assigned to this user")
+            elif principal.role == "OPERATOR":
+                campaign_payload = repo.get_payload("campaigns", str(payload.get("campaign_id") or ""))
+                if campaign_payload is None:
+                    raise HTTPException(status_code=409, detail="Review item campaign is missing")
+                _require_campaign_access(principal, hydrate_campaign(campaign_payload), repo)
+            elif principal.role != "ADMIN":
+                raise HTTPException(status_code=403, detail="This role cannot access review items")
+            latest = _latest_decisions(repo.list_payloads("decisions"))
+            view = review_item_view(repo, payload, latest_decisions=latest, names=_display_names(repo))
+            _add_review_provenance(repo, [view])
+            return view
+
+    @app.get("/openapi.json", include_in_schema=False)
+    def public_openapi():
+        schema = dict(app.openapi())
+        schema["paths"] = {
+            path: {method: operation for method, operation in methods.items() if method == "get"}
+            for path, methods in schema.get("paths", {}).items()
+            if path.startswith("/api/v1/")
+        }
+        components = dict(schema.get("components", {}))
+        schemas = dict(components.get("schemas", {}))
+        referenced: set[str] = set()
+
+        def collect_references(value: Any) -> None:
+            if isinstance(value, dict):
+                reference = value.get("$ref")
+                if isinstance(reference, str) and reference.startswith("#/components/schemas/"):
+                    referenced.add(reference.rsplit("/", 1)[-1])
+                for child in value.values():
+                    collect_references(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect_references(child)
+
+        collect_references(schema["paths"])
+        while True:
+            previous = len(referenced)
+            for name in tuple(referenced):
+                collect_references(schemas.get(name, {}))
+            if len(referenced) == previous:
+                break
+        components["schemas"] = {name: schemas[name] for name in referenced if name in schemas}
+        schema["components"] = components
+        schema["tags"] = [{"name": "External User API", "description": "Read-only user API authenticated with an EARE API key."}]
+        return schema
+
+    @app.get("/swagger", include_in_schema=False, response_class=HTMLResponse)
+    def swagger():
+        return get_swagger_ui_html(openapi_url="/openapi.json", title="EARE External User API")
 
     return app

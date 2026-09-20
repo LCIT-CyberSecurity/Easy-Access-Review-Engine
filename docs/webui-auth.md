@@ -47,3 +47,8 @@ EARE_DIRECTORY_PASSWORD=<service-account-secret>
 In **System → Users & permissions**, the button **+ From \<directory\>** searches the directory and imports the selected person. The administrator then assigns the role and, for a `BUSINESS_ADMIN`, the scopes. Only imported accounts can sign in: no account is created on the fly at first sign-in.
 
 A `GROUP_OWNER` username must match the reviewer identifier used by the audited source, otherwise no review is assigned to that person.
+
+
+## External read-only API
+
+The separate `/api/v1` user API is disabled globally and per user by default. Administrators control those two switches in **System → Users & permissions**; users generate their own 90-day API key from the account menu after access is granted. EARE stores only the SHA-256 hash, displays the key once, and checks the current enabled account, API capability, role and authorized domains on every request. Bearer keys are accepted only by `/api/v1`; they do not authenticate existing session-cookie WebUI endpoints. See [external-user-api.md](external-user-api.md) for the endpoint list, authorization behavior, Swagger URL and reverse-proxy rate-limit guidance.
