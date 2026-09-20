@@ -3,6 +3,8 @@ import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
+import pytest
+
 try:
     from fastapi.testclient import TestClient
 except ModuleNotFoundError:
@@ -540,3 +542,54 @@ if TestClient is not None:
         _login(client, "admin-test", "admin-password")
         assert client.post("/api/campaigns/preview", json=payload).status_code == 200
         assert client.post("/api/campaigns", json=payload).status_code == 200
+
+
+    @pytest.mark.parametrize("status", ["open", "closed"])
+    def test_historical_all_scope_authorization_unions_snapshot_and_review_items(tmp_path, status):
+        db = tmp_path / f"historical-all-{status}.db"
+        app = create_app(str(db))
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        upsert_user(conn, {"username": "france-op", "role": "OPERATOR", "scopes": ["ad-france"], "password": "operator-password"})
+        upsert_user(conn, {"username": "both-op", "role": "OPERATOR", "scopes": ["ad-france", "ad-germany"], "password": "operator-password"})
+        upsert_user(conn, {"username": "dual-domain-op", "role": "OPERATOR", "scopes": ["ad-france", "openldap-corp"], "password": "operator-password"})
+        conn.close()
+        snapshot = create_snapshot(
+            [Provider("ad-france", "generic"), Provider("ad-germany", "generic")], [], [], [], [], []
+        )
+        with Repository(db) as repo:
+            repo.upsert("snapshots", snapshot)
+            repo.upsert("campaigns", {
+                "id": "historical-all", "name": "Historical all", "snapshot_id": snapshot.id,
+                "scope": {"type": "all"}, "status": status,
+            })
+            repo.upsert("review_items", {
+                "id": "historical-review", "campaign_id": "historical-all",
+                "access_provider": "ad-france", "access_name": "staff",
+                "identity_provider": "ad-france", "identity_identifier": "alice", "findings": [],
+            })
+        client = TestClient(app)
+        _login(client, "france-op", "operator-password")
+        assert client.get("/api/campaigns/historical-all").status_code == 403
+        client.cookies.clear()
+        _login(client, "both-op", "operator-password")
+        assert client.get("/api/campaigns/historical-all").status_code == 200
+
+        # Persisted review providers remain sufficient when an old Snapshot is unavailable.
+        with Repository(db) as repo:
+            repo.upsert("campaigns", {
+                "id": "historical-no-snapshot", "name": "No snapshot", "snapshot_id": "missing",
+                "scope": {"type": "all"}, "status": status,
+            })
+            repo.upsert("review_items", {
+                "id": "historical-cross-review", "campaign_id": "historical-no-snapshot",
+                "access_provider": "ad-france", "access_name": "staff",
+                "identity_provider": "openldap-corp", "identity_identifier": "alice", "findings": [],
+            })
+        client.cookies.clear()
+        _login(client, "france-op", "operator-password")
+        assert client.get("/api/campaigns/historical-no-snapshot").status_code == 403
+        client.cookies.clear()
+        _login(client, "dual-domain-op", "operator-password")
+        assert client.get("/api/campaigns/historical-no-snapshot").status_code == 200

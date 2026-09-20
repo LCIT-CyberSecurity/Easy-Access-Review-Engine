@@ -1295,8 +1295,19 @@ def create_app(db_path: str | None = None):
         ]
         if campaign.status in {"open", "closed", "cancelled"} and review_items:
             # Historical review rows are immutable campaign evidence. Do not require the
-            # source Snapshot or Golden Source to remain recalculable to authorize them.
-            return campaign_required_providers(campaign.scope, review_items=review_items)
+            # Golden Source to remain recalculable. If the Snapshot still exists, its provider
+            # coverage also remains part of an `all` campaign's authorization boundary.
+            try:
+                snapshot = _snapshot(repo, campaign.snapshot_id)
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                snapshot = None
+            return campaign_required_providers(
+                campaign.scope,
+                review_items=review_items,
+                snapshot_providers=[provider.name for provider in snapshot.providers] if snapshot else (),
+            )
         if campaign.status in {"open", "closed"}:
             # A materialized campaign with no reviews can still expose its explicit scope;
             # for `all`, Snapshot coverage prevents an empty provider set from authorizing it.

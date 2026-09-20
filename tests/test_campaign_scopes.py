@@ -190,3 +190,22 @@ def test_campaign_required_providers_uses_persisted_history_and_snapshot_for_emp
     assert can_access_campaign("OPERATOR", ["ad-france", "ad-germany"], empty_all)
     assert not can_access_campaign("OPERATOR", ["ad-france"], set())
     assert can_access_campaign("ADMIN", [], set())
+
+
+def test_historical_all_scope_unions_snapshot_and_persisted_review_providers() -> None:
+    required = campaign_required_providers(
+        {"type": "all"},
+        review_items=[{"access_provider": "ad-france", "identity_provider": "ad-france"}],
+        snapshot_providers=["ad-france", "ad-germany"],
+    )
+    assert required == {"ad-france", "ad-germany"}
+    assert not can_access_campaign("OPERATOR", ["ad-france"], required)
+    assert can_access_campaign("OPERATOR", ["ad-france", "ad-germany"], required)
+
+    missing_snapshot_required = campaign_required_providers(
+        {"type": "all"},
+        review_items=[{"access_provider": "ad-france", "identity_provider": "openldap-corp"}],
+    )
+    assert missing_snapshot_required == {"ad-france", "openldap-corp"}
+    assert not can_access_campaign("OPERATOR", ["ad-france"], missing_snapshot_required)
+    assert can_access_campaign("OPERATOR", ["ad-france", "openldap-corp"], missing_snapshot_required)

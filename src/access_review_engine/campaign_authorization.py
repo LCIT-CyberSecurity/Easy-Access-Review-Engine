@@ -92,7 +92,7 @@ def campaign_required_providers(
             if isinstance(provider, str) and provider.strip():
                 providers.add(provider.strip())
 
-    if not persisted and normalized["type"] == "all":
+    if normalized["type"] == "all":
         providers.update(
             provider.strip()
             for provider in snapshot_providers
