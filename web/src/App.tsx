@@ -96,7 +96,7 @@ const contextValue = (context: unknown, field: string, origin: "source" | "manua
   const value = contextField(context, field)[origin] as Row | undefined;
   return value ? s(value.value, "") : "";
 };
-function BusinessContext({ context }: { context: unknown }) {
+function BusinessContext({ context, manualStatus }: { context: unknown; manualStatus?: string }) {
   const rows = [
     ["Application", "application"],
     ["Permission", "business_permission"],
@@ -105,24 +105,27 @@ function BusinessContext({ context }: { context: unknown }) {
     ["Owner", "owner"],
   ] as const;
   const visible = rows.filter(([, field]) => contextValue(context, field, "source") || contextValue(context, field, "manual"));
-  if (!visible.length) return <p className="muted">Business context not provided.</p>;
+  if (!visible.length && manualStatus !== "not_captured") return <p className="muted">Business context not provided.</p>;
   return (
-    <div className="business-context">
-      {visible.map(([label, field]) => {
-        const source = contextValue(context, field, "source"),
-          manual = contextValue(context, field, "manual"),
-          conflict = Boolean(contextField(context, field).conflict),
-          sourceEntry = contextField(context, field).source as Row | undefined;
-        return (
-          <div key={field}>
-            <strong>{label}</strong>
-            {manual ? <span>{manual}<small>Manual reference</small></span> : null}
-            {source ? <span>{source}<small>{sourceEntry?.provenance === "native" ? "Native source" : sourceEntry?.provenance === "static" ? "Configured static" : `Source attribute${sourceEntry?.attribute ? `: ${s(sourceEntry.attribute)}` : ""}`}</small></span> : null}
-            {conflict ? <Status v="warning" /> : null}
-          </div>
-        );
-      })}
-    </div>
+    <>
+      {visible.length ? <div className="business-context">
+        {visible.map(([label, field]) => {
+          const source = contextValue(context, field, "source"),
+            manual = contextValue(context, field, "manual"),
+            conflict = Boolean(contextField(context, field).conflict),
+            sourceEntry = contextField(context, field).source as Row | undefined;
+          return (
+            <div key={field}>
+              <strong>{label}</strong>
+              {manual ? <span>{manual}<small>Manual reference</small></span> : null}
+              {source ? <span>{source}<small>{sourceEntry?.provenance === "static" ? "Configured static" : sourceEntry?.provenance === "native_semantic" ? "Native semantic" : `Source attribute${sourceEntry?.attribute ? `: ${s(sourceEntry.attribute)}` : ""}${sourceEntry?.mapping_mode === "default" ? " · connector default" : sourceEntry?.mapping_mode === "configured" ? " · configured mapping" : ""}`}</small></span> : null}
+              {conflict ? <Status v="warning" /> : null}
+            </div>
+          );
+        })}
+      </div> : null}
+      {manualStatus === "not_captured" ? <p className="form-error">Manual context was not captured when this campaign opened, so no current catalogue value is shown as historical evidence.</p> : null}
+    </>
   );
 }
 /** What this access lets someone do, in words: the collected description, or permission on target. */
@@ -1905,7 +1908,7 @@ function ReviewDrawer({
       </section>
       <section className="drawer-section">
         <h4>BUSINESS CONTEXT</h4>
-        <BusinessContext context={item.business_context} />
+        <BusinessContext context={item.business_context} manualStatus={s(item.manual_context_capture_status)} />
       </section>
       {item.golden_comment ? (
         <section className="drawer-section">
@@ -3477,8 +3480,8 @@ function SourceBrowser() {
         </section>
       </div>
       <section className="panel">
-        <h2>Available safe attributes</h2>
-        <p className="muted">Coverage is calculated from a bounded sample, not from a full-directory scan.</p>
+        <h2>Known and sampled safe source fields</h2>
+        <p className="muted">Suggestions include common and configured fields plus safe sampled values. Coverage means populated in this bounded sample only; it does not verify permissions or application access.</p>
         <div className="attribute-list">
           {Object.entries((discovery.data?.attributes ?? {}) as Row).map(([name, info]) => {
             const row = info as Row;
@@ -3621,7 +3624,7 @@ function Sources({ principal }: { principal: Principal }) {
               </div>
             </div>
             <div className="source-foot">
-              {principal.role === "ADMIN" ? <NavLink className="button subtle" to={`/sources/${encodeURIComponent(s(r.provider))}/browse`}>Browse source</NavLink> : null}
+              {principal.role === "ADMIN" && Boolean((r.capabilities as Row | undefined)?.source_browser) ? <NavLink className="button subtle" to={`/sources/${encodeURIComponent(s(r.provider))}/browse`}>Browse source</NavLink> : null}
               <button
                 className="button subtle"
                 onClick={() => edit(configs.find((c) => s(c.provider) === s(r.provider)))}
@@ -3733,7 +3736,7 @@ function Sources({ principal }: { principal: Principal }) {
               </>
             )}
             <h4>BUSINESS MAPPING</h4>
-            <p className="field-note">Technical identifiers and group membership remain connector-controlled.</p>
+            <p className="field-note">Technical identifiers and group membership remain connector-controlled. Suggestions are bounded; safe custom attribute names can also be typed and are validated when saved.</p>
             {[
               ["Display name", "display_name"],
               ["Description", "description"],
@@ -3765,7 +3768,7 @@ function Sources({ principal }: { principal: Principal }) {
               );
             })}
             <datalist id="safe-source-fields">
-              {Object.keys((sourceFields.data?.attributes ?? {}) as Row).map((name) => <option value={name} key={name} />)}
+              {Object.entries((sourceFields.data?.attributes ?? {}) as Row).filter(([, info]) => (info as Row).mappable !== false).map(([name]) => <option value={name} key={name} />)}
             </datalist>
             <h4>SECRET REFERENCES</h4>
             <label>
@@ -3788,7 +3791,7 @@ function Sources({ principal }: { principal: Principal }) {
               <section className="mapping-diagnostics">
                 <p className="form-success">Connection: {s((testResult.connection as Row | undefined)?.status, "success")}</p>
                 {arr((testResult.mapping as Row | undefined)?.diagnostics).map((row) => (
-                  <p key={s(row.field)}><strong>{s(row.field).replaceAll("_", " ")}</strong> · {s(row.attribute, s(row.mode))} · {s(row.coverage, "—")}% · <Status v={row.status} /></p>
+                  <p key={s(row.field)}><strong>{s(row.field).replaceAll("_", " ")}</strong> · {s(row.attribute, s(row.mode))} · {row.coverage === undefined ? "—" : `${s(row.coverage)}% populated in sample`} · <Status v={row.status} /></p>
                 ))}
               </section>
             ) : null}

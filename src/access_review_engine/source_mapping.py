@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
+from access_review_engine.connector_capabilities import connector_capabilities
 from access_review_engine.domain import Access
 
 
@@ -89,6 +90,8 @@ def canonical_attribute_name(value: object) -> str:
 
 def validate_attribute_name(kind: str, value: object) -> str:
     """Return one safe connector attribute name, treating it strictly as data."""
+    if not connector_capabilities(kind).attribute_mapping:
+        raise SourceMappingError(f"Connector does not support attribute mapping: {kind}")
     if not isinstance(value, str) or not _ATTRIBUTE_NAME.fullmatch(value):
         raise SourceMappingError("Source attribute names may contain only letters, digits and hyphens")
     canonical = canonical_attribute_name(value)
@@ -117,6 +120,8 @@ def default_business_mapping(kind: str) -> dict[str, dict[str, str]]:
 
 def validate_business_mapping(kind: str, value: object) -> dict[str, dict[str, str]]:
     """Validate the deliberately small mapping language and return normalized entries."""
+    if not connector_capabilities(kind).attribute_mapping:
+        raise SourceMappingError(f"Connector does not support attribute mapping: {kind}")
     if value is None:
         return default_business_mapping(kind)
     if not isinstance(value, dict):
@@ -202,7 +207,8 @@ def build_business_context(
                 continue
             context[field] = {
                 "value": value,
-                "provenance": "source_attribute" if mode == "attribute" else "native",
+                "provenance": "source_attribute",
+                "mapping_mode": "configured" if mode == "attribute" else "default",
                 "attribute": actual_name,
             }
             break
@@ -214,7 +220,12 @@ def apply_business_context(access: Access, context: Mapping[str, Mapping[str, st
     display_name = context.get("display_name", {}).get("value")
     description = context.get("description", {}).get("value")
     display_provenance = context.get("display_name", {}).get("provenance")
-    if display_name and (display_provenance != "native" or not access.display_name):
+    display_mapping = context.get("display_name", {})
+    display_is_explicit = (
+        display_mapping.get("mapping_mode") == "configured"
+        or display_provenance in {"static", "native_semantic"}
+    )
+    if display_name and (display_is_explicit or not access.display_name):
         access.display_name = display_name
         if access.control_object is not None:
             access.control_object.display_name = display_name
@@ -250,10 +261,10 @@ def mapping_diagnostics(
         entry = mapping[field]
         mode = entry["mode"]
         if mode == "none" or (mode == "default" and not _DEFAULT_ATTRIBUTES[kind][field]):
-            rows.append({"field": field, "mode": mode, "status": "not_configured"})
+            rows.append({"field": field, "mode": mode, "mapping_mode": "configured" if mode != "default" else "default", "status": "not_configured"})
             continue
         if mode == "static":
-            rows.append({"field": field, "mode": mode, "status": "configured"})
+            rows.append({"field": field, "mode": mode, "mapping_mode": "configured", "status": "configured"})
             continue
         candidates = (
             (entry["attribute"],)
@@ -265,6 +276,7 @@ def mapping_diagnostics(
             rows.append({
                 "field": field,
                 "mode": mode,
+                "mapping_mode": "configured" if mode == "attribute" else "default",
                 "attribute": candidates[0] if candidates else None,
                 "status": "not_found",
                 "coverage": 0,
@@ -275,6 +287,7 @@ def mapping_diagnostics(
         rows.append({
             "field": field,
             "mode": mode,
+            "mapping_mode": "configured" if mode == "attribute" else "default",
             "attribute": name,
             "status": "ok" if coverage else "warning",
             "coverage": coverage,

@@ -114,20 +114,35 @@ reconciliation rules.
 
 ## Provenance and manual reference values
 
-Provenance is factual:
+Provenance stays factual and small:
 
-- `native`: the connector understands the field's semantics.
-- `source_attribute`: EARE read the value from a configured source attribute. This does not imply
-  target application verification.
-- `manual`: an administrator entered a reference value.
-- Static configuration is identified as a configured static value.
+- `source_attribute`: the value was read from the source; `mapping_mode` says `default` or
+  `configured`. A default such as AD `Description` is still a source attribute, not native IAM
+  semantics.
+- `static`: an administrator configured a fixed reference value.
+- `manual`: an administrator entered a catalogue reference value.
+- `native_semantic` is reserved for a future connector that natively exposes the business meaning.
 
-No confidence score is assigned.
+Source fact means only that the source reported the value. An AD/LDAP business-permission field
+and mapping coverage do not verify the actual permission in a target application. No confidence
+score or remote ACL validation is performed.
 
 Source context is structured on Access metadata and is included in the Snapshot. Manual Access
 enrichment is stored separately in `access_enrichments`, keyed by stable internal `Access.id`.
 Fields are Application, business Permission, Resource, Description and Owner. It is not attached to
-individual Golden assignments and does not mutate Snapshot contents.
+individual Golden assignments and does not mutate Snapshot contents. At campaign opening, the current
+manual reference values are copied once per distinct Access into `campaign_access_contexts`. Open and
+closed reviews use that frozen record, while source facts continue to come from the campaign Snapshot.
+A legacy campaign without a captured record is explicitly marked uncaptured; current catalogue values
+are not substituted as historical evidence. Draft previews may use live catalogue context.
+
+```mermaid
+flowchart LR
+    SNAP[Campaign Snapshot] --> SRC[Source fact for review]
+    CAT[Current Access enrichment] -->|copied once per Access on open| SIDE[campaign_access_contexts]
+    SIDE --> MAN[Frozen manual reference for review]
+    LIVE[Later catalogue edit] -. does not rewrite .-> SIDE
+```
 
 ```mermaid
 flowchart LR
@@ -190,8 +205,11 @@ existing secret environment/password-file conventions and are never returned or 
 and mapping administration follow the existing ADMIN source-administration permission boundary.
 The regular source listing keeps its existing access policy.
 
-Attribute coverage is computed from at most 50 sampled objects, with a few short safe examples. It
-is descriptive and is not a confidence score. Test connection returns connectivity and mapping
+The field picker suggests common connector fields, configured custom fields and safely sampled
+fields where available. It is intentionally not a schema-introspection engine: administrators may
+type a custom field name, which is validated against the same denylist. No `Properties *` or LDAP
+`*` request is used. Coverage is only the percentage populated in at most 50 sampled objects; it
+says nothing about permission correctness. Test connection returns connectivity and mapping
 diagnostics separately. A missing optional mapped field is a warning; it does not make a successful
 connection fail. Test data is temporary and creates no identities, accesses, Snapshot, Golden version
 or Campaign.
@@ -257,11 +275,16 @@ The MVP keeps the Repository's SQLite JSON-payload style. Two tables are added:
 | Table | Key | Contents |
 | --- | --- | --- |
 | `access_enrichments` | Internal `Access.id` | Manual reference fields plus created/updated actor/time |
+| `campaign_access_contexts` | Campaign plus stable Access reference | One frozen manual-context copy per Access at open time |
 | `golden_assignment_annotations` | Golden version ID plus full assignment reference | Version-specific comment and update metadata |
 
 Source configuration stores mapping rules. Access metadata stores source-observed context. Manual
-reference data and assignment annotations are separate records. No mapping rules or business
+reference data, campaign context and assignment annotations are separate records. No mapping rules or business
 permission values are inserted into Golden technical assignment metadata.
+
+A small connector-capability record declares attribute mapping, safe sampling, Source Browser and
+native permission/target support. AD/OpenLDAP support mapping and safe browsing, but do not provide
+native business permissions or targets. Protocol execution remains in their existing adapters.
 
 The API exposes mapping as part of source configuration; safe inspector routes under
 `/api/system/sources/{provider}/inspect`; manual Access read/update under

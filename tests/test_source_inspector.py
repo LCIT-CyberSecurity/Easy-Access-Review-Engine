@@ -7,6 +7,8 @@ from access_review_engine.source_inspector import (
     discover_source_attributes,
     get_source_object,
     search_source_objects,
+    source_object_kinds,
+    SourceInspectorError,
 )
 
 
@@ -85,7 +87,7 @@ def test_openldap_search_escapes_filter_input_and_never_places_credentials_in_co
 
 def test_attribute_discovery_reports_bounded_coverage_and_safe_samples() -> None:
     rows = [
-        {"identifier": "1", "attributes": {"extensionAttribute5": ["Sage"], "description": ["A"]}},
+        {"identifier": "1", "attributes": {"extensionAttribute5": ["Sage"], "description": ["A"], "objectGUID": ["id-1"]}},
         {"identifier": "2", "attributes": {"description": ["B"]}},
     ]
 
@@ -96,3 +98,26 @@ def test_attribute_discovery_reports_bounded_coverage_and_safe_samples() -> None
     assert attributes["extensionAttribute5"]["coverage"] == 50
     assert attributes["extensionAttribute5"]["samples"] == ["Sage"]
     assert attributes["description"]["coverage"] == 100
+    assert attributes["objectGUID"]["mappable"] is False
+    assert attributes["extensionAttribute5"]["mappable"] is True
+
+
+def test_attribute_suggestions_include_known_and_configured_zero_coverage_fields() -> None:
+    def runner(command: list[str], _env: dict[str, str], _timeout: int) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, json.dumps([{"attributes": {"Description": ["Finance"]}}]), "")
+
+    config = _ad() | {"business_mapping": {"application": {"mode": "attribute", "attribute": "businessApplication"}}}
+    attributes = discover_source_attributes(config, "group", runner)
+    assert attributes["Description"]["coverage"] == 100
+    assert attributes["extensionAttribute5"]["coverage"] == 0
+    assert attributes["businessApplication"]["coverage"] == 0
+    assert attributes["businessApplication"]["samples"] == []
+
+
+def test_source_browser_requires_declared_connector_capability() -> None:
+    try:
+        source_object_kinds({"type": "future_iam"})
+    except SourceInspectorError:
+        pass
+    else:
+        raise AssertionError("unsupported connectors must not implicitly gain Source Browser")

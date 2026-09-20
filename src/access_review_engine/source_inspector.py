@@ -9,10 +9,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from access_review_engine.collector_runner import exporter_root
+from access_review_engine.connector_capabilities import connector_capabilities
 from access_review_engine.config_loader import secret_environment
 from access_review_engine.source_mapping import (
     canonical_attribute_name,
     default_attribute_candidates,
+    is_safe_attribute,
     required_mapping_attributes,
 )
 
@@ -102,6 +104,8 @@ def discover_source_attributes(
     runner: Runner | None = None,
 ) -> dict[str, dict[str, object]]:
     object_kind = _object_kind(object_kind)
+    if not connector_capabilities(_kind(config)).safe_attribute_sampling:
+        raise SourceInspectorError("Connector does not support safe attribute sampling")
     rows = _query(
         config,
         object_kind,
@@ -110,28 +114,38 @@ def discover_source_attributes(
         runner=runner,
     )
     population = max(1, len(rows))
-    values: dict[str, list[str]] = {}
-    present: dict[str, int] = {}
-    for row in rows:
+    connector_type = _kind(config)
+    display_names = {
+        name.casefold(): name for name in default_attribute_candidates(connector_type)
+    }
+    for name in required_mapping_attributes(config, connector_type):
+        display_names[name.casefold()] = name
+    values: dict[str, list[str]] = {key: [] for key in display_names}
+    populated_objects: dict[str, set[int]] = {key: set() for key in display_names}
+    for index, row in enumerate(rows):
         attributes = _safe_attributes(row.get("attributes", {}))
         for name, raw_values in attributes.items():
+            key = name.casefold()
+            display_names[key] = name
             clean_values = [value for value in raw_values if value]
             if not clean_values:
                 continue
-            present[name] = present.get(name, 0) + 1
-            samples = values.setdefault(name, [])
+            populated_objects.setdefault(key, set()).add(index)
+            samples = values.setdefault(key, [])
             for value in clean_values:
                 if value not in samples and len(samples) < 3:
                     samples.append(value)
-    return {
-        name: {
-            "coverage": round(present[name] / population * 100),
-            "populated": present[name],
+    result = {}
+    for key, name in sorted(display_names.items(), key=lambda item: item[1].casefold()):
+        count = len(populated_objects.get(key, set()))
+        result[name] = {
+            "coverage": round(count / population * 100),
+            "populated": count,
             "sampled": len(rows),
-            "samples": values.get(name, []),
+            "samples": values.get(key, []),
+            "mappable": is_safe_attribute(connector_type, name),
         }
-        for name in sorted(present, key=str.casefold)
-    }
+    return result
 
 
 def _query(
@@ -426,8 +440,8 @@ def _mapping(value: object, name: str) -> dict[str, Any]:
 
 def _kind(config: dict[str, Any]) -> str:
     kind = str(config.get("type", ""))
-    if kind not in {"active_directory", "openldap"}:
-        raise SourceInspectorError("Source Inspector supports Active Directory and OpenLDAP")
+    if not connector_capabilities(kind).source_browser:
+        raise SourceInspectorError("This connector does not support Source Browser")
     return kind
 
 

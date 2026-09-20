@@ -3,10 +3,13 @@ from __future__ import annotations
 import pytest
 
 from access_review_engine.application import _enrich_access
+from access_review_engine.connector_capabilities import connector_capabilities
 from access_review_engine.domain import Access, ControlObject, Permission
 from access_review_engine.source_mapping import (
     BUSINESS_CONTEXT_METADATA_KEY,
     SourceMappingError,
+    build_business_context,
+    mapping_diagnostics,
     map_access_business_context,
     required_mapping_attributes,
     validate_business_mapping,
@@ -52,6 +55,7 @@ def test_ad_mapping_adds_context_without_changing_technical_access() -> None:
     assert context["application"] == {
         "value": "Sage",
         "provenance": "source_attribute",
+        "mapping_mode": "configured",
         "attribute": "extensionAttribute5",
     }
     assert context["business_permission"]["value"] == "ReadWrite"
@@ -69,7 +73,12 @@ def test_openldap_default_and_custom_mapping_keep_member_semantics() -> None:
     context = access.metadata[BUSINESS_CONTEXT_METADATA_KEY]
     assert access.permission.identifier == "member"
     assert access.name == "GG_SAGE_COMPTA_RW:member"
-    assert context["description"]["provenance"] == "native"
+    assert context["description"] == {
+        "value": "Finance team",
+        "provenance": "source_attribute",
+        "mapping_mode": "default",
+        "attribute": "description",
+    }
     assert context["application"]["value"] == "Sage"
 
 
@@ -135,3 +144,42 @@ def test_sensitive_technical_and_executable_attribute_names_are_rejected() -> No
                 "active_directory",
                 {"application": {"mode": "attribute", "attribute": attribute}},
             )
+
+
+def test_connector_capabilities_are_explicit_and_mapping_provenance_is_factual() -> None:
+    expected = {
+        "attribute_mapping": True,
+        "safe_attribute_sampling": True,
+        "source_browser": True,
+        "native_permissions": False,
+        "native_targets": False,
+    }
+    assert connector_capabilities("active_directory").__dict__ == expected
+    assert connector_capabilities("openldap").__dict__ == expected
+    assert connector_capabilities("future_iam").source_browser is False
+    with pytest.raises(SourceMappingError):
+        validate_business_mapping("future_iam", None)
+
+    default = build_business_context("active_directory", {"Description": "Finance"})["description"]
+    configured = build_business_context(
+        "active_directory",
+        {"extensionAttribute6": "ReadWrite"},
+        {"business_mapping": {"business_permission": {"mode": "attribute", "attribute": "extensionAttribute6"}}},
+    )["business_permission"]
+    static = build_business_context(
+        "active_directory",
+        {},
+        {"business_mapping": {"application": {"mode": "static", "value": "Sage"}}},
+    )["application"]
+    assert default == {"value": "Finance", "provenance": "source_attribute", "mapping_mode": "default", "attribute": "Description"}
+    assert configured == {"value": "ReadWrite", "provenance": "source_attribute", "mapping_mode": "configured", "attribute": "extensionAttribute6"}
+    assert static == {"value": "Sage", "provenance": "static"}
+
+    rows = mapping_diagnostics(
+        "active_directory",
+        {"business_mapping": {"business_permission": {"mode": "attribute", "attribute": "extensionAttribute6"}}},
+        {"extensionAttribute6": {"coverage": 50, "samples": ["ReadWrite"]}},
+    )
+    diagnostic = next(row for row in rows if row["field"] == "business_permission")
+    assert diagnostic["mapping_mode"] == "configured"
+    assert diagnostic["coverage"] == 50
