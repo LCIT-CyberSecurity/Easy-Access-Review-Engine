@@ -25,13 +25,14 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from access_review_engine.application import import_file_to_repository
 from access_review_engine.access_context import access_context_for_payload, access_enrichment, capture_campaign_access_contexts, save_access_enrichment
+from access_review_engine.campaign_authorization import CampaignScopeError, campaign_authorization_providers, can_access_campaign, normalize_campaign_scope
 from access_review_engine.authentication import compare_authentication_posture
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import connector_path, load_connector, secret_environment, validate_connector
 from access_review_engine.connector_capabilities import connector_capabilities
 from access_review_engine.golden_annotations import annotation_for_assignment, copy_assignment_annotations, normalize_assignment_comment, set_assignment_annotation
 from access_review_engine.reporting import build_report_rows, report_summary, write_reports
-from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
+from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, compare_snapshot, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
 from access_review_engine.source_inspector import SourceInspectorError, discover_source_attributes, get_source_object, search_source_objects, source_object_kinds
 from access_review_engine.source_mapping import mapping_diagnostics
 from access_review_engine.storage import Repository, hydrate_access, hydrate_authentication_posture, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
@@ -209,7 +210,14 @@ def create_app(db_path: str | None = None):
         return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, classification=classification, filters=filters)
 
     def scoped_page(principal: WebPrincipal, table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, filters: dict[str, str] | None = None):
-        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, classification=classification, filters=filters, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=principal.scopes if principal.role == "BUSINESS_ADMIN" else None)
+        allowed_campaigns = None
+        if principal.role == "OPERATOR" and table in {"campaigns", "review_items", "decisions", "remediation_actions"}:
+            with Repository(db_path) as repo:
+                allowed_campaigns = _authorized_campaign_ids(principal, repo)
+            if campaign and table in {"review_items", "decisions", "remediation_actions"}:
+                _require_campaign_id_access(principal, campaign)
+        allowed_providers = None if principal.role == "ADMIN" or "*" in principal.scopes else principal.scopes if principal.role in {"OPERATOR", "BUSINESS_ADMIN"} else None
+        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, classification=classification, filters=filters, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=allowed_providers, allowed_campaign_ids=allowed_campaigns)
 
     def require_table_access(principal: WebPrincipal, table: str) -> None:
         if principal.role == "BUSINESS_ADMIN" and table != "remediation_actions":
@@ -283,7 +291,9 @@ def create_app(db_path: str | None = None):
         _require(current_user(request), ("ADMIN",))
         pending = _pending_reviews_by_reviewer()
         users = [{**user, "pending_reviews": pending.get(str(user.get("username", "")).lower(), 0)} for user in list_users(system_conn)]
-        return {"users": users, "identity_providers": list_idps(system_conn), "roles": sorted(ROLES)}
+        with Repository(db_path) as repo:
+            providers = repo.list_payloads("providers")
+        return {"users": users, "identity_providers": list_idps(system_conn), "providers": providers, "roles": sorted(ROLES)}
 
     @app.post("/api/system/users/{username}/reassign-reviews")
     def system_user_reassign_reviews(username: str, request: Request, payload: dict[str, Any] = Body(...)):
@@ -337,6 +347,16 @@ def create_app(db_path: str | None = None):
         if source != LOCAL_SOURCE and _directory_config(source) is None:
             raise HTTPException(status_code=400, detail="This directory is not configured or not enabled")
         _guard_admin_access(principal, payload.get("username", ""), role=str(payload.get("role", "")).upper() or None, enabled=bool(payload.get("enabled", True)))
+        role = str(payload.get("role", "")).upper()
+        raw_scopes = payload.get("scopes", [])
+        if role in {"OPERATOR", "BUSINESS_ADMIN"}:
+            if not isinstance(raw_scopes, list) or any(not isinstance(value, str) for value in raw_scopes):
+                raise HTTPException(status_code=400, detail="Authorized domains must be a list of provider names")
+            with Repository(db_path) as repo:
+                configured = {str(row.get("name")) for row in repo.list_payloads("providers")}
+            requested = {value.strip() for value in raw_scopes if value.strip()}
+            if "*" in requested or requested - configured:
+                raise HTTPException(status_code=400, detail="Authorized domains must be configured providers")
         try:
             result = upsert_user(system_conn, payload)
             with Repository(db_path) as repo:
@@ -1007,12 +1027,13 @@ def create_app(db_path: str | None = None):
         """The report, readable in the WebUI: same rows and same counts as the exported file."""
         from access_review_engine.web_read_models import sorted_rows
 
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             raw = repo.get_payload("campaigns", campaign_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="Campaign not found")
             campaign = hydrate_campaign(raw)
+            _require_campaign_access(principal, campaign, repo)
             items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
             decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
         rows = build_report_rows(items, decisions)
@@ -1050,7 +1071,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/reports/{campaign_id}/{format}")
     def campaign_report(campaign_id: str, format: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         if format not in {"html", "csv", "json"}:
             raise HTTPException(status_code=404, detail="Report format not available")
         with Repository(db_path) as repo:
@@ -1058,6 +1079,7 @@ def create_app(db_path: str | None = None):
             if raw is None:
                 raise HTTPException(status_code=404, detail="Campaign not found")
             campaign = hydrate_campaign(raw)
+            _require_campaign_access(principal, campaign, repo)
             items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
             decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
             golden = _golden_version(repo, campaign.golden_source_version_id)
@@ -1075,20 +1097,26 @@ def create_app(db_path: str | None = None):
         """What deserves attention today, and what to do about it."""
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         today = time.strftime("%Y-%m-%d")
+        allowed_domains = None if principal.role == "ADMIN" or "*" in principal.scopes else set(principal.scopes)
         with Repository(db_path) as repo:
-            campaigns = repo.list_payloads("campaigns")
-            items = repo.list_payloads("review_items")
+            allowed_campaigns = _authorized_campaign_ids(principal, repo)
+            campaigns = [row for row in repo.list_payloads("campaigns") if str(row.get("id")) in allowed_campaigns]
+            items = [row for row in repo.list_payloads("review_items") if str(row.get("campaign_id")) in allowed_campaigns]
             decided = {str(row.get("review_item_id")) for row in repo.list_payloads("decisions")}
-            actions = repo.list_payloads("remediation_actions")
+            actions = [row for row in repo.list_payloads("remediation_actions") if allowed_domains is None or str(row.get("access_provider") or "") in allowed_domains]
             snapshots = repo.list_payloads("snapshots")
             sources = repo.list_payloads("golden_sources")
             versions = repo.list_payloads("golden_source_versions")
             connectors = repo.list_payloads("providers")
+        if allowed_domains is not None:
+            snapshots = [row for row in snapshots if any(str(provider.get("name") or "") in allowed_domains for provider in row.get("providers", []))]
         snapshot = snapshots[-1] if snapshots else None
         comparison = list(snapshot.get("comparison_states", [])) if snapshot else []
+        if allowed_domains is not None:
+            comparison = [row for row in comparison if str(row.get("access_provider") or "") in allowed_domains and str(row.get("identity_provider") or "") in allowed_domains]
         with Repository(db_path) as repo:
-            accesses = repo.list_payloads("accesses")
-            assignments = repo.list_payloads("access_assignments")
+            accesses = [row for row in repo.list_payloads("accesses") if allowed_domains is None or str(row.get("provider") or "") in allowed_domains]
+            assignments = [row for row in repo.list_payloads("access_assignments") if allowed_domains is None or (str(row.get("provider") or "") in allowed_domains and str(row.get("identity_provider") or "") in allowed_domains)]
             identity_names, access_names = __import__("access_review_engine.web_read_models", fromlist=["_display_names"])._display_names(repo)
         # What this person is personally on the hook for: their reviews and the rights they own.
         me = principal.username.casefold()
@@ -1116,7 +1144,7 @@ def create_app(db_path: str | None = None):
         owned.sort(key=lambda row: (str(row["application"] or "~"), str(row["access_display_name"]).casefold()))
         pending_actions = [row for row in actions if row.get("status") != "exported"]
         open_campaigns = [row for row in campaigns if row.get("status") == "open"]
-        providers = projected_rows(db_path, "providers", limit=100, offset=0)["items"]
+        providers = projected_rows(db_path, "providers", limit=100, offset=0, allowed_providers=allowed_domains)["items"]
         attention: list[dict[str, Any]] = []
 
         def note(tone: str, title: str, detail: str, link: str) -> None:
@@ -1168,7 +1196,7 @@ def create_app(db_path: str | None = None):
                 "findings": sum(1 for row in comparison if row.get("findings")),
             },
             "collected_at": snapshot.get("created_at") if snapshot else None,
-            "collected_from": [provider.get("name") for provider in (snapshot or {}).get("providers", [])],
+            "collected_from": [provider.get("name") for provider in (snapshot or {}).get("providers", []) if allowed_domains is None or provider.get("name") in allowed_domains],
             "expected_state": {"name": sources[0].get("name"), "version": max((int(row.get("version", 0)) for row in active), default=0), "assignments": max((len(row.get("assignments", [])) for row in active), default=0)} if sources else None,
             "mine": {
                 "reviews": {
@@ -1217,45 +1245,147 @@ def create_app(db_path: str | None = None):
         if not allowed["name"] or not isinstance(allowed.get("snapshot_id"), str) or not allowed["snapshot_id"].strip():
             raise HTTPException(status_code=400, detail="Campaign name and snapshot_id are required")
         allowed["snapshot_id"] = allowed["snapshot_id"].strip()
-        allowed["scope"] = allowed.get("scope") or {"type": "all"}
-        if not isinstance(allowed["scope"], dict) or allowed["scope"].get("type") not in {"all", "providers"}:
-            raise HTTPException(status_code=400, detail="Campaign scope must be all or providers")
+        try:
+            allowed["scope"] = normalize_campaign_scope(allowed.get("scope") or {"type": "all"})
+        except CampaignScopeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         allowed["default_reviewer"] = owner(payload.get("default_reviewer"))
         allowed["manager"] = owner(payload.get("manager"))
         if draft_id:
             allowed["id"] = draft_id
         return Campaign(**allowed)
 
+    def _prepare_campaign(repo: Repository, campaign):
+        snapshot = _snapshot(repo, campaign.snapshot_id)
+        golden = _golden_version(repo, campaign.golden_source_version_id)
+        return prepare_campaign_review(campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot))
+
+    def _campaign_required_providers(campaign, repo: Repository, preparation=None) -> set[str]:
+        preparation = preparation or _prepare_campaign(repo, campaign)
+        required = campaign_authorization_providers(campaign.scope, preparation.comparison_states)
+        # Persisted review rows are what historical detail/report endpoints actually expose.
+        # Include them too, so stale or legacy rows cannot bypass the complete-domain rule.
+        for row in repo.list_payloads("review_items"):
+            if str(row.get("campaign_id")) != str(campaign.id):
+                continue
+            for field in ("access_provider", "identity_provider"):
+                provider = row.get(field)
+                if isinstance(provider, str) and provider.strip():
+                    required.add(provider.strip())
+        return required
+
+    def _require_campaign_access(principal: WebPrincipal, campaign, repo: Repository, preparation=None):
+        if principal.role not in {"ADMIN", "OPERATOR"}:
+            raise HTTPException(status_code=403, detail="This role cannot manage campaigns")
+        try:
+            preparation = preparation or _prepare_campaign(repo, campaign)
+            required = _campaign_required_providers(campaign, repo, preparation)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if not can_access_campaign(principal.role, principal.scopes, required):
+            raise HTTPException(status_code=403, detail="Campaign includes providers outside your authorized domains")
+        return preparation
+
+    def _authorized_campaign_ids(principal: WebPrincipal, repo: Repository) -> set[str]:
+        campaigns = repo.list_payloads("campaigns")
+        if principal.role == "ADMIN":
+            return {str(row.get("id")) for row in campaigns}
+        if principal.role != "OPERATOR":
+            raise HTTPException(status_code=403, detail="This role cannot access campaigns")
+        allowed: set[str] = set()
+        for raw in campaigns:
+            try:
+                campaign = hydrate_campaign(raw)
+                preparation = _prepare_campaign(repo, campaign)
+                required = _campaign_required_providers(campaign, repo, preparation)
+            except (ValueError, KeyError, TypeError, HTTPException):
+                continue
+            if can_access_campaign(principal.role, principal.scopes, required):
+                allowed.add(str(campaign.id))
+        return allowed
+
+    def _require_campaign_id_access(principal: WebPrincipal, campaign_id: str):
+        if principal.role not in {"ADMIN", "OPERATOR"}:
+            raise HTTPException(status_code=403, detail="This role cannot access campaigns")
+        with Repository(db_path) as repo:
+            raw = repo.get_payload("campaigns", campaign_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            campaign = hydrate_campaign(raw)
+            _require_campaign_access(principal, campaign, repo)
+        return campaign
+
+    @app.get("/api/campaign-scope-accesses")
+    def campaign_scope_accesses(request: Request, snapshot_id: str, golden_source_version_id: str | None = None):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            snapshot = _snapshot(repo, snapshot_id)
+            golden = _golden_version(repo, golden_source_version_id)
+            try:
+                rows = compare_snapshot(snapshot, golden, snapshot_collection_scope(repo, snapshot))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            references = {(access.provider, access.name) for access in snapshot.accesses}
+            references.update((str(row.get("access_provider")), str(row.get("access_name"))) for row in rows)
+            if golden:
+                references.update((assignment.access_provider, assignment.access_name) for assignment in golden.assignments)
+            allowed = None if principal.role == "ADMIN" or "*" in principal.scopes else set(principal.scopes)
+            catalog = {(str(row.get("provider")), str(row.get("name"))): row for row in repo.list_payloads("accesses")}
+            snapshot_catalog = {(access.provider, access.name): access for access in snapshot.accesses}
+            items = []
+            for provider, name in sorted(references):
+                if not provider or not name or (allowed is not None and provider not in allowed):
+                    continue
+                access = snapshot_catalog.get((provider, name))
+                saved = catalog.get((provider, name), {})
+                context = access_context_for_payload(repo, asdict(access)) if access else access_context_for_payload(repo, saved)
+                fields = context.get("fields", {}) if isinstance(context, dict) else {}
+                application = (fields.get("application") or {}).get("source") or (fields.get("application") or {}).get("manual") if isinstance(fields, dict) else None
+                items.append({
+                    "provider": provider,
+                    "name": name,
+                    "display_name": (access.display_name if access else None) or saved.get("display_name") or name,
+                    "application": application.get("value") if isinstance(application, dict) else None,
+                })
+            return {"items": items, "total": len(items)}
+
     @app.post("/api/campaigns/preview")
     def campaign_preview(request: Request, payload: dict[str, Any] = Body(...)):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         campaign = _campaign_payload(payload)
         with Repository(db_path) as repo:
             snapshot = _snapshot(repo, campaign.snapshot_id)
             golden = _golden_version(repo, campaign.golden_source_version_id)
             try:
-                return preview_campaign_review(
-                    campaign,
-                    snapshot,
-                    golden,
-                    import_scope=snapshot_collection_scope(repo, snapshot),
-                )
+                preparation = prepare_campaign_review(campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot))
+                _require_campaign_access(principal, campaign, repo, preparation)
+                return preview_campaign_review(campaign, snapshot, golden, preparation=preparation)
+            except HTTPException:
+                raise
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/campaigns")
     def campaign_create(request: Request, payload: dict[str, Any] = Body(...)):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         campaign = _campaign_payload(payload)
         with Repository(db_path) as repo:
-            _snapshot(repo, campaign.snapshot_id)
+            snapshot = _snapshot(repo, campaign.snapshot_id)
+            golden = _golden_version(repo, campaign.golden_source_version_id)
+            try:
+                preparation = prepare_campaign_review(campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot))
+                _require_campaign_access(principal, campaign, repo, preparation)
+            except HTTPException:
+                raise
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             repo.upsert("campaigns", campaign)
             record_audit(repo, request, "campaign.created", "campaign", campaign.id, {"snapshot_id": campaign.snapshot_id})
         return asdict(campaign)
 
     @app.post("/api/campaigns/{campaign_id}/open")
     def campaign_open(campaign_id: str, request: Request, payload: dict[str, Any] | None = Body(default=None)):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             raw = repo.get_payload("campaigns", campaign_id)
             if raw is None:
@@ -1264,15 +1394,12 @@ def create_app(db_path: str | None = None):
             if payload and "allow_unresolved_reviewers" in payload:
                 campaign.allow_unresolved_reviewers = bool(payload["allow_unresolved_reviewers"])
             snapshot = _snapshot(repo, campaign.snapshot_id)
-            golden = _golden_version(repo, campaign.golden_source_version_id)
             try:
-                preparation = prepare_campaign_review(
-                    campaign,
-                    snapshot,
-                    golden,
-                    snapshot_collection_scope(repo, snapshot),
-                )
+                preparation = _prepare_campaign(repo, campaign)
+                _require_campaign_access(principal, campaign, repo, preparation)
                 opened, items = open_campaign(campaign, preparation.snapshot)
+            except HTTPException:
+                raise
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             observed_accesses = {
@@ -1300,12 +1427,13 @@ def create_app(db_path: str | None = None):
 
     @app.post("/api/campaigns/{campaign_id}/close")
     def campaign_close(campaign_id: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             raw = repo.get_payload("campaigns", campaign_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="Campaign not found")
             campaign = hydrate_campaign(raw)
+            _require_campaign_access(principal, campaign, repo)
             if campaign.status != "open":
                 raise HTTPException(status_code=409, detail="Only open campaigns can be closed")
             items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
@@ -1324,12 +1452,13 @@ def create_app(db_path: str | None = None):
 
     @app.post("/api/campaigns/{campaign_id}/cancel")
     def campaign_cancel(campaign_id: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             raw = repo.get_payload("campaigns", campaign_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="Campaign not found")
             campaign = hydrate_campaign(raw)
+            _require_campaign_access(principal, campaign, repo)
             if campaign.status != "draft":
                 raise HTTPException(status_code=409, detail="Only draft campaigns can be cancelled")
             campaign.status = "cancelled"
@@ -1339,12 +1468,13 @@ def create_app(db_path: str | None = None):
 
     @app.post("/api/campaigns/{campaign_id}/promote")
     def campaign_promote(campaign_id: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             raw = repo.get_payload("campaigns", campaign_id)
             if raw is None:
                 raise HTTPException(status_code=404, detail="Campaign not found")
             campaign = hydrate_campaign(raw)
+            _require_campaign_access(principal, campaign, repo)
             if campaign.status != "closed":
                 raise HTTPException(status_code=409, detail="Only closed campaigns can be promoted")
             source_payloads = repo.list_payloads("golden_sources")
@@ -1389,7 +1519,8 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/campaigns/{campaign_id}")
     def campaign_detail(campaign_id: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        _require_campaign_id_access(principal, campaign_id)
         # Aggregates and reviewer progress must cover the whole campaign. The generic page helper is
         # intentionally capped for table endpoints, so using it here silently truncated large reviews.
         result = projected_rows(db_path, "campaigns", limit=1_000_000_000, offset=0)
@@ -1425,9 +1556,13 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/findings")
     def findings(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if campaign:
+            _require_campaign_id_access(principal, campaign)
         snapshot = latest_snapshot(db_path) or {}
         rows = list(snapshot.get("comparison_states", []))
+        if principal.role == "OPERATOR" and "*" not in principal.scopes:
+            rows = [row for row in rows if str(row.get("access_provider") or "") in principal.scopes and str(row.get("identity_provider") or "") in principal.scopes]
         if campaign:
             with Repository(db_path) as repo:
                 campaign_keys = {
@@ -1636,7 +1771,10 @@ def create_app(db_path: str | None = None):
             campaign_payload = repo.get_payload("campaigns", item_payload.get("campaign_id"))
             if campaign_payload is None:
                 raise HTTPException(status_code=409, detail="Review item campaign is missing")
-            if hydrate_campaign(campaign_payload).status != "open":
+            campaign = hydrate_campaign(campaign_payload)
+            if principal.role == "OPERATOR":
+                _require_campaign_access(principal, campaign, repo)
+            if campaign.status != "open":
                 raise HTTPException(status_code=409, detail="Decisions are only allowed for open campaigns")
             if principal.role == "GROUP_OWNER" and (item.reviewer is None or item.reviewer.identity != principal.username):
                 raise HTTPException(status_code=403, detail="Review item is not assigned to this user")

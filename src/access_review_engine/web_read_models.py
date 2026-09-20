@@ -257,9 +257,62 @@ def review_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, filters: dict[str, str] | None = None) -> dict[str, object]:
+def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, allowed_campaign_ids: set[str] | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, filters: dict[str, str] | None = None) -> dict[str, object]:
     with Repository(db_path) as repo:
         raw = repo.list_payloads(table)
+        if allowed_campaign_ids is not None:
+            if table == "campaigns":
+                raw = [item for item in raw if str(item.get("id")) in allowed_campaign_ids]
+            elif table in {"review_items", "remediation_actions"}:
+                campaign_by_review = {
+                    str(item.get("id")): str(item.get("campaign_id"))
+                    for item in repo.list_payloads("review_items")
+                }
+                raw = [
+                    item for item in raw
+                    if (str(item.get("campaign_id")) if table == "review_items" else campaign_by_review.get(str(item.get("review_item_id")), "")) in allowed_campaign_ids
+                ]
+            elif table == "decisions":
+                campaign_by_review = {
+                    str(item.get("id")): str(item.get("campaign_id"))
+                    for item in repo.list_payloads("review_items")
+                }
+                raw = [item for item in raw if campaign_by_review.get(str(item.get("review_item_id")), "") in allowed_campaign_ids]
+        if allowed_providers is not None:
+            if table in {"providers", "identities", "accesses"}:
+                key = "name" if table == "providers" else "provider"
+                raw = [item for item in raw if str(item.get(key) or "") in allowed_providers]
+            elif table == "assignments":
+                raw = [item for item in raw if str(item.get("provider") or "") in allowed_providers and str(item.get("identity_provider") or "") in allowed_providers]
+            elif table == "imports":
+                raw = [item for item in raw if str(item.get("provider") or "") in allowed_providers]
+            elif table == "snapshots":
+                scoped = []
+                for item in raw:
+                    providers = [provider for provider in item.get("providers", []) if str(provider.get("name") or "") in allowed_providers]
+                    if not providers:
+                        continue
+                    scoped.append({
+                        "id": item.get("id"),
+                        "created_at": item.get("created_at"),
+                        "immutable": item.get("immutable", True),
+                        "checksum": item.get("checksum"),
+                        "providers": providers,
+                        "provider_count": len(providers),
+                        "assignment_count": sum(
+                            1 for assignment in item.get("access_assignments", [])
+                            if str(assignment.get("provider") or "") in allowed_providers
+                            and str(assignment.get("identity_provider") or "") in allowed_providers
+                        ),
+                    })
+                raw = scoped
+            elif table == "golden_source_versions":
+                # The campaign setup screen only needs version metadata. Never project a
+                # partially scoped assignment list as if it were a complete Golden version.
+                raw = [
+                    {key: item.get(key) for key in ("id", "golden_source_id", "version", "source_type", "created_at", "source_snapshot_id", "source_campaign_id")}
+                    for item in raw
+                ]
         latest_decisions = _latest_decisions(repo.list_payloads("decisions"))
         names = _display_names(repo) if table in {"review_items", "remediation_actions"} else None
         rows = [review_item_view(repo, item, latest_decisions=latest_decisions, names=names) for item in raw] if table == "review_items" else [dict(item) for item in raw]
@@ -323,8 +376,10 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                 row.update({"health": health, "identity_count": len(identities), "group_count": len(groups), "access_count": access_count, "last_sync": snapshot.get("created_at"), "latest_snapshot": snapshot.get("id"), "latest_job": job})
         if table == "snapshots":
             for row in rows:
-                row["assignment_count"] = len(row.get("access_assignments", []))
-                row["provider_count"] = len(row.get("providers", []))
+                if "assignment_count" not in row:
+                    row["assignment_count"] = len(row.get("access_assignments", []))
+                if "provider_count" not in row:
+                    row["provider_count"] = len(row.get("providers", []))
         if table == "identities":
             assignments = repo.list_payloads("access_assignments")
             snapshots = repo.list_payloads("snapshots")

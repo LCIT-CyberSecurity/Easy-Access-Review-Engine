@@ -421,3 +421,20 @@ if TestClient is not None:
         assert row["business_context"]["manual_context"]["business_permission"]["value"] == "ReadWrite"
         assert row["business_context"]["source_context"] == {}
         assert row["manual_context_capture_status"] == "captured"
+
+    def test_campaign_detail_authorization_includes_persisted_review_providers(tmp_path):
+        db = tmp_path / "campaign-persisted-provider.db"
+        app = create_app(str(db))
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        upsert_user(conn, {"username": "france-operator", "role": "OPERATOR", "scopes": ["ad-france"], "password": "operator-password"})
+        conn.close()
+        snapshot = create_snapshot([Provider("ad-france", "generic")], [], [], [], [], [])
+        with Repository(db) as repo:
+            repo.upsert("snapshots", snapshot)
+            repo.upsert("campaigns", {"id": "legacy-mixed", "name": "Legacy", "snapshot_id": snapshot.id, "scope": {"type": "providers", "values": ["ad-france"]}, "status": "open"})
+            repo.upsert("review_items", {"id": "review-cross", "campaign_id": "legacy-mixed", "access_provider": "ad-france", "access_name": "staff", "identity_provider": "openldap-corp", "identity_identifier": "alice", "findings": []})
+        client = TestClient(app)
+        _login(client, "france-operator", "operator-password")
+        assert client.get("/api/campaigns/legacy-mixed").status_code == 403

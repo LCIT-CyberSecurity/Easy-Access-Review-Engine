@@ -308,3 +308,73 @@ def test_rows_can_be_sorted_on_a_column_with_empty_values_last(tmp_path):
     assert descending[0] == "a-user"
     unknown = [row["identifier"] for row in projected_rows(str(db), "identities", limit=10, offset=0, sort="nothing")["items"]]
     assert unknown == ["a-user", "b-user", "c-user"]
+
+
+def test_scoped_campaign_and_review_projections_hide_disallowed_campaigns(tmp_path):
+    from access_review_engine.storage import Repository
+    from access_review_engine.web_read_models import projected_rows
+
+    db = tmp_path / "campaign-page-scope.db"
+    with Repository(db) as repo:
+        for campaign_id in ("france", "germany"):
+            repo.upsert("campaigns", {"id": campaign_id, "name": campaign_id, "snapshot_id": "snapshot", "scope": {"type": "all"}})
+            item_id = f"review-{campaign_id}"
+            repo.upsert("review_items", {
+                "id": item_id,
+                "campaign_id": campaign_id,
+                "identity_provider": campaign_id,
+                "identity_identifier": "alice",
+                "access_provider": campaign_id,
+                "access_name": "staff",
+                "findings": [],
+            })
+            repo.insert_append_only("decisions", {"id": f"decision-{campaign_id}", "review_item_id": item_id, "value": "approve", "created_at": "2026-01-01T00:00:00Z"})
+
+    allowed = {"france"}
+    campaign_page = projected_rows(str(db), "campaigns", limit=20, offset=0, allowed_campaign_ids=allowed)
+    assert [row["id"] for row in campaign_page["items"]] == ["france"]
+    assert campaign_page["total"] == 1
+    review_page = projected_rows(str(db), "review_items", limit=20, offset=0, allowed_campaign_ids=allowed)
+    assert [row["id"] for row in review_page["items"]] == ["review-france"]
+    decisions = projected_rows(str(db), "decisions", limit=20, offset=0, allowed_campaign_ids=allowed)
+    assert [row["id"] for row in decisions["items"]] == ["decision-france"]
+
+
+def test_operator_provider_projection_sanitizes_snapshots_and_filters_accesses(tmp_path):
+    from access_review_engine.storage import Repository
+    from access_review_engine.web_read_models import projected_rows
+
+    db = tmp_path / "provider-page-scope.db"
+    with Repository(db) as repo:
+        repo.upsert("providers", {"id": "france", "name": "france", "type": "generic"})
+        repo.upsert("providers", {"id": "germany", "name": "germany", "type": "generic"})
+        repo.upsert("accesses", {"id": "access-fr", "provider": "france", "name": "staff"})
+        repo.upsert("accesses", {"id": "access-de", "provider": "germany", "name": "staff"})
+        repo.upsert("snapshots", {
+            "id": "snapshot",
+            "created_at": "2026-01-01T00:00:00Z",
+            "immutable": True,
+            "checksum": "checksum",
+            "providers": [{"name": "france"}, {"name": "germany"}],
+            "identities": [{"provider": "france", "identifier": "alice"}, {"provider": "germany", "identifier": "bob"}],
+            "accesses": [{"provider": "france", "name": "staff"}, {"provider": "germany", "name": "staff"}],
+            "access_assignments": [
+                {"provider": "france", "access_name": "staff", "identity_provider": "france", "identity_identifier": "alice"},
+                {"provider": "germany", "access_name": "staff", "identity_provider": "germany", "identity_identifier": "bob"},
+                {"provider": "france", "access_name": "staff", "identity_provider": "germany", "identity_identifier": "bob"},
+            ],
+            "resources": [],
+            "source_import_ids": [],
+        })
+
+    allowed = {"france"}
+    providers = projected_rows(str(db), "providers", limit=20, offset=0, allowed_providers=allowed)
+    assert [row["name"] for row in providers["items"]] == ["france"]
+    accesses = projected_rows(str(db), "accesses", limit=20, offset=0, allowed_providers=allowed)
+    assert [row["id"] for row in accesses["items"]] == ["access-fr"]
+    snapshots = projected_rows(str(db), "snapshots", limit=20, offset=0, allowed_providers=allowed)
+    row = snapshots["items"][0]
+    assert row["provider_count"] == 1
+    assert row["assignment_count"] == 1
+    assert row["providers"] == [{"name": "france"}]
+    assert "identities" not in row and "access_assignments" not in row and "accesses" not in row
