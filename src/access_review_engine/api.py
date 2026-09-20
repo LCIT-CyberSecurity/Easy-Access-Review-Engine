@@ -24,16 +24,17 @@ except ModuleNotFoundError:  # pragma: no cover
     Body = Request = Response = HTTPException = StreamingResponse = None  # type: ignore[assignment,misc]
 
 from access_review_engine.application import import_file_to_repository
-from access_review_engine.access_context import access_context_for_payload, access_enrichment, save_access_enrichment
+from access_review_engine.access_context import access_context_for_payload, access_enrichment, capture_campaign_access_contexts, save_access_enrichment
 from access_review_engine.authentication import compare_authentication_posture
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import connector_path, load_connector, secret_environment, validate_connector
-from access_review_engine.golden_annotations import annotation_for_assignment, copy_assignment_annotations, set_assignment_annotation
+from access_review_engine.connector_capabilities import connector_capabilities
+from access_review_engine.golden_annotations import annotation_for_assignment, copy_assignment_annotations, normalize_assignment_comment, set_assignment_annotation
 from access_review_engine.reporting import build_report_rows, report_summary, write_reports
 from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
 from access_review_engine.source_inspector import SourceInspectorError, discover_source_attributes, get_source_object, search_source_objects, source_object_kinds
 from access_review_engine.source_mapping import mapping_diagnostics
-from access_review_engine.storage import Repository, hydrate_authentication_posture, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
+from access_review_engine.storage import Repository, hydrate_access, hydrate_authentication_posture, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
 from access_review_engine.web_read_models import projected_rows
 from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import, snapshot_collection_scope
@@ -122,6 +123,7 @@ def create_app(db_path: str | None = None):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         candidate.pop("_path", None)
+        candidate.pop("capabilities", None)
         return candidate
 
     def _public_connector(payload: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +132,7 @@ def create_app(db_path: str | None = None):
         credentials = result.get("credentials")
         if isinstance(credentials, dict):
             result["credentials"] = {key: value for key, value in credentials.items() if key.endswith("_env")}
+        result["capabilities"] = asdict(connector_capabilities(str(result.get("type", ""))))
         return result
 
     def current_user(request: Request) -> WebPrincipal | None:
@@ -470,7 +473,7 @@ def create_app(db_path: str | None = None):
         try:
             discovered = discover_source_attributes(candidate, "group")
             diagnostics = mapping_diagnostics(str(candidate["type"]), candidate, discovered)
-            mapping_warning = any(row.get("status") == "not_found" for row in diagnostics)
+            mapping_warning = any(row.get("status") in {"not_found", "warning"} for row in diagnostics)
         except SourceInspectorError:
             diagnostics = []
             mapping_warning = True
@@ -911,11 +914,12 @@ def create_app(db_path: str | None = None):
                 comment=comment or None,
                 golden_authentication_policy=active.golden_authentication_policy,
             )
-            copy_assignment_annotations(repo, active, version, principal.subject)
-            source.active_version_id = version.id
-            repo.upsert("golden_sources", source)
-            repo.upsert("golden_source_versions", version)
-            record_audit(repo, request, "golden_source.version_comment_changed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
+            with repo.transaction():
+                copy_assignment_annotations(repo, active, version, principal.subject)
+                source.active_version_id = version.id
+                repo.upsert("golden_sources", source)
+                repo.upsert("golden_source_versions", version)
+                record_audit(repo, request, "golden_source.version_comment_changed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
             return {"version": version.version, "version_id": version.id, "comment": version.comment}
 
     @app.post("/api/golden-sources/{name}/assignment-comment")
@@ -938,6 +942,11 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=400, detail="Invalid expected assignment") from exc
         if not all(requested.key()):
             raise HTTPException(status_code=400, detail="Expected assignment reference is required")
+        try:
+            comment = normalize_assignment_comment(payload.get("comment"))
+            version_comment = normalize_assignment_comment(payload.get("version_comment"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         with Repository(db_path) as repo:
             source, versions, active = _golden_context(repo, name)
             if active is None:
@@ -951,9 +960,7 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=404, detail="Expected assignment not found or ambiguous")
             current = matches[0]
             old = annotation_for_assignment(repo, active.id, current)
-            comment = payload.get("comment")
-            normalized = str(comment).strip() if isinstance(comment, str) else comment
-            if (old or {}).get("comment") == (normalized or None):
+            if (old or {}).get("comment") == comment:
                 raise HTTPException(status_code=409, detail="This comment is unchanged")
             version = create_golden_version(
                 source,
@@ -961,18 +968,19 @@ def create_app(db_path: str | None = None):
                 "manual",
                 versions,
                 parent_version_id=active.id,
-                comment=str(payload.get("version_comment") or "Expected assignment comment updated"),
+                comment=version_comment or "Expected assignment comment updated",
                 golden_authentication_policy=active.golden_authentication_policy,
             )
-            copy_assignment_annotations(repo, active, version)
             try:
-                annotation = set_assignment_annotation(repo, version, current, comment, principal.subject)
+                with repo.transaction():
+                    copy_assignment_annotations(repo, active, version)
+                    annotation = set_assignment_annotation(repo, version, current, comment, principal.subject)
+                    source.active_version_id = version.id
+                    repo.upsert("golden_sources", source)
+                    repo.upsert("golden_source_versions", version)
+                    record_audit(repo, request, "golden_source.assignment_comment_changed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            source.active_version_id = version.id
-            repo.upsert("golden_sources", source)
-            repo.upsert("golden_source_versions", version)
-            record_audit(repo, request, "golden_source.assignment_comment_changed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
             return {"version": version.version, "version_id": version.id, "annotation": annotation}
 
     @app.get("/api/golden-sources/{name}/export")
@@ -1267,10 +1275,27 @@ def create_app(db_path: str | None = None):
                 opened, items = open_campaign(campaign, preparation.snapshot)
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
-            repo.upsert("campaigns", opened)
-            for item in items:
-                repo.upsert("review_items", item)
-            record_audit(repo, request, "campaign.opened", "campaign", opened.id, {"review_items": len(items)})
+            observed_accesses = {
+                (access.provider, access.name): access
+                for access in snapshot.accesses
+            }
+            reviewed_refs = {(item.access_provider, item.access_name) for item in items}
+            catalog_accesses = {}
+            for row in repo.list_payloads("accesses"):
+                reference = (str(row.get("provider")), str(row.get("name")))
+                if reference in reviewed_refs:
+                    catalog_accesses[reference] = hydrate_access(row)
+            contexts_to_capture = [
+                observed_accesses.get(reference) or catalog_accesses.get(reference)
+                for reference in sorted(reviewed_refs)
+            ]
+            contexts_to_capture = [access for access in contexts_to_capture if access is not None]
+            with repo.transaction():
+                repo.upsert("campaigns", opened)
+                for item in items:
+                    repo.upsert("review_items", item)
+                capture_campaign_access_contexts(repo, opened.id, contexts_to_capture)
+                record_audit(repo, request, "campaign.opened", "campaign", opened.id, {"review_items": len(items)})
             return {"campaign": asdict(opened), "items": len(items)}
 
     @app.post("/api/campaigns/{campaign_id}/close")
@@ -1497,23 +1522,31 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/accesses/{access_id}/enrichment")
     def get_access_enrichment(access_id: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             access = repo.get_payload("accesses", access_id)
             if access is None:
                 raise HTTPException(status_code=404, detail="Access not found")
+            provider = str(access.get("provider") or "")
+            if principal.role != "ADMIN" and (not provider or not principal.can_access(provider)):
+                raise HTTPException(status_code=403, detail="Scope is not authorized")
             return {"access_id": access_id, "enrichment": access_enrichment(repo, access_id), "business_context": access_context_for_payload(repo, access)}
 
     @app.put("/api/accesses/{access_id}/enrichment")
     def put_access_enrichment(access_id: str, request: Request, payload: dict[str, Any] = Body(...)):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
+            access = repo.get_payload("accesses", access_id)
+            if access is None:
+                raise HTTPException(status_code=404, detail="Access not found")
+            provider = str(access.get("provider") or "")
+            if principal.role != "ADMIN" and (not provider or not principal.can_access(provider)):
+                raise HTTPException(status_code=403, detail="Scope is not authorized")
             try:
                 enrichment = save_access_enrichment(repo, access_id, payload, principal.subject)
             except ValueError as exc:
                 status = 404 if str(exc) == "Access not found" else 400
                 raise HTTPException(status_code=status, detail=str(exc)) from exc
-            access = repo.get_payload("accesses", access_id)
             record_audit(repo, request, "access.enrichment_changed", "access", access_id, {"fields": sorted(key for key, value in payload.items() if value not in (None, ""))})
             return {"access_id": access_id, "enrichment": enrichment, "business_context": access_context_for_payload(repo, access)}
 

@@ -81,6 +81,15 @@ def _add_review_provenance(
         str(payload.get("id")): hydrate_golden_version(payload)
         for payload in repo.list_payloads("golden_source_versions")
     }
+    campaign_access_contexts = repo.list_payloads("campaign_access_contexts")
+    contexts_by_access_id = {
+        (str(item.get("campaign_id")), str(item.get("access_id"))): item
+        for item in campaign_access_contexts if item.get("access_id")
+    }
+    contexts_by_reference = {
+        (str(item.get("campaign_id")), str(item.get("access_provider")), str(item.get("access_name"))): item
+        for item in campaign_access_contexts
+    }
     for row in rows:
         campaign = campaigns.get(str(row.get("campaign_id")), {})
         snapshot_id = str(campaign.get("snapshot_id") or "")
@@ -125,10 +134,19 @@ def _add_review_provenance(
         row["paths"] = list(effective.get("paths", [])) if effective else []
         observed_access = snapshot_accesses.get(snapshot_id, {}).get((key[2], key[3]), {})
         access_id = str(observed_access.get("id") or "")
+        campaign_id = str(row.get("campaign_id") or "")
+        frozen_context = contexts_by_access_id.get((campaign_id, access_id)) if access_id else None
+        if frozen_context is None:
+            frozen_context = contexts_by_reference.get((
+                campaign_id,
+                str(row.get("access_provider") or ""),
+                str(row.get("access_name") or ""),
+            ))
         row["business_context"] = business_context_view(
             observed_access,
-            access_enrichment(repo, access_id) if access_id else None,
+            frozen_context.get("manual_context") if frozen_context else None,
         )
+        row["manual_context_capture_status"] = "captured" if frozen_context else "not_captured"
         permission = observed_access.get("permission")
         technical_permission = (
             (permission.get("display_name") or permission.get("identifier"))

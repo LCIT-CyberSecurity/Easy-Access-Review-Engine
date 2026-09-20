@@ -1,9 +1,9 @@
 """Read models and persistence helpers for Access business context."""
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
-from access_review_engine.domain import now_utc
+from access_review_engine.domain import Access, now_utc, stable_checksum
 from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
 from access_review_engine.storage import Repository
 
@@ -115,3 +115,61 @@ def _clean_value(value: object) -> str | None:
     if len(cleaned) > MAX_ENRICHMENT_LENGTH:
         raise ValueError("Access information value is too long")
     return cleaned or None
+
+
+def capture_campaign_access_contexts(
+    repo: Repository,
+    campaign_id: str,
+    accesses: Iterable[Access],
+) -> int:
+    """Freeze the current manual context once per distinct Access when a campaign opens."""
+    existing_rows = [
+        row for row in repo.list_payloads("campaign_access_contexts")
+        if row.get("campaign_id") == campaign_id
+    ]
+    existing = {str(row.get("access_id") or "") for row in existing_rows}
+    existing_refs = {
+        (str(row.get("access_provider") or ""), str(row.get("access_name") or ""))
+        for row in existing_rows
+    }
+    manual_by_access = {
+        str(row.get("access_id") or row.get("id") or ""): row
+        for row in repo.list_payloads("access_enrichments")
+    }
+    captured = 0
+    seen_refs: set[tuple[str, str]] = set()
+    for access in accesses:
+        reference = (access.provider, access.name)
+        if reference in seen_refs:
+            continue
+        seen_refs.add(reference)
+        access_id = str(access.id or "")
+        if access_id and access_id in existing:
+            continue
+        if not access_id and reference in existing_refs:
+            continue
+        enrichment = manual_by_access.get(access_id, {})
+        manual_context = {
+            field: str(enrichment[field])
+            for field in ENRICHMENT_FIELDS
+            if enrichment.get(field) not in (None, "")
+        }
+        timestamp = now_utc()
+        reference_id = access_id or f"{access.provider}:{access.name}"
+        record_id = stable_checksum({"campaign_id": campaign_id, "access_ref": reference_id})
+        repo.insert_append_only(
+            "campaign_access_contexts",
+            {
+                "id": record_id,
+                "campaign_id": campaign_id,
+                "access_id": access_id or None,
+                "access_provider": access.provider,
+                "access_name": access.name,
+                "manual_context": manual_context,
+                "captured_at": timestamp,
+            },
+        )
+        existing.add(access_id)
+        existing_refs.add(reference)
+        captured += 1
+    return captured

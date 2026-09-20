@@ -50,6 +50,7 @@ TABLES = {
     "audit_events",
     "remediation_actions",
     "access_enrichments",
+    "campaign_access_contexts",
     "golden_assignment_annotations",
 }
 

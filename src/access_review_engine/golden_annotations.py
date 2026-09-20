@@ -50,7 +50,7 @@ def set_assignment_annotation(
     comment: object,
     updated_by: str | None,
 ) -> dict[str, Any] | None:
-    cleaned = _comment(comment)
+    cleaned = normalize_assignment_comment(comment)
     annotation_id = _annotation_id(version.id, assignment)
     if cleaned is None:
         repo.delete_ids("golden_assignment_annotations", {annotation_id})
@@ -125,7 +125,7 @@ def _annotation_id(version_id: str, assignment: GoldenSourceAssignment) -> str:
     return stable_checksum({"golden_source_version_id": version_id, "assignment": asdict(assignment)})
 
 
-def _comment(value: object) -> str | None:
+def normalize_assignment_comment(value: object) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):

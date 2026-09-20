@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+import pytest
+
 from access_review_engine.access_context import (
     access_context_for_payload,
     access_enrichment,
@@ -16,6 +18,7 @@ from access_review_engine.domain import (
 from access_review_engine.golden_annotations import (
     annotation_for_assignment,
     copy_assignment_annotations,
+    normalize_assignment_comment,
     set_assignment_annotation,
 )
 from access_review_engine.services import create_golden_source, create_golden_version
@@ -139,3 +142,12 @@ def test_removed_assignment_comment_remains_historical_only(tmp_path) -> None:
         copy_assignment_annotations(repo, v1, v2)
         assert annotation_for_assignment(repo, v1.id, assignment)["comment"] == "Historical reason"
         assert repo.list_payloads("golden_assignment_annotations") == [annotation_for_assignment(repo, v1.id, assignment)]
+
+
+def test_golden_comment_input_is_normalized_and_bounded_before_persistence() -> None:
+    assert normalize_assignment_comment("  rationale  ") == "rationale"
+    assert normalize_assignment_comment("   ") is None
+    with pytest.raises(ValueError):
+        normalize_assignment_comment({"comment": "not text"})
+    with pytest.raises(ValueError):
+        normalize_assignment_comment("x" * 4001)

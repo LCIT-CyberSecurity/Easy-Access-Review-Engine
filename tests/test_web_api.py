@@ -9,18 +9,24 @@ except ModuleNotFoundError:
     TestClient = None
 
 from access_review_engine.api import create_app
+from access_review_engine.access_context import save_access_enrichment
 from access_review_engine.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
     AccessRelationType,
+    Campaign,
+    ControlObject,
+    GoldenSourceAssignment,
     Identity,
     IdentityStatus,
     IdentityType,
     Origin,
+    OwnerRef,
+    Permission,
     Provider,
 )
-from access_review_engine.services import create_snapshot
+from access_review_engine.services import create_golden_source, create_golden_version, create_snapshot
 from access_review_engine.storage import Repository
 from access_review_engine.system_admin import init_system, upsert_user
 
@@ -262,3 +268,114 @@ if TestClient is not None:
         assert direct_holders["effective_holders"] == []
         assert effective_holders["holders"] == []
         assert len(effective_holders["effective_holders"]) == 1
+
+
+    def test_access_enrichment_routes_enforce_provider_scope_and_keep_404(tmp_path):
+        db = tmp_path / "enrichment-scope.db"
+        app = create_app(str(db))
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        upsert_user(conn, {"username": "scope-admin", "role": "ADMIN", "password": "admin-password"})
+        upsert_user(conn, {"username": "scope-operator", "role": "OPERATOR", "scopes": ["provider-a"], "password": "operator-password"})
+        conn.close()
+        with Repository(db) as repo:
+            repo.upsert("accesses", {"id": "access-a", "provider": "provider-a", "name": "A", "metadata": {}})
+            repo.upsert("accesses", {"id": "access-b", "provider": "provider-b", "name": "B", "metadata": {}})
+        client = TestClient(app)
+        _login(client, "scope-admin", "admin-password")
+        assert client.get("/api/accesses/access-b/enrichment").status_code == 200
+        assert client.put("/api/accesses/access-b/enrichment", json={"application": "Sage"}).status_code == 200
+        client.cookies.clear()
+        _login(client, "scope-operator", "operator-password")
+        assert client.get("/api/accesses/access-a/enrichment").status_code == 200
+        assert client.put("/api/accesses/access-a/enrichment", json={"application": "Finance"}).status_code == 200
+        assert client.get("/api/accesses/access-b/enrichment").status_code == 403
+        assert client.put("/api/accesses/access-b/enrichment", json={"application": "Other"}).status_code == 403
+        assert client.get("/api/accesses/missing/enrichment").status_code == 404
+        assert client.put("/api/accesses/missing/enrichment", json={"application": "No access"}).status_code == 404
+
+
+    def test_invalid_golden_assignment_comment_has_no_partial_writes(tmp_path):
+        db = tmp_path / "golden-comment-validation.db"
+        app = create_app(str(db))
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        upsert_user(conn, {"username": "golden-operator", "role": "OPERATOR", "password": "operator-password"})
+        conn.close()
+        source = create_golden_source("main")
+        assignment = GoldenSourceAssignment("corp", "staff:member", "corp", "alice")
+        version = create_golden_version(source, [assignment], "manual")
+        source.active_version_id = version.id
+        with Repository(db) as repo:
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+        client = TestClient(app)
+        _login(client, "golden-operator", "operator-password")
+        payload = {
+            "access_provider": "corp",
+            "access_name": "staff:member",
+            "identity_provider": "corp",
+            "identity_identifier": "alice",
+            "comment": "x" * 4001,
+        }
+        response = client.post("/api/golden-sources/main/assignment-comment", json=payload)
+        assert response.status_code == 400
+        with Repository(db) as repo:
+            assert len(repo.list_payloads("golden_source_versions")) == 1
+            assert repo.list_payloads("golden_assignment_annotations") == []
+            assert repo.get_payload("golden_sources", source.id)["active_version_id"] == version.id
+        payload["comment"] = "valid rationale"
+        payload["version_comment"] = "x" * 4001
+        response = client.post("/api/golden-sources/main/assignment-comment", json=payload)
+        assert response.status_code == 400
+        with Repository(db) as repo:
+            assert len(repo.list_payloads("golden_source_versions")) == 1
+            assert repo.list_payloads("golden_assignment_annotations") == []
+            assert repo.get_payload("golden_sources", source.id)["active_version_id"] == version.id
+
+
+    def test_open_campaign_captures_manual_context_and_review_uses_frozen_copy(tmp_path):
+        db = tmp_path / "campaign-freeze-api.db"
+        client = _operator_client(db)
+        identity = Identity("corp", "alice", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE, native_id="SID-U1")
+        access = Access(
+            "GG_SAGE_RW:member",
+            "corp",
+            ControlObject("group", "GG_SAGE_RW", native_id="SID-G1"),
+            Permission("member"),
+            id="access-stable",
+        )
+        assignment = AccessAssignment("corp", access.name, "corp", "alice", Origin("group", True, False))
+        snapshot = create_snapshot([Provider("corp", "active_directory")], [identity], [], [access], [assignment], [])
+        source = create_golden_source("main")
+        expected = GoldenSourceAssignment("corp", access.name, "corp", "alice", access_native_id="SID-G1", access_permission="member", identity_native_id="SID-U1")
+        version = create_golden_version(source, [expected], "manual")
+        source.active_version_id = version.id
+        campaign = Campaign(
+            "freeze",
+            snapshot.id,
+            golden_source_version_id=version.id,
+            default_reviewer=OwnerRef("corp", "reviewer"),
+            allow_unresolved_reviewers=True,
+            id="campaign-freeze",
+        )
+        with Repository(db) as repo:
+            repo.upsert("accesses", access)
+            repo.upsert("snapshots", snapshot)
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+            repo.upsert("campaigns", campaign)
+            save_access_enrichment(repo, access.id, {"business_permission": "ReadWrite"}, "operator")
+        response = client.post(f"/api/campaigns/{campaign.id}/open")
+        assert response.status_code == 200
+        with Repository(db) as repo:
+            assert len(repo.list_payloads("campaign_access_contexts")) == 1
+            save_access_enrichment(repo, access.id, {"business_permission": "ReadOnly"}, "operator")
+        review = client.get(f"/api/review-items?campaign={campaign.id}")
+        assert review.status_code == 200
+        row = review.json()["items"][0]
+        assert row["business_context"]["manual_context"]["business_permission"]["value"] == "ReadWrite"
+        assert row["business_context"]["source_context"] == {}
+        assert row["manual_context_capture_status"] == "captured"
