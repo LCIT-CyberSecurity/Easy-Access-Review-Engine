@@ -16,6 +16,7 @@ import tempfile
 from typing import Any
 
 from access_review_engine.application import import_file_to_repository, load_classification_rules
+from access_review_engine.campaign_authorization import normalize_campaign_scope
 from access_review_engine.domain import Campaign, Finding, GoldenSourceVersion, Snapshot
 from access_review_engine.services import compare_snapshot, open_campaign
 from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY, connector_business_mapping
@@ -99,14 +100,22 @@ def prepare_campaign_review(
 ) -> CampaignPreparation:
     """Recompute campaign rows without changing the persisted snapshot."""
     rows = compare_snapshot(snapshot, golden_version, import_scope)
-    scope = campaign.scope or {"type": "all"}
-    if scope.get("type") == "providers":
-        providers = {str(value) for value in scope.get("values", [])}
-        if not providers:
-            raise ValueError("Select at least one provider for this campaign scope")
+    try:
+        scope = normalize_campaign_scope(campaign.scope or {"type": "all"})
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+    if scope["type"] == "providers":
+        providers = set(scope["values"])
         rows = [row for row in rows if str(row.get("access_provider")) in providers]
-    elif scope.get("type") not in (None, "all"):
-        raise ValueError("Unsupported campaign scope")
+    elif scope["type"] == "accesses":
+        selected = {(item["provider"], item["name"]) for item in scope["values"]}
+        known = {(access.provider, access.name) for access in snapshot.accesses}
+        known.update((str(row.get("access_provider")), str(row.get("access_name"))) for row in rows)
+        unknown = selected - known
+        if unknown:
+            provider, name = sorted(unknown)[0]
+            raise ValueError(f"Selected Access was not found in the Snapshot or Golden Source: {provider}/{name}")
+        rows = [row for row in rows if (str(row.get("access_provider")), str(row.get("access_name"))) in selected]
     prepared = deepcopy(snapshot)
     prepared.comparison_states = rows
     return CampaignPreparation(prepared, golden_version, rows)
@@ -118,9 +127,10 @@ def preview_campaign_review(
     golden_version: GoldenSourceVersion | None,
     fallback_reviewer: object | None = None,
     import_scope: dict[str, object] | None = None,
+    preparation: CampaignPreparation | None = None,
 ) -> dict[str, object]:
     """Resolve reviewers through the same service path as the real open operation."""
-    preparation = prepare_campaign_review(campaign, snapshot, golden_version, import_scope)
+    preparation = preparation or prepare_campaign_review(campaign, snapshot, golden_version, import_scope)
     preview_campaign = deepcopy(campaign)
     preview_campaign.allow_unresolved_reviewers = True
     _, items = open_campaign(preview_campaign, preparation.snapshot, fallback_reviewer)  # type: ignore[arg-type]

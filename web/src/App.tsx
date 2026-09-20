@@ -478,7 +478,7 @@ function Shell({ principal }: { principal: Principal }) {
             <Route path="/accesses" element={<Accesses />} />
             <Route path="/golden" element={<Golden />} />
             <Route path="/campaigns" element={<Campaigns />} />
-            <Route path="/campaigns/new" element={<CampaignNew />} />
+            <Route path="/campaigns/new" element={<CampaignNew principal={principal} />} />
             <Route path="/campaigns/:id" element={<CampaignDetail />} />
             <Route path="/findings" element={<List path="findings" title="Findings" />} />
             <Route path="/actions" element={<List path="remediation-actions" title="Actions" />} />
@@ -2137,7 +2137,7 @@ function Campaigns() {
     </>
   );
 }
-function CampaignNew() {
+function CampaignNew({ principal }: { principal: Principal }) {
   const snap = useQuery({ queryKey: ["snapshots"], queryFn: () => getPage("snapshots", { limit: 100 }) }),
     gold = useQuery({
       queryKey: ["golden-versions"],
@@ -2151,6 +2151,14 @@ function CampaignNew() {
       due_at: "",
       scope_type: "all",
     }),
+    accessQuery = useQuery({
+      queryKey: ["campaign-scope-accesses", form.snapshot_id, form.golden_source_version_id],
+      queryFn: () => getJson("campaign-scope-accesses", {
+        snapshot_id: s(form.snapshot_id, ""),
+        golden_source_version_id: s(form.golden_source_version_id, "") || undefined,
+      }),
+      enabled: Boolean(form.snapshot_id),
+    }),
     [preview, setPreview] = useState<Row | null>(null),
     [allow, setAllow] = useState(false),
     previewM = useMutation({
@@ -2161,6 +2169,7 @@ function CampaignNew() {
           scope: {
             type: s(form.scope_type, "all"),
             ...(form.scope_type === "providers" ? { values: vals(form.providers) } : {}),
+            ...(form.scope_type === "accesses" ? { values: arr(form.accesses).map((access) => ({ provider: s(access.provider, ""), name: s(access.name, "") })) } : {}),
           },
         }),
       onSuccess: setPreview,
@@ -2168,12 +2177,13 @@ function CampaignNew() {
     toast = useToast(),
     create = useMutation({
       mutationFn: async (open: boolean) => {
-        const { scope_type, providers, ...fields } = form;
+        const { scope_type, providers, accesses, ...fields } = form;
         const payload = {
           ...fields,
           scope: {
             type: s(scope_type, "all"),
             ...(scope_type === "providers" ? { values: vals(providers) } : {}),
+            ...(scope_type === "accesses" ? { values: arr(accesses).map((access) => ({ provider: s(access.provider, ""), name: s(access.name, "") })) } : {}),
           },
           allow_unresolved_reviewers: allow,
         };
@@ -2191,7 +2201,10 @@ function CampaignNew() {
     snapshots = arr(snap.data?.items),
     versions = arr(gold.data?.items),
     providers = arr(providerQuery.data?.items),
-    providerScopeValid = validProviderScope(s(form.scope_type, "all"), vals(form.providers));
+    accessOptions = arr(accessQuery.data?.items),
+    selectedAccesses = arr(form.accesses),
+    scopeType = s(form.scope_type, "all"),
+    campaignScopeValid = validProviderScope(scopeType, vals(form.providers)) && (scopeType !== "accesses" || selectedAccesses.length > 0);
   useEffect(() => {
     if (!form.snapshot_id && snapshots.length)
       setForm((x) => ({ ...x, snapshot_id: s(snapshots[snapshots.length - 1].id) }));
@@ -2229,8 +2242,9 @@ function CampaignNew() {
               value={s(form.scope_type, "all")}
               onChange={(e) => setForm({ ...form, scope_type: e.target.value })}
             >
-              <option value="all">All</option>
-              <option value="providers">Provider(s)</option>
+              <option value="all">All authorized sources</option>
+              <option value="providers">Selected sources</option>
+              <option value="accesses">Selected accesses</option>
             </select>
           </label>
           {form.scope_type === "providers" ? (
@@ -2255,6 +2269,33 @@ function CampaignNew() {
                 ))}
               </select>
               <span className="field-note">Choose at least one provider. Use Ctrl/Cmd to select several.</span>
+            </label>
+          ) : null}
+          {form.scope_type === "accesses" ? (
+            <label className="wide-field">
+              Accesses
+              <select
+                multiple
+                required
+                size={Math.min(8, Math.max(3, accessOptions.length))}
+                value={selectedAccesses.map((access) => JSON.stringify([s(access.provider, ""), s(access.name, "")]))}
+                onChange={(event) => {
+                  const selected = new Set(Array.from(event.currentTarget.selectedOptions, (option) => option.value));
+                  setForm({
+                    ...form,
+                    accesses: accessOptions
+                      .filter((access) => selected.has(JSON.stringify([s(access.provider, ""), s(access.name, "")])))
+                      .map((access) => ({ provider: s(access.provider, ""), name: s(access.name, "") })),
+                  });
+                }}
+              >
+                {accessOptions.map((access) => (
+                  <option key={JSON.stringify([access.provider, access.name])} value={JSON.stringify([access.provider, access.name])}>
+                    {s(access.display_name, s(access.name))} · {s(access.name)} · {s(access.provider)}{access.application ? ` · ${s(access.application)}` : ""}
+                  </option>
+                ))}
+              </select>
+              <span className="field-note">The selected technical Access references (provider, name) determine which expected and observed comparisons are reviewed.</span>
             </label>
           ) : null}
           <label>
@@ -2298,12 +2339,12 @@ function CampaignNew() {
             <button
               className="button subtle"
               type="button"
-              disabled={!s(form.name, "") || !s(form.snapshot_id, "") || create.isPending}
+              disabled={!s(form.name, "") || !s(form.snapshot_id, "") || !campaignScopeValid || create.isPending}
               onClick={() => create.mutate(false)}
             >
               Save as draft
             </button>
-            <button className="button primary" type="submit" disabled={!providerScopeValid || previewM.isPending}>
+            <button className="button primary" type="submit" disabled={!campaignScopeValid || previewM.isPending}>
               Preview campaign
             </button>
           </div>
@@ -2313,7 +2354,7 @@ function CampaignNew() {
         <section className="panel">
           <h2>Campaign preview</h2>
           <div className="preview-context">
-            <span><strong>Scope</strong>{form.scope_type === "providers" ? vals(form.providers).join(", ") : "All providers in the collection"}</span>
+            <span><strong>Scope</strong>{scopeType === "providers" ? vals(form.providers).join(", ") : scopeType === "accesses" ? selectedAccesses.map((access) => `${s(access.provider)}/${s(access.name)}`).join(", ") : "All authorized sources"}</span>
             <span><strong>Snapshot</strong>{when(snapshots.find((row) => row.id === form.snapshot_id)?.created_at)}</span>
             <span><strong>Expected</strong>{versions.find((row) => row.id === form.golden_source_version_id) ? `Golden v${s(versions.find((row) => row.id === form.golden_source_version_id)?.version)}` : "No Golden version"}</span>
           </div>
@@ -2347,7 +2388,7 @@ function CampaignNew() {
             </button>
             <button
               className="button primary"
-              disabled={!providerScopeValid || (!allow && Number(preview.unresolved_reviewers) > 0) || create.isPending}
+              disabled={!campaignScopeValid || (!allow && Number(preview.unresolved_reviewers) > 0) || create.isPending}
               onClick={() => create.mutate(true)}
             >
               Open campaign
@@ -4071,7 +4112,7 @@ const blankUser = (source = LOCAL_SOURCE): Row => ({
   username: "",
   display_name: "",
   role: "OPERATOR",
-  scopes: "",
+  scopes: [],
   password: "",
   enabled: true,
   auth_source: source,
@@ -4135,14 +4176,12 @@ function UsersPage() {
     [reassignTo, setReassignTo] = useState(""),
     [form, setForm] = useState<Row>(blankUser()),
     directories = arr(q.data?.identity_providers).filter((r) => r.enabled && s(r.kind) === "LDAP"),
+    configuredProviders = arr(q.data?.providers),
     source = s(form.auth_source, LOCAL_SOURCE),
     fromDirectory = source !== LOCAL_SOURCE,
     m = useMutation({
       mutationFn: () => {
-        const scopes = String(form.scopes || "")
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean);
+        const scopes = vals(form.scopes);
         const password = String(form.password || "");
         return postJson("system/users", {
           ...form,
@@ -4208,7 +4247,7 @@ function UsersPage() {
     );
   const edit = (r?: Row) => {
     setError("");
-    setForm(r ? { ...r, scopes: vals(r.scopes).join(", "), password: "" } : blankUser());
+    setForm(r ? { ...r, scopes: vals(r.scopes), password: "" } : blankUser());
     setOpen(true);
   };
   const confirmUserAction = (action: string, user: Row) => {
@@ -4253,14 +4292,14 @@ function UsersPage() {
       {error && !open && !confirming && <p className="form-error">{error}</p>}
       <Filter v={search} onChange={setSearch} />
       <Table
-        cols={["User", "Username", "Signs in with", "Role", "Scope", "Pending reviews", "Status", "Actions"]}
+        cols={["User", "Username", "Signs in with", "Role", "Authorized domains", "Pending reviews", "Status", "Actions"]}
         q={q}
         rows={users.map((r) => [
           s(r.display_name),
           s(r.username),
           s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE ? "Local account" : s(r.auth_source),
           <Status v={r.role} />,
-          s(vals(r.scopes).join(", "), "All"),
+          s(r.role) === "ADMIN" ? "All domains" : s(r.role) === "GROUP_OWNER" ? "Assigned reviews" : s(vals(r.scopes).join(", "), "None"),
           Number(r.pending_reviews) > 0 ? s(r.pending_reviews) : "—",
           <>
             <Status v={r.enabled ? "enabled" : "disabled"} />
@@ -4426,7 +4465,7 @@ function UsersPage() {
             <h4>PERMISSIONS</h4>
             <label>
               Role
-              <select value={s(form.role)} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+              <select value={s(form.role)} onChange={(e) => setForm({ ...form, role: e.target.value, ...(e.target.value === "ADMIN" ? { scopes: ["*"] } : e.target.value === "GROUP_OWNER" ? { scopes: [] } : { scopes: vals(form.scopes).filter((scope) => scope !== "*") }) })}>
                 <option>ADMIN</option>
                 <option>OPERATOR</option>
                 <option>GROUP_OWNER</option>
@@ -4434,14 +4473,26 @@ function UsersPage() {
               </select>
             </label>
             <p className="field-note">{roleHelp(s(form.role))}</p>
-            <label>
-              Scopes
-              <input
-                placeholder="provider-a, provider-b"
-                value={s(form.scopes, "")}
-                onChange={(e) => setForm({ ...form, scopes: e.target.value })}
-              />
-            </label>
+            {s(form.role) === "ADMIN" ? (
+              <p className="field-note">Administrators have global access to all domains.</p>
+            ) : s(form.role) === "GROUP_OWNER" ? (
+              <p className="field-note">Group Owners do not need provider scopes; they see only explicitly assigned ReviewItems.</p>
+            ) : (
+              <label>
+                Authorized domains
+                <select
+                  multiple
+                  size={Math.min(6, Math.max(2, configuredProviders.length))}
+                  value={vals(form.scopes)}
+                  onChange={(event) => setForm({ ...form, scopes: Array.from(event.currentTarget.selectedOptions, (option) => option.value) })}
+                >
+                  {configuredProviders.map((provider) => (
+                    <option key={s(provider.name)} value={s(provider.name)}>{providerLabel(provider)}</option>
+                  ))}
+                </select>
+                <span className="field-note">Select every provider where this role may act. A campaign spanning any other provider will be wholly unavailable.</span>
+              </label>
+            )}
             {s(form.role) === "GROUP_OWNER" && (
               <p className="field-note">
                 The username must match the reviewer identifier in the audited source, otherwise no review is
@@ -4505,9 +4556,9 @@ function UsersPage() {
 function roleHelp(role: string) {
   if (role === "ADMIN") return "Configures EARE, manages users, and can run every governance operation.";
   if (role === "OPERATOR")
-    return "Runs collections, manages the Golden Source, campaigns, findings and reports.";
+    return "Manages campaigns only when every provider/domain exposed by the campaign is authorized.";
   if (role === "GROUP_OWNER") return "Only sees and decides the reviews assigned to this person.";
-  return "Only sees the remediation actions of the sources listed in Scopes.";
+  return "Only sees the remediation actions of the authorized domains selected for this account.";
 }
 function DirectoryPicker({
   directory,
