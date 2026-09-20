@@ -56,7 +56,7 @@ def _client() -> TestClient:
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
     init_system(conn)
-    upsert_user(conn, {"username": "operator", "role": "OPERATOR", "password": "operator-password"})
+    upsert_user(conn, {"username": "operator", "role": "OPERATOR", "scopes": ["*"], "password": "operator-password"})
     upsert_user(conn, {"username": "owner", "role": "GROUP_OWNER", "password": "owner-password"})
     upsert_user(conn, {"username": "business", "role": "BUSINESS_ADMIN", "scopes": ["finance"], "password": "business-password"})
     conn.close()
@@ -69,12 +69,12 @@ def _login(client: TestClient, username: str, password: str) -> None:
     assert response.status_code == 200
 
 
-def _operator_client(db: Path) -> TestClient:
+def _operator_client(db: Path, scopes: list[str] | None = None) -> TestClient:
     app = create_app(str(db))
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
     init_system(conn)
-    upsert_user(conn, {"username": "operator", "role": "OPERATOR", "password": "operator-password"})
+    upsert_user(conn, {"username": "operator", "role": "OPERATOR", "scopes": ["*"] if scopes is None else scopes, "password": "operator-password"})
     conn.close()
     client = TestClient(app)
     _login(client, "operator", "operator-password")
@@ -140,6 +140,10 @@ if TestClient is not None:
         assert saved.status_code == 200
         assert client.get("/api/system/sources").json()["sources"][0]["provider"] == "corp-ad"
         assert (tmp_path / "connectors" / "corp-ad.yaml").is_file()
+        domains = client.get("/api/system").json()["providers"]
+        assert any(item["name"] == "corp-ad" and item["configured"] for item in domains)
+        scoped_user = client.post("/api/system/users", json={"username": "unsynced-operator", "role": "OPERATOR", "scopes": ["corp-ad"], "password": "operator-password"})
+        assert scoped_user.status_code == 200
         assert "password: secret" not in (tmp_path / "connectors" / "corp-ad.yaml").read_text().lower()
         invalid = client.post("/api/system/sources", json={**payload, "credentials": {"password": "secret"}})
         assert invalid.status_code == 400
@@ -151,7 +155,7 @@ if TestClient is not None:
         conn = sqlite3.connect(db)
         conn.row_factory = sqlite3.Row
         init_system(conn)
-        upsert_user(conn, {"username": "operator", "role": "OPERATOR", "password": "operator-password"})
+        upsert_user(conn, {"username": "operator", "role": "OPERATOR", "scopes": ["*"], "password": "operator-password"})
         conn.close()
         with Repository(db) as repo:
             for source_id, version_id, name in (("source-a", "version-a", "A"), ("source-b", "version-b", "B")):
@@ -165,7 +169,7 @@ if TestClient is not None:
         assert response.json()["detail"] == "Campaign has no unambiguous Golden Source reference."
 
 
-    def test_campaign_preview_rejects_empty_provider_scope_but_draft_can_be_saved(tmp_path):
+    def test_campaign_preview_and_create_reject_empty_provider_scope(tmp_path):
         db = tmp_path / "draft.db"
         client = _operator_client(db)
         snapshot = create_snapshot(
@@ -185,8 +189,10 @@ if TestClient is not None:
         }
         assert client.post("/api/campaigns/preview", json=payload).status_code == 400
         saved = client.post("/api/campaigns", json=payload)
-        assert saved.status_code == 200
-        assert saved.json()["status"] == "draft"
+        assert saved.status_code == 400
+        empty_accesses = {**payload, "scope": {"type": "accesses", "values": []}}
+        assert client.post("/api/campaigns/preview", json=empty_accesses).status_code == 400
+        assert client.post("/api/campaigns", json=empty_accesses).status_code == 400
 
 
     def test_campaign_detail_metrics_cover_more_than_five_hundred_reviews(tmp_path):
@@ -438,3 +444,99 @@ if TestClient is not None:
         client = TestClient(app)
         _login(client, "france-operator", "operator-password")
         assert client.get("/api/campaigns/legacy-mixed").status_code == 403
+
+    def test_review_decision_enforces_campaign_domain_and_role_rules(tmp_path):
+        db = tmp_path / "decision-campaign-domain.db"
+        app = create_app(str(db))
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        users = (
+            {"username": "admin-test", "role": "ADMIN", "password": "admin-password"},
+            {"username": "france-op", "role": "OPERATOR", "scopes": ["ad-france"], "password": "operator-password"},
+            {"username": "dual-op", "role": "OPERATOR", "scopes": ["ad-france", "openldap-corp"], "password": "operator-password"},
+            {"username": "owner-test", "role": "GROUP_OWNER", "password": "owner-password"},
+            {"username": "business-test", "role": "BUSINESS_ADMIN", "scopes": ["ad-france"], "password": "business-password"},
+        )
+        for user in users:
+            upsert_user(conn, user)
+        conn.close()
+        with Repository(db) as repo:
+            campaigns = (
+                ("france-c", {"type": "providers", "values": ["ad-france"]}),
+                ("germany-c", {"type": "providers", "values": ["ad-germany"]}),
+                ("cross-c", {"type": "providers", "values": ["ad-france"]}),
+            )
+            for campaign_id, scope in campaigns:
+                repo.upsert("campaigns", {"id": campaign_id, "name": campaign_id, "snapshot_id": "old-snapshot-missing", "scope": scope, "status": "open"})
+            rows = (
+                ("review-france", "france-c", "ad-france", "ad-france", "alice", None),
+                ("review-france-admin", "france-c", "ad-france", "ad-france", "bob", None),
+                ("review-france-owner", "france-c", "ad-france", "ad-france", "owner-user", "owner-test"),
+                ("review-germany", "germany-c", "ad-germany", "ad-germany", "carol", None),
+                ("review-cross", "cross-c", "ad-france", "openldap-corp", "dana", None),
+            )
+            for review_id, campaign_id, access_provider, identity_provider, identity, reviewer in rows:
+                repo.upsert("review_items", {
+                    "id": review_id, "campaign_id": campaign_id,
+                    "access_provider": access_provider, "access_name": "staff",
+                    "identity_provider": identity_provider, "identity_identifier": identity,
+                    "identity_status": "active", "control_object": {}, "permission": {},
+                    "target": None, "description": None, "origin": None,
+                    "expected": True, "observed": True, "classification": "match",
+                    "reviewer": {"provider": "eare", "identity": reviewer} if reviewer else None,
+                    "findings": [],
+                })
+
+        client = TestClient(app)
+        _login(client, "france-op", "operator-password")
+        assert client.post("/api/review-items/review-france/decision", json={"value": "approve"}).status_code == 200
+        assert client.post("/api/review-items/review-germany/decision", json={"value": "approve"}).status_code == 403
+        assert client.post("/api/review-items/review-cross/decision", json={"value": "approve"}).status_code == 403
+
+        client.cookies.clear()
+        _login(client, "dual-op", "operator-password")
+        assert client.get("/api/campaigns/cross-c").status_code == 200
+        assert client.post("/api/review-items/review-cross/decision", json={"value": "approve"}).status_code == 200
+
+        client.cookies.clear()
+        _login(client, "admin-test", "admin-password")
+        assert client.post("/api/review-items/review-germany/decision", json={"value": "approve"}).status_code == 200
+        assert client.post("/api/review-items/review-france-admin/decision", json={"value": "approve"}).status_code == 200
+
+        client.cookies.clear()
+        _login(client, "owner-test", "owner-password")
+        assert client.post("/api/review-items/review-france-owner/decision", json={"value": "approve"}).status_code == 200
+        assert client.post("/api/review-items/review-germany/decision", json={"value": "approve"}).status_code == 403
+
+        client.cookies.clear()
+        _login(client, "business-test", "business-password")
+        assert client.post("/api/review-items/review-france-owner/decision", json={"value": "approve"}).status_code == 403
+
+
+    def test_all_scope_uses_snapshot_provider_coverage_when_comparison_is_empty(tmp_path):
+        db = tmp_path / "all-empty-campaign.db"
+        app = create_app(str(db))
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        upsert_user(conn, {"username": "admin-test", "role": "ADMIN", "password": "admin-password"})
+        upsert_user(conn, {"username": "france-op", "role": "OPERATOR", "scopes": ["ad-france"], "password": "operator-password"})
+        upsert_user(conn, {"username": "both-op", "role": "OPERATOR", "scopes": ["ad-france", "ad-germany"], "password": "operator-password"})
+        conn.close()
+        snapshot = create_snapshot([Provider("ad-france", "generic"), Provider("ad-germany", "generic")], [], [], [], [], [])
+        with Repository(db) as repo:
+            repo.upsert("snapshots", snapshot)
+        payload = {"name": "All domains", "snapshot_id": snapshot.id, "scope": {"type": "all"}}
+        client = TestClient(app)
+        _login(client, "france-op", "operator-password")
+        assert client.post("/api/campaigns/preview", json=payload).status_code == 403
+        assert client.post("/api/campaigns", json=payload).status_code == 403
+        client.cookies.clear()
+        _login(client, "both-op", "operator-password")
+        assert client.post("/api/campaigns/preview", json=payload).status_code == 200
+        assert client.post("/api/campaigns", json=payload).status_code == 200
+        client.cookies.clear()
+        _login(client, "admin-test", "admin-password")
+        assert client.post("/api/campaigns/preview", json=payload).status_code == 200
+        assert client.post("/api/campaigns", json=payload).status_code == 200

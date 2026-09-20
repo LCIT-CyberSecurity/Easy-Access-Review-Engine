@@ -5,6 +5,7 @@ import pytest
 from access_review_engine.campaign_authorization import (
     CampaignScopeError,
     campaign_authorization_providers,
+    campaign_required_providers,
     can_access_campaign,
     normalize_campaign_scope,
 )
@@ -171,3 +172,21 @@ def test_explicit_scope_stays_authorized_when_comparison_has_no_rows() -> None:
     )
     assert providers == {"ad-germany"}
     assert not can_access_campaign("OPERATOR", ["ad-france"], providers)
+
+
+def test_campaign_required_providers_uses_persisted_history_and_snapshot_for_empty_all() -> None:
+    historical = campaign_required_providers(
+        {"type": "providers", "values": ["ad-france"]},
+        [{"access_provider": "wrong", "identity_provider": "wrong-idp"}],
+        review_items=[{"access_provider": "ad-france", "identity_provider": "openldap-corp"}],
+    )
+    assert historical == {"ad-france", "openldap-corp"}
+
+    empty_all = campaign_required_providers(
+        {"type": "all"}, [], snapshot_providers=["ad-france", "ad-germany"]
+    )
+    assert empty_all == {"ad-france", "ad-germany"}
+    assert not can_access_campaign("OPERATOR", ["ad-france"], empty_all)
+    assert can_access_campaign("OPERATOR", ["ad-france", "ad-germany"], empty_all)
+    assert not can_access_campaign("OPERATOR", ["ad-france"], set())
+    assert can_access_campaign("ADMIN", [], set())

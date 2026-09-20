@@ -42,7 +42,12 @@ def normalize_campaign_scope(value: object) -> dict[str, Any]:
             if not isinstance(raw, Mapping):
                 raise CampaignScopeError("Each Access scope value must include provider and name")
             provider, name = raw.get("provider"), raw.get("name")
-            if not isinstance(provider, str) or not provider.strip() or not isinstance(name, str) or not name.strip():
+            if (
+                not isinstance(provider, str)
+                or not provider.strip()
+                or not isinstance(name, str)
+                or not name.strip()
+            ):
                 raise CampaignScopeError("Each Access scope value must include provider and name")
             key = (provider.strip(), name.strip())
             if key in seen:
@@ -57,23 +62,42 @@ def campaign_authorization_providers(
     scope: Mapping[str, Any] | None,
     comparison_states: Iterable[Mapping[str, Any]],
 ) -> set[str]:
-    """Return every provider whose data the campaign can expose.
+    """Backward-compatible name for the shared campaign-domain resolver."""
+    return campaign_required_providers(scope, comparison_states)
 
-    The explicit campaign selection is included even when it currently has no comparison
-    rows. Every selected row contributes both sides: an Access may be assigned to an
-    Identity from a different provider.
+def campaign_required_providers(
+    scope: Mapping[str, Any] | None,
+    comparison_states: Iterable[Mapping[str, Any]] = (),
+    *,
+    snapshot_providers: Iterable[str] = (),
+    review_items: Iterable[Mapping[str, Any]] = (),
+) -> set[str]:
+    """Resolve required domains from draft evidence or persisted historical reviews.
+
+    Materialized ReviewItems take priority for historical campaigns because their two
+    provider fields describe the evidence that the campaign actually exposes.
     """
-    selected_scope = normalize_campaign_scope(scope)
+    normalized = normalize_campaign_scope(scope)
     providers: set[str] = set()
-    if selected_scope["type"] == "providers":
-        providers.update(selected_scope["values"])
-    elif selected_scope["type"] == "accesses":
-        providers.update(item["provider"] for item in selected_scope["values"])
-    for row in comparison_states:
+    if normalized["type"] == "providers":
+        providers.update(normalized["values"])
+    elif normalized["type"] == "accesses":
+        providers.update(item["provider"] for item in normalized["values"])
+
+    persisted = list(review_items)
+    evidence = persisted if persisted else comparison_states
+    for row in evidence:
         for field in ("access_provider", "identity_provider"):
             provider = row.get(field)
             if isinstance(provider, str) and provider.strip():
                 providers.add(provider.strip())
+
+    if not persisted and normalized["type"] == "all":
+        providers.update(
+            provider.strip()
+            for provider in snapshot_providers
+            if isinstance(provider, str) and provider.strip()
+        )
     return providers
 
 
@@ -86,4 +110,5 @@ def can_access_campaign(role: str, scopes: Iterable[str], providers: Iterable[st
     allowed = {str(scope).strip() for scope in scopes if str(scope).strip()}
     if "*" in allowed:
         return True
-    return set(providers) <= allowed
+    required = set(providers)
+    return bool(required) and required <= allowed
