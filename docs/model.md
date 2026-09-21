@@ -52,3 +52,9 @@ This preserves provenance and avoids permanently duplicating derived rights.
 - Rename collisions are rejected explicitly.
 - Access definitions with incompatible known target or permission are rejected.
 - Cycles are bounded during effective-access calculation and reported as diagnostics.
+
+## Functional semantics
+
+Permission = native technical action. Capability = optional normalized functional action. Target = object on which the action applies. AccessAssignment = direct possession of an Access. AccessRelation = how one Access grants another Access. EffectiveAccess = derived result. Snapshot = observed immutable evidence. Golden = expected immutable reference.
+
+Golden V2 freezes expected definitions, relations, Target+Capability rights, provenance, completeness, and comments per version. NOT_DEFINED is not empty, PARTIAL does not assert absence, and COMPLETE is an explicit exhaustive assertion. See the [normative V2 specification](specs/2026-09-21-model-evolution-golden-v2.md).
