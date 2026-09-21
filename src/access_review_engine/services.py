@@ -11,18 +11,23 @@ from access_review_engine.domain import (
     AccessPath,
     AccessRelation,
     AccessRelationType,
-    AuthenticationPosture,
     AuditEvent,
+    AuthenticationPosture,
     Campaign,
     CampaignStatus,
-    canonical_permission_id,
     ComparisonState,
     Completeness,
     Decision,
     DecisionValue,
     EffectiveAccess,
     EffectiveAccessEvaluation,
+    ExpectedAccessModel,
     Finding,
+    FunctionalComparisonState,
+    FunctionalModelCompleteness,
+    PermissionCapabilityMapping,
+    FunctionalRight,
+    GoldenAccessComment,
     GoldenSource,
     GoldenSourceAssignment,
     GoldenSourceVersion,
@@ -36,6 +41,7 @@ from access_review_engine.domain import (
     RemediationActionType,
     ReviewItem,
     Snapshot,
+    canonical_permission_id,
     stable_checksum,
 )
 
@@ -204,6 +210,87 @@ def effective_access_diff(
         )
     return rows
 
+
+def functional_right_key(right: FunctionalRight) -> tuple[tuple[tuple[str, str], ...], str]:
+    """Comparison identity excludes labels and provenance."""
+    from access_review_engine.domain import canonical_target_key
+
+    return canonical_target_key(right.target), right.capability_id
+
+
+def compare_functional_access_models(
+    expected: Iterable[ExpectedAccessModel], observed: Iterable[ExpectedAccessModel]
+) -> list[dict[str, str]]:
+    """Compare target+capability assertions independently of direct assignments."""
+    expected_items = list(expected)
+    observed_items = list(observed)
+    expected_by_access = {(item.access_provider, item.access_name): item for item in expected_items}
+    observed_by_access = {(item.access_provider, item.access_name): item for item in observed_items}
+    if len(expected_by_access) != len(expected_items) or len(observed_by_access) != len(
+        observed_items
+    ):
+        raise ValueError("Duplicate functional model for provider-qualified Access")
+    rows: list[dict[str, str]] = []
+    for access_ref in sorted(expected_by_access.keys() | observed_by_access.keys()):
+        expected_model = expected_by_access.get(access_ref)
+        observed_model = observed_by_access.get(access_ref)
+        completeness = (
+            expected_model.completeness
+            if expected_model is not None
+            else FunctionalModelCompleteness.NOT_DEFINED
+        )
+        expected_rights = {
+            functional_right_key(right): right
+            for right in (expected_model.rights if expected_model else ())
+        }
+        observed_rights = {
+            functional_right_key(right): right
+            for right in (observed_model.rights if observed_model else ())
+        }
+        if completeness == FunctionalModelCompleteness.NOT_DEFINED:
+            rows.append(
+                {
+                    "access_provider": access_ref[0],
+                    "access_name": access_ref[1],
+                    "state": FunctionalComparisonState.NOT_DEFINED,
+                }
+            )
+            continue
+        for right_ref in sorted(expected_rights.keys() | observed_rights.keys()):
+            if right_ref in expected_rights and right_ref in observed_rights:
+                state = FunctionalComparisonState.EXPECTED_AND_OBSERVED
+            elif right_ref in expected_rights:
+                state = FunctionalComparisonState.MISSING
+            elif completeness == FunctionalModelCompleteness.COMPLETE:
+                state = FunctionalComparisonState.UNEXPECTED
+            else:
+                state = FunctionalComparisonState.UNKNOWN_NOT_ASSERTED
+            right = expected_rights.get(right_ref) or observed_rights[right_ref]
+            rows.append(
+                {
+                    "access_provider": access_ref[0],
+                    "access_name": access_ref[1],
+                    "state": state,
+                    "capability_id": right.capability_id,
+                    "target": str(right_ref[0]),
+                }
+            )
+    return rows
+
+
+def map_native_permission(
+    provider: str,
+    permission_identifier: str,
+    mappings: Iterable[PermissionCapabilityMapping],
+) -> tuple[str, ...]:
+    """Return only explicitly mapped capabilities; unknown native actions stay unmapped."""
+    capability_ids = {
+        capability_id
+        for mapping in mappings
+        if mapping.provider == provider and mapping.permission_identifier == permission_identifier
+        for capability_id in mapping.capability_ids
+    }
+    return tuple(sorted(capability_ids))
 
 def _add_effective_access(
     results: dict[tuple[str, str, str, str], EffectiveAccess],
@@ -609,16 +696,36 @@ def create_golden_version(
     parent_version_id: str | None = None,
     comment: str | None = None,
     golden_authentication_policy: AuthenticationPosture | None = None,
+    schema_version: int = 1,
+    expected_access_definitions: Iterable[Access] = (),
+    expected_access_relations: Iterable[AccessRelation] = (),
+    functional_access_models: Iterable[ExpectedAccessModel] = (),
+    access_comments: Iterable[GoldenAccessComment] = (),
 ) -> GoldenSourceVersion:
     previous = list(previous_versions)
     version = max((item.version for item in previous), default=0) + 1
     incoming = list(assignments)
     _reject_duplicate_stable_golden_keys(incoming)
     ordered = sorted(set(incoming), key=lambda item: item.key())
-    checksum = stable_checksum({
+    definitions = deepcopy(list(expected_access_definitions))
+    relations = deepcopy(list(expected_access_relations))
+    models = deepcopy(list(functional_access_models))
+    comments = deepcopy(list(access_comments))
+    checksum_payload: dict[str, object] = {
         "assignments": [asdict(item) for item in ordered],
-        "golden_authentication_policy": asdict(golden_authentication_policy) if golden_authentication_policy else None,
-    })
+        "golden_authentication_policy": asdict(golden_authentication_policy)
+        if golden_authentication_policy
+        else None,
+    }
+    if schema_version >= 2:
+        checksum_payload |= {
+            "schema_version": schema_version,
+            "expected_access_definitions": [asdict(item) for item in definitions],
+            "expected_access_relations": [asdict(item) for item in relations],
+            "functional_access_models": [asdict(item) for item in models],
+            "access_comments": [asdict(item) for item in comments],
+        }
+    checksum = stable_checksum(checksum_payload)
     return GoldenSourceVersion(
         golden_source_id=golden_source.id,
         version=version,
@@ -630,6 +737,11 @@ def create_golden_version(
         parent_version_id=parent_version_id,
         comment=comment,
         golden_authentication_policy=deepcopy(golden_authentication_policy),
+        schema_version=schema_version,
+        expected_access_definitions=definitions,
+        expected_access_relations=relations,
+        functional_access_models=models,
+        access_comments=comments,
     )
 
 

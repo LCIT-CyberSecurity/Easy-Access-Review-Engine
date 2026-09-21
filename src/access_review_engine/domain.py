@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
-import json
 from typing import Any
 from uuid import uuid4
-
 
 JsonDict = dict[str, Any]
 
@@ -43,6 +42,26 @@ class AssignmentType(StrEnum):
 
 class AccessRelationType(StrEnum):
     GRANTS = "grants"
+
+
+class FunctionalModelCompleteness(StrEnum):
+    NOT_DEFINED = "not_defined"
+    PARTIAL = "partial"
+    COMPLETE = "complete"
+
+
+class Provenance(StrEnum):
+    OBSERVED = "observed"
+    MANUAL = "manual"
+    MAPPED = "mapped"
+
+
+class FunctionalComparisonState(StrEnum):
+    EXPECTED_AND_OBSERVED = "expected_and_observed"
+    MISSING = "missing"
+    UNEXPECTED = "unexpected"
+    UNKNOWN_NOT_ASSERTED = "unknown_not_asserted"
+    NOT_DEFINED = "not_defined"
 
 
 class ImportStatus(StrEnum):
@@ -219,6 +238,138 @@ class Target:
     service: JsonDict | None = None
     component: JsonDict | None = None
     resource: JsonDict | None = None
+
+
+@dataclass(frozen=True)
+class Capability:
+    id: str
+    label: str
+    description: str
+    active: bool = True
+    system: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.id.strip():
+            raise ValueError("Capability ID is required")
+        if not self.label.strip():
+            raise ValueError("Capability label is required")
+        if not self.description.strip():
+            raise ValueError("Capability description is required")
+        if self.id.casefold() == "membership":
+            raise ValueError("Membership is not a functional capability")
+
+
+@dataclass(frozen=True)
+class PermissionCapabilityMapping:
+    provider: str
+    permission_identifier: str
+    capability_ids: tuple[str, ...]
+    provenance: str = Provenance.MAPPED
+
+    def __post_init__(self) -> None:
+        if not self.provider.strip() or not self.permission_identifier.strip():
+            raise ValueError("Permission mapping requires provider and native permission")
+        if not self.capability_ids:
+            raise ValueError("Permission mapping requires at least one capability")
+
+
+@dataclass(frozen=True)
+class FunctionalRight:
+    target: Target
+    capability_id: str
+    provenance: str = Provenance.MANUAL
+    native_permission: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.capability_id.strip():
+            raise ValueError("Functional right requires a capability")
+
+
+@dataclass(frozen=True)
+class ExpectedAccessModel:
+    access_provider: str
+    access_name: str
+    completeness: str = FunctionalModelCompleteness.NOT_DEFINED
+    rights: tuple[FunctionalRight, ...] = ()
+
+
+@dataclass(frozen=True)
+class GoldenAccessComment:
+    access_provider: str
+    access_name: str
+    comment: str
+    provenance: str = Provenance.MANUAL
+
+
+SYSTEM_CAPABILITIES: tuple[Capability, ...] = (
+    Capability("read", "Read", "View or retrieve information.", True, True),
+    Capability("write", "Write", "Create or modify information.", True, True),
+    Capability("delete", "Delete", "Remove information or objects.", True, True),
+    Capability("execute", "Execute", "Run a command, process, or operation.", True, True),
+    Capability("approve", "Approve", "Approve or validate a business operation.", True, True),
+    Capability("admin", "Admin", "Administer a system, resource, or configuration.", True, True),
+    Capability("grant", "Grant", "Grant or delegate access to others.", True, True),
+)
+
+
+def normalize_manual_target_node(value: JsonDict | None) -> JsonDict | None:
+    """Validate a newly authored target node without rewriting historical values."""
+    if value is None:
+        return None
+    identifier = value.get("identifier")
+    if not isinstance(identifier, str) or not identifier.strip():
+        raise ValueError("Manual Target identifier is required")
+    normalized: JsonDict = {"identifier": identifier.strip()}
+    display_name = value.get("display_name")
+    node_type = value.get("type")
+    metadata = value.get("metadata")
+    if display_name is not None:
+        if not isinstance(display_name, str):
+            raise ValueError("Target display_name must be text")
+        if display_name.strip():
+            normalized["display_name"] = display_name.strip()
+    if node_type is not None:
+        if not isinstance(node_type, str) or not node_type.strip():
+            raise ValueError("Target type must be non-empty text")
+        normalized["type"] = node_type.strip()
+    if metadata is not None:
+        if not isinstance(metadata, dict):
+            raise ValueError("Target metadata must be an object")
+        normalized["metadata"] = metadata.copy()
+    return normalized
+
+
+def canonical_target_key(target: Target | None) -> tuple[tuple[str, str], ...]:
+    if target is None:
+        return ()
+    result = []
+    for level in ("service", "component", "resource"):
+        node = getattr(target, level)
+        if node is not None:
+            identifier = node.get("identifier")
+            if isinstance(identifier, str) and identifier.strip():
+                result.append((level, identifier.strip()))
+            else:
+                legacy_identity = {key: item for key, item in node.items() if key != "display_name"}
+                result.append((level, stable_json(legacy_identity)))
+    return tuple(result)
+
+
+def target_semantically_equal(left: Target | None, right: Target | None) -> bool:
+    return canonical_target_key(left) == canonical_target_key(right)
+
+
+def target_path(target: Target | None) -> str:
+    if target is None:
+        return ""
+    labels = []
+    for level in ("service", "component", "resource"):
+        node = getattr(target, level)
+        if node:
+            label = node.get("display_name") or node.get("identifier") or node.get("name")
+            if label:
+                labels.append(str(label))
+    return " › ".join(labels)
 
 
 @dataclass
@@ -421,6 +572,11 @@ class GoldenSourceVersion:
     golden_authentication_policy: AuthenticationPosture | None = None
     id: str = field(default_factory=new_id)
     created_at: str = field(default_factory=now_utc)
+    schema_version: int = 1
+    expected_access_definitions: list[Access] = field(default_factory=list)
+    expected_access_relations: list[AccessRelation] = field(default_factory=list)
+    functional_access_models: list[ExpectedAccessModel] = field(default_factory=list)
+    access_comments: list[GoldenAccessComment] = field(default_factory=list)
 
 
 @dataclass
