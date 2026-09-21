@@ -6,4 +6,7 @@ services:
     image: eare-crashtests-openldap:debian13-slim
     container_name: eare-crashtests-openldap
     network_mode: none
-    command: ["/bin/sh", "-c", "slapd -h 'ldap:/// ldapi:///' -d 0"]
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096

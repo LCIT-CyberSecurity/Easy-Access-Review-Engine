@@ -1,0 +1,57 @@
+dn: dc=example,dc=com
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: CrashTests OpenLDAP
+dc: example
+
+dn: ou=People,dc=example,dc=com
+objectClass: top
+objectClass: organizationalUnit
+ou: People
+
+dn: ou=Groups,dc=example,dc=com
+objectClass: top
+objectClass: organizationalUnit
+ou: Groups
+
+dn: uid=alice,ou=People,dc=example,dc=com
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+objectClass: posixAccount
+uid: alice
+cn: Alice Admin
+sn: Admin
+uidNumber: 10001
+gidNumber: 10001
+homeDirectory: /home/alice
+
+dn: cn=Doe\, John,ou=People,dc=example,dc=com
+objectClass: top
+objectClass: person
+objectClass: organizationalPerson
+objectClass: inetOrgPerson
+cn: Doe, John
+sn: Doe
+uid: jdoe
+
+dn: cn=application-admins,ou=Groups,dc=example,dc=com
+objectClass: top
+objectClass: groupOfNames
+cn: application-admins
+member: uid=alice,ou=People,dc=example,dc=com
+
+dn: cn=unique-reviewers,ou=Groups,dc=example,dc=com
+objectClass: top
+objectClass: groupOfUniqueNames
+cn: unique-reviewers
+uniqueMember: cn=Doe\, John,ou=People,dc=example,dc=com#'0101'B
+
+dn: cn=unix-operators,ou=Groups,dc=example,dc=com
+objectClass: top
+objectClass: posixGroup
+cn: unix-operators
+gidNumber: 10001
+memberUid: alice

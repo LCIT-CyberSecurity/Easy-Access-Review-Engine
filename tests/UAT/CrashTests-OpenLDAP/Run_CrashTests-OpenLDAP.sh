@@ -7,6 +7,7 @@ ARTIFACTS="${SCRIPT_DIR}/artifacts"
 COMPOSE_FILE="${SCRIPT_DIR}/compose.yaml"
 
 fail() {
+  capture
   printf 'CrashTests-OpenLDAP failed: %s\n' "$*" >&2
   exit 1
 }
@@ -19,7 +20,7 @@ capture() {
 }
 
 main() {
-  trap 'capture' ERR INT
+  trap 'capture' EXIT INT TERM
   command -v docker >/dev/null 2>&1 || fail "docker is not installed"
   docker version >/dev/null 2>&1 || fail "Docker Engine is not reachable"
   docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin is not available"
