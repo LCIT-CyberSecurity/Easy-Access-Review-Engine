@@ -187,3 +187,7 @@ Artifacts are ignored by Git and must not contain secrets.
 - CT-CRM-033: partial AccessRelation collection;
 - CT-CRM-034: orphan relation;
 - CT-CRM-035: large composition.
+- CT-CRM-036: functional Golden completeness (NOT_DEFINED, PARTIAL, COMPLETE) prevents false unexpected rights.
+- CT-CRM-037: OpenLDAP group-to-CRM Access is a cross-provider derived grant; direct assignment remains on the group.
+- CT-CRM-038: the same generic graph calculation supports AD, OpenLDAP, CRM, AWS, database, and Linux fixtures without changing native Permission values.
+- CT-CRM-039: canonical Target semantics across application, database, file, bucket, AD OU, and Kubernetes examples, including display-name stability.
