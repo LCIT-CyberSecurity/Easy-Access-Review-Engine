@@ -56,7 +56,7 @@ main() {
   capture_diagnostics
   (
     cd "${REPO_ROOT}"
-    python3 -m pytest tests/UAT/CrashTests-CRM/crashtests -v --junitxml="${ARTIFACTS}/pytest.xml"
+    pytest tests/UAT/CrashTests-CRM/crashtests -v --junitxml="${ARTIFACTS}/pytest.xml"
   ) >"${ARTIFACTS}/eare.stdout.log" 2>"${ARTIFACTS}/eare.stderr.log" || {
     printf 'CT-CRM suite failed. Relevant artifacts are in %s\n' "${ARTIFACTS}" >&2
     tail -n 80 "${ARTIFACTS}/eare.stdout.log" >&2 || true
