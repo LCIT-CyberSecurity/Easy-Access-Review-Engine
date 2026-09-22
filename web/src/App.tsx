@@ -3645,10 +3645,7 @@ function Golden() {
             {s(holders.access_provider)}
             {targetText(holders.access_target) ? ` · ${targetText(holders.access_target)}` : ""}
             {s(holders.access_permission, "") ? ` · ${s(holders.access_permission)}` : ""}
-            {s(holders.access_owner, "") ? ` · owner ${s(holders.access_owner)}` : ""}
           </p>
-          <h4>BUSINESS CONTEXT</h4>
-          <BusinessContext context={holders.business_context} />
           <AccessDetail access={{ ...holders, provider: holders.access_provider, name: holders.access_name, id: holders.access_id, permission: { identifier: holders.access_permission } }} />
           <h4>DESCRIPTION</h4>
           <p>{s(holders.access_description, "No description was provided for this access.")}</p>
