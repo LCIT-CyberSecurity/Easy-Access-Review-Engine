@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 from access_review_engine.source_inspector import (
+    browse_source_tree,
     discover_source_attributes,
     get_source_object,
     search_source_objects,
@@ -121,3 +123,40 @@ def test_source_browser_requires_declared_connector_capability() -> None:
         pass
     else:
         raise AssertionError("unsupported connectors must not implicitly gain Source Browser")
+
+
+def test_openldap_tree_is_one_level_and_dn_bound() -> None:
+    seen: list[list[str]] = []
+
+    def runner(command: list[str], _env: dict[str, str], _timeout: int) -> subprocess.CompletedProcess[str]:
+        seen.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "dn: ou=groups,dc=example,dc=test\nobjectClass: organizationalUnit\nou: groups\n\n"
+            "dn: cn=finance,ou=groups,dc=example,dc=test\nobjectClass: groupOfNames\ncn: finance\n\n",
+            "",
+        )
+
+    config = _ldap()
+    config["connection"] = {**config["connection"], "bind_dn": "cn=svc,dc=example,dc=test"}
+    config["credentials"] = {"password_env": "TEST_SOURCE_PASSWORD"}
+    os.environ["TEST_SOURCE_PASSWORD"] = "test-password"
+    try:
+        result = browse_source_tree(config, runner=runner)
+    finally:
+        os.environ.pop("TEST_SOURCE_PASSWORD", None)
+
+    assert result["root"] == "dc=example,dc=test"
+    assert result["items"][0]["expandable"] is True
+    assert result["items"][1]["kind"] == "group"
+    assert result["items"][1]["selectable"] is True
+    assert "-s" in seen[0] and seen[0][seen[0].index("-s") + 1] == "one"
+    assert "-D" in seen[0] and seen[0][seen[0].index("-D") + 1] == "cn=svc,dc=example,dc=test"
+
+    try:
+        browse_source_tree(config, "ou=groups,dc=other,dc=test", runner=runner)
+    except SourceInspectorError as exc:
+        assert "outside" in str(exc)
+    else:
+        raise AssertionError("tree browsing must stay inside the configured base DN")

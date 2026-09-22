@@ -59,6 +59,7 @@ const s = (v: unknown, f = "—") =>
   vals = (v: unknown) => (Array.isArray(v) ? v.map(String) : []),
   pct = (v: unknown) => Math.max(0, Math.min(100, Number(v) || 0));
 const count = (rows: Row[], keep: (row: Row) => boolean) => rows.filter(keep).length;
+const DEFAULT_GOLDEN_CAPABILITIES = ["read", "write", "delete", "execute", "approve", "admin", "grant"];
 // The collectors store structured references; the WebUI must read them as a sentence.
 const refText = (v: unknown): string => {
   if (typeof v === "string") return v;
@@ -66,6 +67,22 @@ const refText = (v: unknown): string => {
   return row ? s(row.display_name, s(row.identifier, s(row.name, ""))) : "";
 };
 const permissionText = (v: unknown): string => refText(v);
+const ownerDisplayLabel = (value: unknown, identities: Row[], fallbackProvider = ""): string => {
+  const raw = typeof value === "string" ? value.trim() : refText(value).trim();
+  if (!raw) return "";
+  const parts = raw.split("/");
+  const provider = parts.length > 1 ? parts.shift()!.trim() : fallbackProvider;
+  const reference = parts.join("/").trim() || raw;
+  const normalize = (candidate: string) => candidate.replace(/^entry:/i, "").trim().toLowerCase();
+  const referenceForms = new Set([reference, raw, normalize(reference), normalize(raw)].filter(Boolean).map((item) => item.toLowerCase()));
+  const identity = identities.find((row) => {
+    if (provider && s(row.provider, "") !== provider) return false;
+    return [s(row.identifier, ""), s(row.native_id, ""), s(row.id, "")]
+      .filter(Boolean)
+      .some((candidate) => referenceForms.has(candidate.toLowerCase()) || referenceForms.has(normalize(candidate)));
+  });
+  return identity ? `${s(identity.provider, provider)}/${s(identity.display_name, s(identity.identifier, s(identity.id)))}` : `${provider}/Unknown identity`;
+};
 const providerLabel = (provider: Row): string => {
   const name = s(provider.name),
     display = s(provider.display_name, name);
@@ -1618,6 +1635,11 @@ function AccessDetail({ access }: { access: Row }) {
       queryKey: ["holders", provider, name],
       queryFn: () => getJson(`accesses/${encodeURIComponent(provider)}/${encodeURIComponent(name)}/holders`),
     }),
+    ownerIdentities = useQuery({
+      queryKey: ["access-owner-identities", provider],
+      queryFn: () => getPage("identities", { provider, limit: 500 }),
+      retry: false,
+    }),
     saveContext = useMutation({
       mutationFn: () => putJson(`accesses/${encodeURIComponent(accessId)}/enrichment`, manual),
       onSuccess: async () => {
@@ -1631,7 +1653,9 @@ function AccessDetail({ access }: { access: Row }) {
       onError: (error) => toast("error", s(error, "Unable to save access information")),
     });
   const direct = arr(q.data?.holders),
-    effective = arr(q.data?.effective_holders);
+    effective = arr(q.data?.effective_holders),
+    ownerReference = contextValue(access.business_context, "owner", "manual") || contextValue(access.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
+    ownerDisplay = ownerReference ? ownerDisplayLabel(ownerReference, arr(ownerIdentities.data?.items), s((access.access_owner as Row | undefined)?.provider, provider)) : "—";
   return (
     <>
       <div className="tabs">
@@ -1667,7 +1691,7 @@ function AccessDetail({ access }: { access: Row }) {
           <h4>DETAILS</h4>
           <p>
             Owner:{" "}
-            {refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, "—")}
+            {ownerDisplay}
           </p>
           <h4>WHO HOLDS IT</h4>
           <p>
@@ -2762,6 +2786,38 @@ function useColumnFilters() {
     key: JSON.stringify(applied),
   };
 }
+function GoldenFunctionalSuggestions({ rows, onEdit }: { rows: Row[]; onEdit: (row: Row) => void }) {
+  if (!rows.length) return <p className="muted">No observed Access business context is available for Golden suggestions.</p>;
+  return (
+    <div className="preview-accesses">
+      {rows.map((row) => {
+        const suggestions = (row.canonical_suggestions ?? {}) as Row;
+        const target = (suggestions.target ?? {}) as Row;
+        const service = (target.service ?? {}) as Row;
+        const resource = (target.resource ?? {}) as Row;
+        const owner = (suggestions.owner ?? {}) as Row;
+        const mapped = vals(suggestions.mapped_capability_ids);
+        return (
+          <article key={`${s(row.access_provider)}:${s(row.access_name)}`}>
+            <strong>{s(row.access_display_name, s(row.access_name))}</strong>
+            <small>{s(row.access_provider)} · {row.business_context_conflicts ? "Conflict requires review" : "No context conflict"}</small>
+            <BusinessContext context={{ fields: row.business_context_fields }} />
+            <p className="muted">Canonical candidates (not expected truth):</p>
+            <ul>
+              {target.service ? <li>Target service: {refText(service)} · {s(service.provenance)}</li> : null}
+              {target.resource ? <li>Target resource: {refText(resource)} · {s(resource.provenance)}</li> : null}
+              {suggestions.description ? <li>Description: {s((suggestions.description as Row).value)} · {s((suggestions.description as Row).provenance)}</li> : null}
+              {suggestions.owner ? <li>Owner candidate: {s(owner.identity)} · {s(owner.provenance)}{owner.known_identity ? " · known identity" : " · identity not resolved"}</li> : null}
+              {mapped.length ? <li>Mapped capabilities: {mapped.join(", ")} · {s(suggestions.mapping_provenance, "mapped")}</li> : null}
+              {suggestions.business_permission && !mapped.length ? <li>Business permission: {s((suggestions.business_permission as Row).value)} · unmapped</li> : null}
+            </ul>
+            <button className="button subtle" onClick={() => onEdit(row)}>Review and validate in Golden V2</button>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
 function Golden() {
   const c = useQueryClient(),
     q = useQuery({ queryKey: ["golden"], queryFn: () => getPage("golden-sources", { limit: 100 }) }),
@@ -2779,8 +2835,45 @@ function Golden() {
     [createMode, setCreateMode] = useState("snapshot"),
     [tab, setTab] = useState("accesses"),
     [holders, setHolders] = useState<Row | null>(null),
+    [editingHolder, setEditingHolder] = useState<Row | null>(null),
+    [editingAccess, setEditingAccess] = useState<Row | null>(null),
+    [newApplication, setNewApplication] = useState<Row | null>(null),
+    [functionalEditing, setFunctionalEditing] = useState<Row | null>(null),
     [adding, setAdding] = useState<Row | null>(null),
     [removing, setRemoving] = useState<Row | null>(null),
+    providerOptions = useQuery({
+      queryKey: ["golden-assignment-providers"],
+      queryFn: () => getPage("providers", { limit: 500 }),
+      retry: false,
+    }),
+    identityOptions = useQuery({
+      queryKey: ["golden-assignment-identities", adding?.identity_provider],
+      queryFn: () => getPage("identities", { provider: s(adding?.identity_provider), limit: 500 }),
+      enabled: Boolean(adding?.identity_provider),
+      retry: false,
+    }),
+    accessOptions = useQuery({
+      queryKey: ["golden-assignment-accesses", adding?.access_provider],
+      queryFn: () => getPage("accesses", { provider: s(adding?.access_provider), limit: 500 }),
+      enabled: Boolean(adding?.access_provider),
+      retry: false,
+    }),
+    holderIdentityOptions = useQuery({
+      queryKey: ["golden-holder-identities", editingHolder?.identity_provider],
+      queryFn: () => getPage("identities", { provider: s(editingHolder?.identity_provider), limit: 500 }),
+      enabled: Boolean(editingHolder?.identity_provider),
+      retry: false,
+    }),
+    ownerOptions = useQuery({
+      queryKey: ["golden-access-owners"],
+      queryFn: () => getPage("identities", { limit: 500 }),
+      retry: false,
+    }),
+    applicationCatalog = useQuery({
+      queryKey: ["golden-applications"],
+      queryFn: () => getJson("golden-applications"),
+      retry: false,
+    }),
     [commenting, setCommenting] = useState<Row | null>(null),
     [assignmentComment, setAssignmentComment] = useState(""),
     [editingVersionComment, setEditingVersionComment] = useState(false),
@@ -2816,6 +2909,21 @@ function Golden() {
       retry: false,
     }),
     expectedAccesses = arr(accessesQuery.data?.items),
+    functionalModelQuery = useQuery({
+      queryKey: ["golden-functional", sourceName],
+      queryFn: () => getJson(`golden-sources/${encoded}/functional-model`),
+      enabled: Boolean(sourceName),
+      retry: false,
+    }),
+    saveFunctional = useMutation({
+      mutationFn: (body: Row) => postJson(`golden-sources/${encoded}/functional-model`, body),
+      onSuccess: async (data) => {
+        setFunctionalEditing(null);
+        setNotice({ tone: "ok", text: `Golden V2 version v${s(data.version)} created` });
+        await Promise.all([functionalModelQuery.refetch(), content.refetch(), q.refetch()]);
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to save the Golden V2 model") }),
+    }),
     authQuery = useQuery({
       queryKey: ["golden-authentication", sourceName],
       queryFn: () => getJson(`golden-sources/${encoded}/authentication`),
@@ -2856,6 +2964,45 @@ function Golden() {
         c.invalidateQueries({ queryKey: ["golden-accesses"] }),
       ]);
     },
+    saveAccessRow = useMutation({
+      mutationFn: async (body: Row) => {
+        const accessId = s(body.access_id, "");
+        if (accessId) {
+          await putJson(`accesses/${encodeURIComponent(accessId)}/enrichment`, {
+            application: s(body.application, ""),
+            business_permission: s(body.business_permission, ""),
+            owner: s(body.owner, ""),
+          });
+        }
+        if (body.comment_dirty) {
+          await postJson(`golden-sources/${encoded}/access-comment`, {
+            access_provider: body.access_provider,
+            access_name: body.access_name,
+            comment: s(body.access_comment, ""),
+          });
+        }
+        return body;
+      },
+      onSuccess: async () => {
+        setEditingAccess(null);
+        setNotice({ tone: "ok", text: "Expected access updated" });
+        await refresh();
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to update expected access") }),
+    }),
+    createApplication = useMutation({
+      mutationFn: (body: Row) => postJson("golden-applications", body),
+      onSuccess: async (data) => {
+        if (!data.created) {
+          setNewApplication({ ...newApplication, similar: arr(data.similar) });
+          return;
+        }
+        await applicationCatalog.refetch();
+        if (editingAccess) setEditingAccess({ ...editingAccess, application: s(((data.application ?? {}) as Row).name) });
+        setNewApplication(null);
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to create application") }),
+    }),
     baseline = useMutation({
       mutationFn: () => postJson("golden-sources/baseline", { name, snapshot_id: sid, comment: globalComment }),
       onSuccess: async (d) => {
@@ -2880,6 +3027,8 @@ function Golden() {
       onSuccess: async (d) => {
         setAdding(null);
         setRemoving(null);
+        setEditingHolder(null);
+        setHolders(null);
         setNotice({
           tone: "ok",
           text: `Version v${s(d.version)} created · ${s(d.assignments)} expected access(es)`,
@@ -3140,6 +3289,12 @@ function Golden() {
               Changes since the last collection
             </button>
             <button
+              className={tab === "functional" ? "text-button active" : "text-button"}
+              onClick={() => setTab("functional")}
+            >
+              Functional model
+            </button>
+            <button
               className={tab === "authentication" ? "text-button active" : "text-button"}
               onClick={() => setTab("authentication")}
             >
@@ -3159,6 +3314,12 @@ function Golden() {
                   + Add expected access
                 </button>
               </Filter>
+              <datalist id="golden-access-owners">
+                {arr(ownerOptions.data?.items).map((row) => {
+                  const owner = `${s(row.provider)}/${s(row.identifier, s(row.id))}`;
+                  return <option key={owner} value={owner}>{s(row.display_name, owner)}</option>;
+                })}
+              </datalist>
               <Table
                 cols={[
                   "Access right",
@@ -3168,6 +3329,8 @@ function Golden() {
                   "Owner",
                   "Source",
                   "Expected holders",
+                  "Comment",
+                  "Actions",
                 ]}
                 fields={[
                   "access_display_name",
@@ -3177,29 +3340,105 @@ function Golden() {
                   "access_owner",
                   "access_provider",
                   "expected_identities",
+                  "access_comment",
+                  null,
                 ]}
                 sorting={sorting}
                 filtering={columns.filtering}
                 q={accessesQuery}
-                rows={expectedAccesses.map((r) => [
-                  <button className="link-button" onClick={() => setHolders(r)}>
-                    {s(r.access_display_name, s(r.access_name))}
-                  </button>,
-                  <Sub>
-                    {describeAccess({
-                      description: r.access_description,
-                      permission: r.access_permission,
-                      target: r.access_target,
-                    })}
-                  </Sub>,
-                  contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "Unknown",
-                  contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "Not provided",
-                  s(r.access_owner),
-                  s(r.access_provider),
-                  <button className="link-button" onClick={() => setHolders(r)}>
-                    {s(r.expected_identities, "0")} people
-                  </button>,
-                ])}
+                rows={expectedAccesses.map((r) => {
+                  const key = `${s(r.access_provider)}:${s(r.access_name)}`;
+                  const editing = editingAccess?.key === key;
+                  const applicationOptions = Array.from(new Set([
+                    ...arr(applicationCatalog.data?.applications as Row[] | undefined).map((option) => s(option.name)).filter(Boolean),
+                    ...vals(accessesQuery.data?.application_options),
+                  ]));
+                  const capabilityOptions = arr(functionalModelQuery.data?.capabilities);
+                  const permissionOptions = capabilityOptions.length
+                    ? capabilityOptions.map((option) => s(option.id, s(option.label)))
+                    : DEFAULT_GOLDEN_CAPABILITIES;
+                  const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "";
+                  const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
+                  const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
+                  const ownerDisplay = owner ? ownerDisplayLabel(owner, arr(ownerOptions.data?.items), s(r.access_provider)) : "";
+                  const beginEdit = () => setEditingAccess({
+                    key,
+                    access_id: r.access_id,
+                    access_provider: r.access_provider,
+                    access_name: r.access_name,
+                    application,
+                    business_permission: businessPermission,
+                    owner,
+                    access_comment: s(r.access_comment, ""),
+                    original_comment: s(r.access_comment, ""),
+                  });
+                  const applicationCell = editing
+                    ? <select value={s(editingAccess?.application, "")} onChange={(event) => {
+                        if (event.target.value === "__new_application__") setNewApplication({ name: "", comment: "", similar: [] });
+                        else setEditingAccess({ ...editingAccess, application: event.target.value });
+                      }}>
+                        <option value="">Select application</option>
+                        {applicationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                        <option value="__new_application__">+ Add new application</option>
+                      </select>
+                    : <button className="link-button" onClick={beginEdit}>{application || "—"}</button>;
+                  const selectCell = (field: string, value: string, options: string[], placeholder: string) => editing
+                    ? <select value={s(editingAccess?.[field], "")} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })}>
+                        <option value="">{placeholder}</option>
+                        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
+                    : <button className="link-button" onClick={beginEdit}>{value || "—"}</button>;
+                  return [
+                    <button className="link-button" onClick={() => setHolders(r)}>
+                      {s(r.access_display_name, s(r.access_name))}
+                    </button>,
+                    <Sub>
+                      {describeAccess({
+                        description: r.access_description,
+                        permission: r.access_permission,
+                        target: r.access_target,
+                      })}
+                    </Sub>,
+                    applicationCell,
+                    selectCell("business_permission", businessPermission || "Not provided", permissionOptions, "Select permission"),
+                    editing ? (
+                      <select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })}>
+                        <option value="">Select owner</option>
+                        {arr(ownerOptions.data?.items).map((identity) => {
+                          const identifier = s(identity.identifier, s(identity.id));
+                          const value = `${s(identity.provider)}/${identifier}`;
+                          return <option key={value} value={value}>{s(identity.provider)}/{s(identity.display_name, identifier)}</option>;
+                        })}
+                      </select>
+                    ) : <button className="link-button" onClick={beginEdit}>{ownerDisplay || "—"}</button>,
+                    s(r.access_provider),
+                    <button className="link-button" onClick={() => setHolders(r)}>
+                      {s(r.expected_identities, "0")} people
+                    </button>,
+                    editing ? (
+                      <>
+                        <textarea value={s(editingAccess?.access_comment, "")} placeholder="Comment" onChange={(event) => setEditingAccess({ ...editingAccess, access_comment: event.target.value })} />
+                        <button className="link-button" disabled={saveAccessRow.isPending} onClick={() => saveAccessRow.mutate({ ...editingAccess, comment_dirty: s(editingAccess?.access_comment, "") !== s(editingAccess?.original_comment, "") })}>Save</button>{" "}
+                        <button className="link-button" onClick={() => setEditingAccess(null)}>Cancel</button>
+                      </>
+                    ) : <button className="link-button" onClick={beginEdit}>{s(r.access_comment, "Add comment")}</button>,
+                    <button
+                      className="link-button"
+                      onClick={() => setRemoving({
+                        access_display_name: r.access_display_name,
+                        access_name: r.access_name,
+                        access_provider: r.access_provider,
+                        remove_access: true,
+                        remove_assignments: arr(r.identities).map((identity) => ({
+                          access_provider: r.access_provider,
+                          access_name: r.access_name,
+                          identity_provider: identity.identity_provider,
+                          identity_identifier: identity.identity_identifier,
+                        })),
+                      })}
+                    >Remove</button>,
+                  ];
+                })}
               />
               <Pager
                 total={Number(accessesQuery.data?.total ?? 0)}
@@ -3303,6 +3542,35 @@ function Golden() {
               )}
             </section>
           )}
+          {tab === "functional" && (
+            <section className="panel">
+              <h2>Source-informed Golden V2 suggestions</h2>
+              <p className="muted">Observed and mapped values are suggestions only. Review and explicitly enter the validated values in the Golden model; source observations never rewrite expected truth.</p>
+              {functionalModelQuery.isError ? <p className="form-error">{s(functionalModelQuery.error)}</p> : null}
+              <GoldenFunctionalSuggestions
+                rows={arr(functionalModelQuery.data?.items)}
+                onEdit={(row) => {
+                  const suggestion = (row.canonical_suggestions ?? {}) as Row;
+                  const target = (suggestion.target ?? {}) as Row;
+                  const service = (target.service ?? {}) as Row;
+                  const resource = (target.resource ?? {}) as Row;
+                  const mapped = vals(suggestion.mapped_capability_ids);
+                  setFunctionalEditing({
+                    access_provider: row.access_provider,
+                    access_name: row.access_name,
+                    access_display_name: row.access_display_name,
+                    completeness: row.completeness === "not_defined" ? "partial" : row.completeness,
+                    capability_id: mapped[0] ?? "",
+                    service_identifier: service.identifier ?? "",
+                    resource_identifier: resource.identifier ?? "",
+                    service_display_name: service.display_name ?? "",
+                    resource_display_name: resource.display_name ?? "",
+                    version_comment: "Validate source-informed functional model",
+                  });
+                }}
+              />
+            </section>
+          )}
           {tab === "authentication" && (
             <>
               <section className="panel">
@@ -3389,34 +3657,67 @@ function Golden() {
             {s(holders.access_provider)}
             {targetText(holders.access_target) ? ` · ${targetText(holders.access_target)}` : ""}
             {s(holders.access_permission, "") ? ` · ${s(holders.access_permission)}` : ""}
-            {s(holders.access_owner, "") ? ` · owner ${s(holders.access_owner)}` : ""}
           </p>
-          <h4>BUSINESS CONTEXT</h4>
-          <BusinessContext context={holders.business_context} />
           <AccessDetail access={{ ...holders, provider: holders.access_provider, name: holders.access_name, id: holders.access_id, permission: { identifier: holders.access_permission } }} />
-          <h4>EXPECTED HOLDERS</h4>
-          <Table
-            cols={["Identity", "Source", ""]}
-            rows={arr(holders.identities).map((r) => [
-              s(r.identity_display_name, s(r.identity_identifier)),
-              s(r.identity_provider),
-              <button
-                className="link-button"
-                onClick={() =>
-                  setRemoving({
-                    access_provider: holders.access_provider,
-                    access_name: holders.access_name,
-                    access_display_name: holders.access_display_name,
-                    identity_provider: r.identity_provider,
-                    identity_identifier: r.identity_identifier,
-                    identity_display_name: r.identity_display_name,
-                  })
-                }
-              >
-                Remove
-              </button>,
-            ])}
-          />
+          <h4>DESCRIPTION</h4>
+          <p>{s(holders.access_description, "No description was provided for this access.")}</p>
+        </Drawer>
+      )}
+      {newApplication && (
+        <Drawer title="Add new application" close={() => setNewApplication(null)}>
+          <p className="muted">Create a catalogue entry. The comment explains the business scope of this application.</p>
+          <label>Application name<input autoFocus value={s(newApplication.name, "")} onChange={(event) => setNewApplication({ ...newApplication, name: event.target.value })} /></label>
+          <label>Comment<textarea value={s(newApplication.comment, "")} onChange={(event) => setNewApplication({ ...newApplication, comment: event.target.value })} /></label>
+          {arr(newApplication.similar).length ? (
+            <div className="attention">
+              <strong>Similar applications found</strong>
+              <p>{arr(newApplication.similar).map((item) => `${s(item.name)} (${s(item.score)})`).join(", ")}</p>
+              <p className="muted">Saving again will create this application explicitly.</p>
+            </div>
+          ) : null}
+          <button
+            className="button primary"
+            disabled={createApplication.isPending || !s(newApplication.name).trim()}
+            onClick={() => createApplication.mutate({ name: s(newApplication.name).trim(), comment: s(newApplication.comment).trim(), confirm: arr(newApplication.similar).length > 0 })}
+          >
+            {createApplication.isPending ? "Saving…" : arr(newApplication.similar).length ? "Create anyway" : "Create application"}
+          </button>
+        </Drawer>
+      )}
+      {functionalEditing && (
+        <Drawer title={`Validate Golden V2 · ${s(functionalEditing.access_display_name, s(functionalEditing.access_name))}`} close={() => setFunctionalEditing(null)}>
+          <p className="muted">Observed and mapped values are prefilled for review. Saving creates a new immutable expected version; it does not rewrite the source observation.</p>
+          <label>Completeness<select value={s(functionalEditing.completeness, "partial")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, completeness: event.target.value })}>
+            <option value="not_defined">Not defined</option><option value="partial">Partial</option><option value="complete">Complete</option>
+          </select></label>
+          <label>Capability<select required value={s(functionalEditing.capability_id, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, capability_id: event.target.value })}>
+            <option value="">Select a capability</option>
+            {(arr(functionalModelQuery.data?.capabilities).length ? arr(functionalModelQuery.data?.capabilities).map((capability) => ({ id: s(capability.id), label: s(capability.label, s(capability.id)) })) : DEFAULT_GOLDEN_CAPABILITIES.map((id) => ({ id, label: id }))).map((capability) => <option key={capability.id} value={capability.id}>{capability.label}</option>)}
+          </select></label>
+          <label>Target service<input value={s(functionalEditing.service_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, service_identifier: event.target.value })} /></label>
+          <label>Target resource<input value={s(functionalEditing.resource_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, resource_identifier: event.target.value })} /></label>
+          <label>Version comment<textarea value={s(functionalEditing.version_comment, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, version_comment: event.target.value })} /></label>
+          <button
+            className="button primary"
+            disabled={saveFunctional.isPending || !s(functionalEditing.capability_id, "") || (!s(functionalEditing.service_identifier, "") && !s(functionalEditing.resource_identifier, ""))}
+            onClick={() => saveFunctional.mutate({
+              access_provider: functionalEditing.access_provider,
+              access_name: functionalEditing.access_name,
+              manual_access: false,
+              completeness: functionalEditing.completeness,
+              rights: [{
+                target: {
+                  ...(s(functionalEditing.service_identifier, "") ? { service: { identifier: s(functionalEditing.service_identifier), display_name: s(functionalEditing.service_display_name, s(functionalEditing.service_identifier)), type: "application" } } : {}),
+                  ...(s(functionalEditing.resource_identifier, "") ? { resource: { identifier: s(functionalEditing.resource_identifier), display_name: s(functionalEditing.resource_display_name, s(functionalEditing.resource_identifier)), type: "business_object" } } : {}),
+                },
+                capability_id: functionalEditing.capability_id,
+              }],
+              grants: [],
+              version_comment: functionalEditing.version_comment,
+            })}
+          >
+            {saveFunctional.isPending ? "Saving…" : "Validate and save Golden V2"}
+          </button>
         </Drawer>
       )}
       {editingVersionComment && (
@@ -3442,6 +3743,31 @@ function Golden() {
           <p className="muted">
             Declaring an access expected creates a new version. Nothing changes in the audited systems.
           </p>
+          <datalist id="golden-assignment-providers">
+            {arr(providerOptions.data?.items).map((row) => {
+              const provider = s(row.name, s(row.provider));
+              return <option key={provider} value={provider}>{s(row.display_name, provider)}</option>;
+            })}
+          </datalist>
+          <datalist id="golden-assignment-identities">
+            {arr(identityOptions.data?.items).map((row) => {
+              const identifier = s(row.identifier, s(row.id));
+              return <option key={identifier} value={identifier}>{s(row.display_name, identifier)}</option>;
+            })}
+          </datalist>
+          <datalist id="golden-assignment-accesses">
+            {arr(accessOptions.data?.items).map((row) => {
+              const access = s(row.name, s(row.access_name));
+              return <option key={access} value={access}>{s(row.display_name, access)}</option>;
+            })}
+          </datalist>
+          <datalist id="golden-assignment-permissions">
+            {arr(accessOptions.data?.items).map((row) => {
+              const permission = s(row.access_permission, typeof row.permission === "string" ? row.permission : "");
+              return permission ? <option key={`${s(row.name, s(row.access_name))}:${permission}`} value={permission} /> : null;
+            })}
+          </datalist>
+          <p className="field-note">Les listes proposent les valeurs déjà connues. Une valeur manuelle reste possible si elle est validée métier.</p>
           <form
             className="admin-form"
             onSubmit={(e) => {
@@ -3453,6 +3779,7 @@ function Golden() {
               Identity
               <input
                 required
+                list="golden-assignment-identities"
                 placeholder="alice.martin"
                 value={s(adding.identity_identifier, "")}
                 onChange={(e) => setAdding({ ...adding, identity_identifier: e.target.value })}
@@ -3462,6 +3789,7 @@ function Golden() {
               Identity source
               <input
                 required
+                list="golden-assignment-providers"
                 placeholder="corp-ad"
                 value={s(adding.identity_provider, "")}
                 onChange={(e) => setAdding({ ...adding, identity_provider: e.target.value })}
@@ -3471,6 +3799,7 @@ function Golden() {
               Access
               <input
                 required
+                list="golden-assignment-accesses"
                 placeholder="GRP-Finance-RW"
                 value={s(adding.access_name, "")}
                 onChange={(e) => setAdding({ ...adding, access_name: e.target.value })}
@@ -3480,6 +3809,7 @@ function Golden() {
               Access source
               <input
                 required
+                list="golden-assignment-providers"
                 placeholder="corp-ad"
                 value={s(adding.access_provider, "")}
                 onChange={(e) => setAdding({ ...adding, access_provider: e.target.value })}
@@ -3488,6 +3818,7 @@ function Golden() {
             <label>
               Permission
               <input
+                list="golden-assignment-permissions"
                 value={s(adding.access_permission, "")}
                 onChange={(e) => setAdding({ ...adding, access_permission: e.target.value })}
               />
@@ -3504,9 +3835,10 @@ function Golden() {
           intro={
             <>
               <p>
-                {s(removing.identity_display_name, s(removing.identity_identifier))} →{" "}
-                {s(removing.access_display_name, s(removing.access_name))} ({s(removing.access_provider)})
-                stops being expected. If the systems still grant it, the next review reports it as unexpected.
+                {removing.remove_access
+                  ? `${s(removing.access_display_name, s(removing.access_name))} and all its expected holders will be removed from the Golden Source.`
+                  : `${s(removing.identity_display_name, s(removing.identity_identifier))} → ${s(removing.access_display_name, s(removing.access_name))} (${s(removing.access_provider)}) stops being expected.`}
+                {removing.remove_access ? " If the systems still grant it, the next review reports it as unexpected." : " If the systems still grant it, the next review reports it as unexpected."}
               </p>
               <p className="muted">A new version is recorded. The current one stays in the history.</p>
             </>
@@ -3515,7 +3847,7 @@ function Golden() {
           danger
           pending={edit.isPending}
           cancel={() => setRemoving(null)}
-          confirm={() => edit.mutate({ remove: [removing] })}
+          confirm={() => edit.mutate({ remove: removing.remove_assignments ?? [removing] })}
         />
       )}
     </>
@@ -3527,20 +3859,39 @@ function SourceBrowser() {
     [search, setSearch] = useState(""),
     [offset, setOffset] = useState(0),
     [selected, setSelected] = useState<Row | null>(null),
+    [parents, setParents] = useState<string[]>([]),
+    sourceConfig = useQuery({
+      queryKey: ["source-browser-config", provider],
+      queryFn: () => getJson("system/sources"),
+      retry: false,
+    }),
+    source = arr(sourceConfig.data?.sources).find((row) => s(row.provider) === provider),
+    treeEnabled = s(source?.type) === "openldap",
+    currentParent = parents[parents.length - 1] ?? "",
+    tree = useQuery({
+      queryKey: ["source-tree", provider, currentParent],
+      queryFn: () => getJson(`system/sources/${encodeURIComponent(provider)}/inspect/tree`, { parent: currentParent, limit: 100 }),
+      enabled: treeEnabled,
+      retry: false,
+    }),
     query = useQuery({
       queryKey: ["source-browser", provider, kind, search, offset],
       queryFn: () => getJson(`system/sources/${encodeURIComponent(provider)}/inspect/objects`, { kind, search, limit: 25, offset }),
+      enabled: Boolean(provider),
     }),
+    selectedKind = selected?.kind === "user" || selected?.kind === "group" ? s(selected.kind) : kind,
     detail = useQuery({
-      queryKey: ["source-object", provider, kind, selected?.identifier],
-      queryFn: () => getJson(`system/sources/${encodeURIComponent(provider)}/inspect/objects/${kind}/${encodeURIComponent(s(selected?.identifier, ""))}`),
+      queryKey: ["source-object", provider, selectedKind, selected?.identifier],
+      queryFn: () => getJson(`system/sources/${encodeURIComponent(provider)}/inspect/objects/${selectedKind}/${encodeURIComponent(s(selected?.identifier, ""))}`),
       enabled: Boolean(selected?.identifier),
     }),
     discovery = useQuery({
       queryKey: ["source-attributes", provider, kind],
       queryFn: () => getJson(`system/sources/${encodeURIComponent(provider)}/inspect/attributes`, { kind }),
+      enabled: Boolean(provider),
     }),
     items = arr(query.data?.items),
+    treeItems = arr(tree.data?.items),
     attributes = ((detail.data?.attributes ?? {}) as Row);
   return (
     <>
@@ -3548,6 +3899,35 @@ function SourceBrowser() {
         <NavLink className="button subtle" to="/sources"><ArrowLeft size={15} /> Sources</NavLink>
       </Head>
       <p className="muted">Read-only, bounded inspection. EARE cannot create, edit, rename or delete directory objects here.</p>
+      {treeEnabled ? (
+        <section className="panel">
+          <div className="panel-title">
+            <h2>LDAP directory tree</h2>
+            <span className="muted">One level loaded at a time</span>
+          </div>
+          <div className="button-row">
+            <button className="button subtle" disabled={!parents.length} onClick={() => { setParents((value) => value.slice(0, -1)); setSelected(null); }}>Up</button>
+            <button className="button subtle" onClick={() => { setParents([]); setSelected(null); }}>{s(tree.data?.root, "Configured base")}</button>
+            {parents.map((parent, index) => <button className="link-button" key={parent} onClick={() => { setParents(parents.slice(0, index + 1)); setSelected(null); }}>{parent.split(",", 1)[0]}</button>)}
+          </div>
+          {tree.isLoading ? <p>Loading directory level…</p> : treeItems.length ? (
+            <div className="browser-layout">
+              <div>
+                {treeItems.map((item) => (
+                  <button className="browser-row" key={s(item.identifier)} onClick={() => {
+                    if (item.expandable) setParents([...parents, s(item.technical_identifier)]);
+                    else if (item.selectable) setSelected(item);
+                  }}>
+                    <ChevronRight size={15} style={{ opacity: item.expandable ? 1 : 0.25 }} />
+                    <span><strong>{s(item.display_name, s(item.technical_identifier))}</strong><small>{s(item.kind)} · {s(item.technical_identifier)}</small></span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : <p className="muted">This directory level is empty.</p>}
+          {tree.isError ? <p className="form-error">{s(tree.error, "Unable to browse this LDAP level")}</p> : null}
+        </section>
+      ) : null}
       <div className="filterbar">
         <select value={kind} onChange={(event) => { setKind(event.target.value); setOffset(0); setSelected(null); }}>
           <option value="group">Groups / access objects</option>
@@ -3843,6 +4223,15 @@ function Sources({ principal }: { principal: Principal }) {
                     onChange={(e) => updateNested("connection", "bind_dn", e.target.value)}
                   />
                 </label>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={(editing.collection as Row | undefined)?.allow_anonymous === true}
+                    onChange={(e) => updateNested("collection", "allow_anonymous", e.target.checked)}
+                  />
+                  Allow anonymous LDAP export
+                </label>
+                <p className="field-note">Only enable this when the directory intentionally permits anonymous read access. Authenticated collection should use LDAPS or StartTLS.</p>
               </>
             )}
             {supportsAttributeMapping ? <>

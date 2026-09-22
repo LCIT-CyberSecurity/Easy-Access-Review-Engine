@@ -326,3 +326,7 @@ Regression tests cover:
 - Promotion preserving stable technical metadata without substituting business Permission.
 - Browser bounds, sensitive redaction, LDAP filter escaping and read-only behavior.
 - Scoped collection safety and unchanged effective-access traversal.
+
+## Functional rights versus source context
+
+Provider/source identifies which system owns an Access; provenance identifies where an individual expected fact came from. These are separate dimensions. A source may reveal an LDAP group and its membership while a reviewer manually adds the CRM Targets and functional rights it grants.

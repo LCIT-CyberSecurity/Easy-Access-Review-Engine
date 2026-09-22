@@ -41,3 +41,7 @@
 | OpenLDAP-specific behavior | none | Not Covered |
 | Debian host bootstrap on every distro variant | bootstrap manual run | Partial |
 | Docker permissions/user group setup | bootstrap diagnostics | Partial |
+| Functional rights NOT_DEFINED/PARTIAL/COMPLETE | CT-CRM-036 | Covered |
+| LDAP-to-CRM cross-provider derived grants | CT-CRM-037 | Covered |
+| Generic graph across AD/LDAP/CRM/AWS/database/Linux | CT-CRM-038 | Covered |
+| Target service/component/resource matrix | CT-CRM-039 | Covered |

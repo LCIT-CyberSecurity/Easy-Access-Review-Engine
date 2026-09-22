@@ -51,6 +51,33 @@ def source_object_kinds(config: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
+def browse_source_tree(
+    config: dict[str, Any],
+    parent_dn: str = "",
+    limit: int = 100,
+    runner: Runner | None = None,
+) -> dict[str, Any]:
+    """List one LDAP DN level without loading the whole directory."""
+    if _kind(config) != "openldap":
+        raise SourceInspectorError("Directory tree browsing is available for OpenLDAP sources only")
+    connection = _mapping(config.get("connection"), "connection")
+    collection = _mapping(config.get("collection", {}), "collection")
+    base_dn = str(connection.get("base_dn", "")).strip()
+    if not base_dn:
+        raise SourceInspectorError("OpenLDAP base DN is required for tree browsing")
+    parent = _tree_parent(parent_dn, base_dn)
+    bounded_limit = max(1, min(int(limit), MAX_PAGE_SIZE))
+    rows = _query_openldap_tree(config, parent, bounded_limit + 1, runner)
+    return {
+        "parent": parent,
+        "root": base_dn,
+        "limit": bounded_limit,
+        "has_more": len(rows) > bounded_limit,
+        "items": [_tree_node(row) for row in rows[:bounded_limit]],
+        "timeout": _timeout(collection),
+    }
+
+
 def search_source_objects(
     config: dict[str, Any],
     object_kind: str,
@@ -199,6 +226,45 @@ def _query_ad(
         command.append("-Discover")
     result = (runner or _run)(command, os.environ.copy(), _timeout(collection))
     return _json_rows(result)
+
+
+def _query_openldap_tree(
+    config: dict[str, Any],
+    parent_dn: str,
+    limit: int,
+    runner: Runner | None,
+) -> list[dict[str, list[str]]]:
+    connection = _mapping(config.get("connection"), "connection")
+    collection = _mapping(config.get("collection", {}), "collection")
+    command = [
+        "ldapsearch",
+        "-LLL",
+        "-x",
+        "-H",
+        str(connection.get("uri", "")),
+        "-b",
+        parent_dn,
+        "-s",
+        "one",
+        "-z",
+        str(min(limit, MAX_OFFSET + MAX_PAGE_SIZE + 1)),
+        "-o",
+        f"nettimeout={max(1, min(int(collection.get('connection_timeout', 10)), 60))}",
+        "-l",
+        str(max(1, min(int(collection.get("search_timeout", 30)), 120))),
+        "(objectClass=*)",
+        "dn",
+        "objectClass",
+        "ou",
+        "dc",
+        "cn",
+        "uid",
+    ]
+    bind_dn = str(connection.get("bind_dn", "")).strip()
+    if bind_dn:
+        command.extend(["-D", bind_dn])
+    result = _run_openldap(config, command, _timeout(collection), runner)
+    return _parse_ldif(result.stdout)
 
 
 def _query_openldap(
@@ -361,6 +427,37 @@ def _summary(row: dict[str, Any], object_kind: str) -> dict[str, Any]:
     }
 
 
+def _tree_node(entry: dict[str, list[str]]) -> dict[str, Any]:
+    dn = _first(entry, "dn") or ""
+    classes = {value.casefold() for value in entry.get("objectClass", [])}
+    is_container = bool(classes & {"organizationalunit", "domain", "dcobject"})
+    if not is_container:
+        rdn = dn.split(",", 1)[0].casefold()
+        is_container = rdn.startswith(("ou=", "dc="))
+    object_kind = (
+        "group"
+        if classes & {"groupofnames", "groupofuniquenames", "posixgroup"}
+        else "user"
+        if classes & {"inetorgperson", "posixaccount"}
+        else "container"
+    )
+    display_name = (
+        _first(entry, "ou")
+        or _first(entry, "dc")
+        or _first(entry, "cn")
+        or _first(entry, "uid")
+        or (dn.split(",", 1)[0].split("=", 1)[-1] if dn else "")
+    )
+    return {
+        "kind": "container" if is_container else object_kind,
+        "identifier": f"dn:{dn}",
+        "display_name": display_name,
+        "technical_identifier": dn,
+        "selectable": not is_container and object_kind in {"user", "group"},
+        "expandable": is_container,
+    }
+
+
 def _ldap_row(entry: dict[str, list[str]], object_kind: str) -> dict[str, Any]:
     dn = _first(entry, "dn")
     identifier = _first(entry, "entryUUID") or (f"dn:{dn}" if dn else "")
@@ -443,6 +540,17 @@ def _kind(config: dict[str, Any]) -> str:
     if not connector_capabilities(kind).source_browser:
         raise SourceInspectorError("This connector does not support Source Browser")
     return kind
+
+
+def _tree_parent(value: str, base_dn: str) -> str:
+    parent = value.strip() or base_dn
+    normalized_parent = parent.casefold().replace(" ", "")
+    normalized_base = base_dn.casefold().replace(" ", "")
+    if normalized_parent != normalized_base and not normalized_parent.endswith("," + normalized_base):
+        raise SourceInspectorError("Tree parent is outside the configured base DN")
+    if len(parent) > 1000:
+        raise SourceInspectorError("Tree parent DN is too long")
+    return parent
 
 
 def _object_kind(value: str) -> str:

@@ -42,6 +42,11 @@ def validate_connector(data: Any, expected_name: str | None = None) -> None:
     missing = [key for key in required if not connection.get(key)]
     if missing:
         raise ConfigError("Missing connection settings: " + ", ".join(missing))
+    collection = data.get("collection", {})
+    if not isinstance(collection, dict):
+        raise ConfigError("Connector collection settings must be a mapping")
+    if "allow_anonymous" in collection and not isinstance(collection["allow_anonymous"], bool):
+        raise ConfigError("collection.allow_anonymous must be a boolean")
     try:
         data["business_mapping"] = validate_business_mapping(kind, data.get("business_mapping"))
     except ValueError as exc:
@@ -90,5 +95,5 @@ def template(provider: str, kind: str) -> dict[str, Any]:
     if kind == "active_directory":
         return {"provider": provider, "type": kind, "connection": {"server": ""}, "collection": {"timeout": 300, "allow_partial": False}, "business_mapping": validate_business_mapping(kind, None)}
     if kind == "openldap":
-        return {"provider": provider, "type": kind, "connection": {"uri": "ldaps://", "base_dn": "", "bind_dn": ""}, "collection": {"search_scope": "sub", "page_size": 1000, "connection_timeout": 10, "search_timeout": 120, "command_timeout": 180, "allow_partial": False}, "business_mapping": validate_business_mapping(kind, None)}
+        return {"provider": provider, "type": kind, "connection": {"uri": "ldaps://", "base_dn": "", "bind_dn": ""}, "collection": {"search_scope": "sub", "page_size": 1000, "connection_timeout": 10, "search_timeout": 120, "command_timeout": 180, "allow_partial": False, "allow_anonymous": False}, "business_mapping": validate_business_mapping(kind, None)}
     raise ConfigError(f"Unsupported connector type: {kind}")

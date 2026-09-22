@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 ARTIFACTS="${SCRIPT_DIR}/artifacts"
 COMPOSE_FILE="${SCRIPT_DIR}/compose.yaml"
+API_CONTAINER="${EARE_CRASHTESTS_API_CONTAINER:-eare-crashtests-api}"
+OPENLDAP_CONTAINER="${EARE_CRASHTESTS_OPENLDAP_CONTAINER:-eare-crashtests-crm-openldap}"
 
 fail() {
   printf 'CrashTests-CRM run failed: %s\n' "$*" >&2
@@ -16,7 +18,8 @@ capture_diagnostics() {
   docker compose -f "${COMPOSE_FILE}" logs --no-color >"${ARTIFACTS}/docker.log" 2>&1 || true
   docker inspect eare-crashtests-crm >"${ARTIFACTS}/container-inspect.json" 2>/dev/null || true
   docker inspect eare-crashtests-webui >"${ARTIFACTS}/webui-container-inspect.json" 2>/dev/null || true
-  docker inspect eare-crashtests-api >"${ARTIFACTS}/api-container-inspect.json" 2>/dev/null || true
+  docker inspect "${API_CONTAINER}" >"${ARTIFACTS}/api-container-inspect.json" 2>/dev/null || true
+  docker inspect "${OPENLDAP_CONTAINER}" >"${ARTIFACTS}/openldap-container-inspect.json" 2>/dev/null || true
   docker exec eare-crashtests-crm getfacl -R /srv/crm >"${ARTIFACTS}/filesystem-acl.txt" 2>&1 || true
   docker exec eare-crashtests-crm getent passwd >"${ARTIFACTS}/users.txt" 2>&1 || true
   docker exec eare-crashtests-crm getent group >"${ARTIFACTS}/groups.txt" 2>&1 || true
@@ -31,6 +34,14 @@ main() {
   mkdir -p "${ARTIFACTS}"
   docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate
   state="$(docker inspect -f '{{.State.Status}}' eare-crashtests-crm 2>/dev/null || true)"
+  docker exec "${API_CONTAINER}" mkdir -p /data/connectors
+  docker cp "${SCRIPT_DIR}/config/connectors/crashtests-openldap.yaml" "${API_CONTAINER}:/data/connectors/crashtests-openldap.yaml"
+  docker exec --user 0 "${API_CONTAINER}" chown 10001:10001 /data/connectors/crashtests-openldap.yaml
+  ldap_health="$(docker inspect -f '{{.State.Health.Status}}' "${OPENLDAP_CONTAINER}" 2>/dev/null || true)"
+  [[ "${ldap_health}" == "healthy" ]] || {
+    capture_diagnostics
+    fail "OpenLDAP fixture did not become healthy; current state: ${ldap_health:-unknown}"
+  }
   [[ "${state}" == "running" ]] || fail "container is not running; current state: ${state:-unknown}"
   for attempt in $(seq 1 60); do
     if docker exec eare-crashtests-crm test -f /srv/crm/.ready >/dev/null 2>&1; then
@@ -56,7 +67,7 @@ main() {
   capture_diagnostics
   (
     cd "${REPO_ROOT}"
-    python3 -m pytest tests/UAT/CrashTests-CRM/crashtests -v --junitxml="${ARTIFACTS}/pytest.xml"
+    pytest tests/UAT/CrashTests-CRM/crashtests -v --junitxml="${ARTIFACTS}/pytest.xml"
   ) >"${ARTIFACTS}/eare.stdout.log" 2>"${ARTIFACTS}/eare.stderr.log" || {
     printf 'CT-CRM suite failed. Relevant artifacts are in %s\n' "${ARTIFACTS}" >&2
     tail -n 80 "${ARTIFACTS}/eare.stdout.log" >&2 || true

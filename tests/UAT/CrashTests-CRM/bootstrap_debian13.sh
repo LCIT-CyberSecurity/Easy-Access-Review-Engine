@@ -69,7 +69,7 @@ main() {
   printf 'Run the UAT suite with:\n'
   printf '  tests/UAT/CrashTests-CRM/Run_CrashTests-CRM.sh\n'
   printf 'Or run pytest directly with:\n'
-  printf '  python3 -m pytest tests/UAT/CrashTests-CRM/crashtests -v\n'
+  printf '  pytest tests/UAT/CrashTests-CRM/crashtests -v\n'
 }
 
 main "$@"

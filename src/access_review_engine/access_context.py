@@ -33,6 +33,8 @@ def save_access_enrichment(
         field: _clean_value(values.get(field, previous.get(field)))
         for field in ENRICHMENT_FIELDS
     }
+    if fields.get("owner") is not None:
+        fields["owner"] = _known_owner(repo, fields["owner"])
     fields = {field: value for field, value in fields.items() if value is not None}
     if not fields:
         repo.delete_ids("access_enrichments", {access_id})
@@ -104,6 +106,23 @@ def access_context_for_payload(repo: Repository, access: Mapping[str, Any] | Non
     access_id = str((access or {}).get("id") or "")
     enrichment = access_enrichment(repo, access_id) if access_id else None
     return business_context_view(access, enrichment)
+
+
+def _known_owner(repo: Repository, value: str) -> str:
+    """Normalize an owner as a reference to an existing identity."""
+    if "/" not in value:
+        raise ValueError("Owner must reference a known identity as provider/identifier")
+    provider, identifier = (part.strip() for part in value.split("/", 1))
+    if not provider or not identifier:
+        raise ValueError("Owner must reference a known identity as provider/identifier")
+    known = any(
+        str(row.get("provider") or "") == provider
+        and str(row.get("identifier") or "") == identifier
+        for row in repo.list_payloads("identities")
+    )
+    if not known:
+        raise ValueError("Owner must reference a known identity as provider/identifier")
+    return f"{provider}/{identifier}"
 
 
 def _clean_value(value: object) -> str | None:

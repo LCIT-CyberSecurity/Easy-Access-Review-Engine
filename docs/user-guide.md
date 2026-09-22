@@ -323,3 +323,7 @@ eare golden edit baseline --csv updated-access.csv
 `
 
 CSV files use the columns access_provider, access_name, identity_provider, and identity_identifier. Optional native identifier columns are supported for stable matching. Each CSV operation creates an immutable Golden Source version.
+
+## Golden functional model (V2)
+
+Golden Source versions can record what an Access is expected to grant as well as who should hold it. A functional right is a Target plus Capability, such as `Invoices / approve`; a capability alone is not an authorization identity. Native permissions such as `SELECT`, `member`, and `s3:GetObject` retain their technical meaning.

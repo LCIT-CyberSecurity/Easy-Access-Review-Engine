@@ -1,0 +1,15 @@
+provider: crashtests-openldap
+display_name: CrashTests OpenLDAP
+type: openldap
+connection:
+  uri: ldap://crashtests-openldap:389
+  base_dn: dc=example,dc=com
+  bind_dn: ""
+collection:
+  search_scope: sub
+  page_size: 1000
+  connection_timeout: 5
+  search_timeout: 10
+  command_timeout: 30
+  allow_partial: false
+  allow_anonymous: true

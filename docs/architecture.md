@@ -57,3 +57,9 @@ Partial exports must not produce false `missing` results or false deletions.
 ## Security
 
 ZIP inputs are read with filename allowlists, size limits, Zip Slip detection, and no execution of embedded content. Native descriptions are preserved when available and must be escaped in reports.
+
+## Golden V2 functional model
+
+Golden V2 additively versions expected Access definitions, GRANTS relations, Target+Capability rights, provenance, completeness, and comments. Golden V1 implies functional completeness `NOT_DEFINED`, not an empty model. NOT_DEFINED produces no functional mismatch; PARTIAL does not classify additional observed rights as unexpected; only COMPLETE asserts exhaustiveness. Functional diagnostics remain separate from campaign assignment findings.
+
+Permission remains a native technical action. Capability is optional and lossy; Target identifies the object acted on. The generic graph remains provider-independent and positive-GRANTS based. DENY, ABAC, conditions, runtime context, and complete cloud policy semantics are not evaluated.

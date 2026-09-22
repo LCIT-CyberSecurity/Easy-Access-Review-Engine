@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import asdict
 import json
 import sqlite3
+from contextlib import contextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Iterator
 
 from access_review_engine.domain import (
+    SYSTEM_CAPABILITIES,
     Access,
     AccessAssignment,
     AccessRelation,
-    AuthenticationPosture,
     AuditEvent,
+    AuthenticationPosture,
     Campaign,
     Decision,
     GoldenSource,
@@ -26,7 +27,6 @@ from access_review_engine.domain import (
     ReviewItem,
     Snapshot,
 )
-
 
 TABLES = {
     "providers",
@@ -52,6 +52,9 @@ TABLES = {
     "access_enrichments",
     "campaign_access_contexts",
     "golden_assignment_annotations",
+    "capabilities",
+    "permission_capability_mappings",
+    "golden_applications",
 }
 
 
@@ -120,6 +123,12 @@ class Repository:
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_golden_version "
             "ON golden_source_versions(name, version)"
         )
+        for capability in SYSTEM_CAPABILITIES:
+            payload = json.dumps(asdict(capability), sort_keys=True, separators=(",", ":"))
+            cur.execute(
+                "INSERT OR IGNORE INTO capabilities (id, payload, name) VALUES (?, ?, ?)",
+                (capability.id, payload, capability.id),
+            )
         self.conn.commit()
 
     @contextmanager
@@ -213,6 +222,67 @@ class Repository:
             (golden_source_id, version),
         ).fetchone()
         return None if row is None else json.loads(row["payload"])
+
+    def save_capability(self, capability: Any) -> None:
+        from dataclasses import asdict
+
+        existing = self.get_payload("capabilities", capability.id)
+        if existing is not None and bool(existing.get("system")) != bool(capability.system):
+            raise ValueError("Capability system/custom classification is immutable")
+        self.upsert("capabilities", asdict(capability) | {"name": capability.id})
+
+    def list_capabilities(self) -> list[Any]:
+        from access_review_engine.domain import Capability
+
+        return [
+            Capability(**{key: value for key, value in row.items() if key != "name"})
+            for row in self.list_payloads("capabilities")
+        ]
+
+    def delete_capability(self, capability_id: str) -> None:
+        for mapping in self.list_payloads("permission_capability_mappings"):
+            if capability_id in mapping.get("capability_ids", []):
+                raise ValueError("A used Capability cannot be deleted; deactivate it instead")
+        for version in self.list_payloads("golden_source_versions"):
+            for model in version.get("functional_access_models", []):
+                if any(
+                    right.get("capability_id") == capability_id for right in model.get("rights", [])
+                ):
+                    raise ValueError("A Capability referenced by Golden history cannot be deleted")
+        capability = self.get_payload("capabilities", capability_id)
+        if capability and capability.get("system"):
+            raise ValueError("System Capabilities cannot be deleted")
+        self.delete_ids("capabilities", {capability_id})
+
+    def save_permission_capability_mapping(self, mapping: Any) -> None:
+        from dataclasses import asdict
+
+        from access_review_engine.domain import stable_checksum
+
+        known = {item.id for item in self.list_capabilities()}
+        if not set(mapping.capability_ids) <= known:
+            raise ValueError("Permission mapping references an unknown Capability")
+        payload = asdict(mapping)
+        mapping_id = stable_checksum(
+            {
+                "provider": mapping.provider,
+                "permission_identifier": mapping.permission_identifier,
+            }
+        )
+        self.upsert("permission_capability_mappings", payload | {"id": mapping_id})
+
+    def list_permission_capability_mappings(self) -> list[Any]:
+        from access_review_engine.domain import PermissionCapabilityMapping
+
+        return [
+            PermissionCapabilityMapping(
+                **(
+                    {key: value for key, value in row.items() if key != "id"}
+                    | {"capability_ids": tuple(row["capability_ids"])}
+                )
+            )
+            for row in self.list_payloads("permission_capability_mappings")
+        ]
 
     def replace_assignments(
         self, assignments: list[AccessAssignment], providers: set[str] | None = None
@@ -354,13 +424,55 @@ def hydrate_golden_source(data: dict[str, Any]) -> GoldenSource:
 
 
 def hydrate_golden_version(data: dict[str, Any]) -> GoldenSourceVersion:
-    from access_review_engine.domain import GoldenSourceAssignment
+    from access_review_engine.domain import (
+        ExpectedAccessModel,
+        FunctionalRight,
+        GoldenAccessComment,
+        GoldenSourceAssignment,
+        Target,
+    )
 
+    models = []
+    for item in data.get("functional_access_models", []):
+        rights = tuple(
+            FunctionalRight(
+                target=Target(**right["target"]),
+                capability_id=right["capability_id"],
+                provenance=right.get("provenance", "manual"),
+                native_permission=right.get("native_permission"),
+            )
+            for right in item.get("rights", [])
+        )
+        models.append(
+            ExpectedAccessModel(
+                access_provider=item["access_provider"],
+                access_name=item["access_name"],
+                completeness=item.get("completeness", "not_defined"),
+                rights=rights,
+            )
+        )
     return GoldenSourceVersion(
-        **(data | {
-            "assignments": [GoldenSourceAssignment(**item) for item in data["assignments"]],
-            "golden_authentication_policy": hydrate_authentication_posture(data.get("golden_authentication_policy")),
-        })
+        **(
+            data
+            | {
+                "assignments": [GoldenSourceAssignment(**item) for item in data["assignments"]],
+                "golden_authentication_policy": hydrate_authentication_posture(
+                    data.get("golden_authentication_policy")
+                ),
+                "schema_version": data.get("schema_version", 1),
+                "expected_access_definitions": [
+                    hydrate_access(item) for item in data.get("expected_access_definitions", [])
+                ],
+                "expected_access_relations": [
+                    hydrate_access_relation(item)
+                    for item in data.get("expected_access_relations", [])
+                ],
+                "functional_access_models": models,
+                "access_comments": [
+                    GoldenAccessComment(**item) for item in data.get("access_comments", [])
+                ],
+            }
+        )
     )
 
 
