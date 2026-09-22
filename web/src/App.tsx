@@ -2813,6 +2813,7 @@ function Golden() {
     [holders, setHolders] = useState<Row | null>(null),
     [editingHolder, setEditingHolder] = useState<Row | null>(null),
     [editingAccess, setEditingAccess] = useState<Row | null>(null),
+    [newApplication, setNewApplication] = useState<Row | null>(null),
     [functionalEditing, setFunctionalEditing] = useState<Row | null>(null),
     [adding, setAdding] = useState<Row | null>(null),
     [removing, setRemoving] = useState<Row | null>(null),
@@ -2842,6 +2843,11 @@ function Golden() {
     ownerOptions = useQuery({
       queryKey: ["golden-access-owners"],
       queryFn: () => getPage("identities", { limit: 500 }),
+      retry: false,
+    }),
+    applicationCatalog = useQuery({
+      queryKey: ["golden-applications"],
+      queryFn: () => getJson("golden-applications"),
       retry: false,
     }),
     [commenting, setCommenting] = useState<Row | null>(null),
@@ -2959,6 +2965,19 @@ function Golden() {
         await refresh();
       },
       onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to update expected access") }),
+    }),
+    createApplication = useMutation({
+      mutationFn: (body: Row) => postJson("golden-applications", body),
+      onSuccess: async (data) => {
+        if (!data.created) {
+          setNewApplication({ ...newApplication, similar: arr(data.similar) });
+          return;
+        }
+        await applicationCatalog.refetch();
+        if (editingAccess) setEditingAccess({ ...editingAccess, application: s(((data.application ?? {}) as Row).name) });
+        setNewApplication(null);
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to create application") }),
     }),
     baseline = useMutation({
       mutationFn: () => postJson("golden-sources/baseline", { name, snapshot_id: sid, comment: globalComment }),
@@ -3304,7 +3323,10 @@ function Golden() {
                 rows={expectedAccesses.map((r) => {
                   const key = `${s(r.access_provider)}:${s(r.access_name)}`;
                   const editing = editingAccess?.key === key;
-                  const applicationOptions = vals(accessesQuery.data?.application_options);
+                  const applicationOptions = Array.from(new Set([
+                    ...arr(applicationCatalog.data?.applications as Row[] | undefined).map((option) => s(option.name)).filter(Boolean),
+                    ...vals(accessesQuery.data?.application_options),
+                  ]));
                   const capabilityOptions = arr(functionalModelQuery.data?.capabilities);
                   const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "";
                   const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
@@ -3320,6 +3342,16 @@ function Golden() {
                     access_comment: s(r.access_comment, ""),
                     original_comment: s(r.access_comment, ""),
                   });
+                  const applicationCell = editing
+                    ? <select value={s(editingAccess?.application, "")} onChange={(event) => {
+                        if (event.target.value === "__new_application__") setNewApplication({ name: "", comment: "", similar: [] });
+                        else setEditingAccess({ ...editingAccess, application: event.target.value });
+                      }}>
+                        <option value="">Select application</option>
+                        {applicationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                        <option value="__new_application__">+ Add new application</option>
+                      </select>
+                    : <button className="link-button" onClick={beginEdit}>{application || "—"}</button>;
                   const selectCell = (field: string, value: string, options: string[], placeholder: string) => editing
                     ? <select value={s(editingAccess?.[field], "")} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })}>
                         <option value="">{placeholder}</option>
@@ -3337,7 +3369,7 @@ function Golden() {
                         target: r.access_target,
                       })}
                     </Sub>,
-                    selectCell("application", application || "Unknown", applicationOptions, "Select application"),
+                    applicationCell,
                     selectCell("business_permission", businessPermission || "Not provided", capabilityOptions.map((option) => s(option.id, s(option.label))), "Select permission"),
                     editing ? (
                       <input list="golden-access-owners" value={s(editingAccess?.owner, "")} placeholder="source/identifier" onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} />
@@ -3578,99 +3610,29 @@ function Golden() {
           <h4>BUSINESS CONTEXT</h4>
           <BusinessContext context={holders.business_context} />
           <AccessDetail access={{ ...holders, provider: holders.access_provider, name: holders.access_name, id: holders.access_id, permission: { identifier: holders.access_permission } }} />
-          <h4>EXPECTED HOLDERS</h4>
-          <datalist id="golden-holder-identities">
-            {arr(holderIdentityOptions.data?.items).map((row) => {
-              const identifier = s(row.identifier, s(row.id));
-              return <option key={identifier} value={identifier}>{s(row.display_name, identifier)}</option>;
-            })}
-          </datalist>
+          <h4>DESCRIPTION</h4>
+          <p>{s(holders.access_description, "No description was provided for this access.")}</p>
+        </Drawer>
+      )}
+      {newApplication && (
+        <Drawer title="Add new application" close={() => setNewApplication(null)}>
+          <p className="muted">Create a catalogue entry. The comment explains the business scope of this application.</p>
+          <label>Application name<input autoFocus value={s(newApplication.name, "")} onChange={(event) => setNewApplication({ ...newApplication, name: event.target.value })} /></label>
+          <label>Comment<textarea value={s(newApplication.comment, "")} onChange={(event) => setNewApplication({ ...newApplication, comment: event.target.value })} /></label>
+          {arr(newApplication.similar).length ? (
+            <div className="attention">
+              <strong>Similar applications found</strong>
+              <p>{arr(newApplication.similar).map((item) => `${s(item.name)} (${s(item.score)})`).join(", ")}</p>
+              <p className="muted">Saving again will create this application explicitly.</p>
+            </div>
+          ) : null}
           <button
-            className="button subtle"
-            onClick={() => {
-              setHolders(null);
-              setAdding({
-                ...blankExpected(),
-                access_provider: s(holders.access_provider, ""),
-                access_name: s(holders.access_name, ""),
-                access_permission: s(holders.access_permission, ""),
-              });
-            }}
+            className="button primary"
+            disabled={createApplication.isPending || !s(newApplication.name).trim()}
+            onClick={() => createApplication.mutate({ name: s(newApplication.name).trim(), comment: s(newApplication.comment).trim(), confirm: arr(newApplication.similar).length > 0 })}
           >
-            + Add expected holder
+            {createApplication.isPending ? "Saving…" : arr(newApplication.similar).length ? "Create anyway" : "Create application"}
           </button>
-          <Table
-            cols={["Identity", "Source", ""]}
-            rows={arr(holders.identities).map((r) => {
-              const key = `${s(r.identity_provider)}:${s(r.identity_identifier)}`;
-              const editing = editingHolder?.key === key;
-              const draft = editing ? editingHolder : null;
-              return [
-                editing ? (
-                  <input
-                    list="golden-holder-identities"
-                    value={s(draft?.identity_identifier, "")}
-                    onChange={(event) => setEditingHolder({ ...draft, identity_identifier: event.target.value })}
-                  />
-                ) : (
-                  <button className="link-button" onClick={() => setEditingHolder({
-                    key,
-                    access_provider: holders.access_provider,
-                    access_name: holders.access_name,
-                    identity_provider: r.identity_provider,
-                    identity_identifier: r.identity_identifier,
-                  })}>
-                    {s(r.identity_display_name, s(r.identity_identifier))}
-                  </button>
-                ),
-                editing ? (
-                  <input
-                    list="golden-assignment-providers"
-                    value={s(draft?.identity_provider, "")}
-                    onChange={(event) => setEditingHolder({ ...draft, identity_provider: event.target.value })}
-                  />
-                ) : s(r.identity_provider),
-                editing ? (
-                  <>
-                    <button
-                      className="link-button"
-                      disabled={edit.isPending || !s(draft?.identity_provider) || !s(draft?.identity_identifier)}
-                      onClick={() => edit.mutate({
-                        add: [{
-                          access_provider: holders.access_provider,
-                          access_name: holders.access_name,
-                          identity_provider: s(draft?.identity_provider),
-                          identity_identifier: s(draft?.identity_identifier),
-                        }],
-                        remove: [{
-                          access_provider: holders.access_provider,
-                          access_name: holders.access_name,
-                          identity_provider: r.identity_provider,
-                          identity_identifier: r.identity_identifier,
-                        }],
-                      })}
-                    >Save
-                    </button>{" "}
-                    <button className="link-button" onClick={() => setEditingHolder(null)}>Cancel</button>
-                  </>
-                ) : (
-                  <button
-                    className="link-button"
-                    onClick={() => setRemoving({
-                      access_provider: holders.access_provider,
-                      access_name: holders.access_name,
-                      access_display_name: holders.access_display_name,
-                      identity_provider: r.identity_provider,
-                      identity_identifier: r.identity_identifier,
-                      identity_display_name: r.identity_display_name,
-                    })}
-                  >
-                    Remove
-                  </button>
-                ),
-              ];
-            })}
-          />
         </Drawer>
       )}
       {functionalEditing && (

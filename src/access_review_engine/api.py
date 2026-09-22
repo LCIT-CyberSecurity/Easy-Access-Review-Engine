@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import base64
 import csv
+import difflib
+import unicodedata
 import hashlib
 import hmac
 import io
@@ -1906,6 +1908,44 @@ def create_app(db_path: str | None = None):
         with Repository(db_path) as repo:
             events = repo.list_payloads("audit_events")
         return {"items": events[bounded_offset : bounded_offset + bounded_limit], "total": len(events), "limit": bounded_limit, "offset": bounded_offset}
+
+    @app.get("/api/golden-applications")
+    def golden_applications_list(request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            items = repo.list_payloads("golden_applications")
+        return {"applications": sorted(items, key=lambda item: str(item.get("name") or "").casefold())}
+
+    @app.post("/api/golden-applications")
+    def golden_application_create(request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        name = str(payload.get("name") or "").strip()
+        comment = str(payload.get("comment") or "").strip()
+        if not name or len(name) > 200:
+            raise HTTPException(status_code=400, detail="Application name is required and limited to 200 characters")
+        if len(comment) > 4000:
+            raise HTTPException(status_code=400, detail="Application comment is limited to 4000 characters")
+        def key(value: str) -> str:
+            return "".join(char for char in unicodedata.normalize("NFKD", value).casefold() if char.isalnum())
+        candidate = key(name)
+        with Repository(db_path) as repo:
+            existing = repo.list_payloads("golden_applications")
+            exact = next((item for item in existing if key(str(item.get("name") or "")) == candidate), None)
+            if exact:
+                raise HTTPException(status_code=409, detail="An application with this name already exists")
+            similar = [
+                {"name": item.get("name"), "comment": item.get("comment"), "score": round(difflib.SequenceMatcher(None, candidate, key(str(item.get("name") or ""))).ratio(), 2)}
+                for item in existing
+                if candidate and (candidate in key(str(item.get("name") or "")) or key(str(item.get("name") or "")) in candidate or difflib.SequenceMatcher(None, candidate, key(str(item.get("name") or ""))).ratio() >= 0.62)
+            ]
+            similar.sort(key=lambda item: item["score"], reverse=True)
+            if similar and not bool(payload.get("confirm")):
+                return {"created": False, "requires_confirmation": True, "similar": similar[:5]}
+            identifier = "app_" + hashlib.sha256((candidate or name).encode("utf-8")).hexdigest()[:24]
+            record = {"id": identifier, "name": name, "comment": comment, "created_by": principal.subject, "active": True}
+            repo.upsert("golden_applications", record)
+            record_audit(repo, request, "golden_application.created", "golden_application", identifier, {"name": name})
+            return {"created": True, "application": record}
 
     @app.get("/api/capabilities")
     def capabilities_list(request: Request):

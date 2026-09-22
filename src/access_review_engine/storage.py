@@ -54,6 +54,7 @@ TABLES = {
     "golden_assignment_annotations",
     "capabilities",
     "permission_capability_mappings",
+    "golden_applications",
 }
 
 
