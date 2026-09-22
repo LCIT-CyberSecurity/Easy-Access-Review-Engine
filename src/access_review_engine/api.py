@@ -1765,6 +1765,34 @@ def create_app(db_path: str | None = None):
             record_audit(repo, request, "campaign.created", "campaign", campaign.id, {"snapshot_id": campaign.snapshot_id})
         return asdict(campaign)
 
+    @app.put("/api/campaigns/{campaign_id}")
+    def campaign_update(campaign_id: str, request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            raw = repo.get_payload("campaigns", campaign_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            current = hydrate_campaign(raw)
+            if current.status != "draft":
+                raise HTTPException(status_code=409, detail="Only draft campaigns can be edited")
+            merged = asdict(current)
+            merged.update(payload)
+            try:
+                campaign = _campaign_payload(merged, draft_id=campaign_id, pilot=principal.username)
+                campaign.created_at = current.created_at
+                campaign.status = current.status
+                snapshot = _snapshot(repo, campaign.snapshot_id)
+                golden = _golden_version(repo, campaign.golden_source_version_id)
+                preparation = prepare_campaign_review(campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot))
+                _require_campaign_access(principal, campaign, repo, preparation)
+            except HTTPException:
+                raise
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            repo.upsert("campaigns", campaign)
+            record_audit(repo, request, "campaign.updated", "campaign", campaign.id, {"snapshot_id": campaign.snapshot_id})
+            return asdict(campaign)
+
     @app.post("/api/campaigns/{campaign_id}/open")
     def campaign_open(campaign_id: str, request: Request, payload: dict[str, Any] | None = Body(default=None)):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))

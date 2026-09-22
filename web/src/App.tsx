@@ -497,6 +497,7 @@ function Shell({ principal }: { principal: Principal }) {
             <Route path="/golden" element={<Golden />} />
             <Route path="/campaigns" element={<Campaigns />} />
             <Route path="/campaigns/new" element={<CampaignNew principal={principal} />} />
+            <Route path="/campaigns/:id/edit" element={<CampaignNew principal={principal} />} />
             <Route path="/campaigns/:id" element={<CampaignDetail />} />
             <Route path="/findings" element={<List path="findings" title="Findings" />} />
             <Route path="/actions" element={<List path="remediation-actions" title="Actions" />} />
@@ -2223,7 +2224,9 @@ function Campaigns() {
   );
 }
 function CampaignNew({ principal }: { principal: Principal }) {
-  const snap = useQuery({ queryKey: ["snapshots"], queryFn: () => getPage("snapshots", { limit: 100 }) }),
+  const { id: draftId } = useParams(),
+    campaignQuery = useQuery({ queryKey: ["campaign-edit", draftId], queryFn: () => getJson("campaigns/" + s(draftId)), enabled: Boolean(draftId) }),
+    snap = useQuery({ queryKey: ["snapshots"], queryFn: () => getPage("snapshots", { limit: 100 }) }),
     pilotQuery = useQuery({ queryKey: ["campaign-pilots"], queryFn: () => getJson("campaign-pilots") }),
     gold = useQuery({
       queryKey: ["golden-versions"],
@@ -2274,13 +2277,15 @@ function CampaignNew({ principal }: { principal: Principal }) {
           },
           allow_unresolved_reviewers: allow,
         };
-        const d = await postJson("campaigns", payload);
-        if (open && d.id)
+        const d = draftId
+          ? await putJson("campaigns/" + s(draftId), payload)
+          : await postJson("campaigns", payload);
+        if (open && !draftId && d.id)
           await postJson("campaigns/" + s(d.id) + "/open", { allow_unresolved_reviewers: allow });
         return d;
       },
       onSuccess: (d) => {
-        toast("ok", "Campaign created");
+        toast("ok", draftId ? "Campaign draft updated" : "Campaign created");
         if (d.id) window.location.href = "/campaigns/" + s(d.id);
       },
       onError: (e) => toast("error", s(e, "Unable to create the campaign")),
@@ -2294,14 +2299,29 @@ function CampaignNew({ principal }: { principal: Principal }) {
     scopeType = s(form.scope_type, "all"),
     campaignScopeValid = validProviderScope(scopeType, vals(form.providers)) && (scopeType !== "accesses" || selectedAccesses.length > 0);
   useEffect(() => {
-    if (!form.snapshot_id && snapshots.length)
+    const campaign = campaignQuery.data?.campaign as Row | undefined;
+    if (campaign && s(form.name, "") === "") {
+      const scope = (campaign.scope ?? {}) as Row;
+      const scopeType = s(scope.type, "all");
+      setForm({
+        name: s(campaign.name, ""),
+        pilot: s(campaign.pilot, principal.username),
+        snapshot_id: s(campaign.snapshot_id, ""),
+        golden_source_version_id: s(campaign.golden_source_version_id, ""),
+        due_at: s(campaign.due_at, ""),
+        scope_type: scopeType,
+        providers: vals(scope.values),
+        accesses: arr(scope.values),
+      });
+    }
+    if (!draftId && !form.snapshot_id && snapshots.length)
       setForm((x) => ({ ...x, snapshot_id: s(snapshots[snapshots.length - 1].id) }));
     if (!form.golden_source_version_id && versions.length)
       setForm((x) => ({ ...x, golden_source_version_id: s(versions[versions.length - 1].id) }));
   }, [snapshots.length, versions.length]);
   return (
     <>
-      <Head title="New campaign">
+      <Head title={draftId ? "Edit draft campaign" : "New campaign"}>
         <NavLink className="button subtle" to="/campaigns">
           Cancel
         </NavLink>
@@ -2438,7 +2458,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
               disabled={!s(form.name, "") || !s(form.snapshot_id, "") || !campaignScopeValid || create.isPending}
               onClick={() => create.mutate(false)}
             >
-              Save as draft
+              {draftId ? "Save draft changes" : "Save as draft"}
             </button>
             <button className="button primary" type="submit" disabled={!campaignScopeValid || previewM.isPending}>
               Preview campaign
@@ -2549,6 +2569,7 @@ function CampaignDetail() {
       <Head title={s(c.name)}>
         <div className="button-row">
           <NavLink to="/campaigns">Back</NavLink>
+          {status === "draft" ? <NavLink className="button subtle" to={"/campaigns/" + id + "/edit"}>Edit draft</NavLink> : null}
           {ctas.map((action) => {
             const target = campaignActionTarget(action, id),
               labels: Record<string, string> = {
