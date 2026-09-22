@@ -3338,7 +3338,7 @@ function Golden() {
                     return reference === owner || s(identity.identifier, s(identity.id)) === owner;
                   });
                   const ownerDisplay = ownerIdentity
-                    ? `${s(ownerIdentity.provider)}/${s(ownerIdentity.identifier, s(ownerIdentity.id))} · ${s(ownerIdentity.display_name, s(ownerIdentity.identifier, s(ownerIdentity.id)))}`
+                    ? `${s(ownerIdentity.provider)}/${s(ownerIdentity.display_name, s(ownerIdentity.identifier, s(ownerIdentity.id)))}`
                     : owner;
                   const beginEdit = () => setEditingAccess({
                     key,
