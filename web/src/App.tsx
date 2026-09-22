@@ -3304,6 +3304,8 @@ function Golden() {
                 rows={expectedAccesses.map((r) => {
                   const key = `${s(r.access_provider)}:${s(r.access_name)}`;
                   const editing = editingAccess?.key === key;
+                  const applicationOptions = vals(accessesQuery.data?.application_options);
+                  const capabilityOptions = arr(functionalModelQuery.data?.capabilities);
                   const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "";
                   const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
@@ -3318,8 +3320,11 @@ function Golden() {
                     access_comment: s(r.access_comment, ""),
                     original_comment: s(r.access_comment, ""),
                   });
-                  const cell = (field: string, value: string, placeholder: string) => editing
-                    ? <input value={s(editingAccess?.[field], "")} placeholder={placeholder} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })} />
+                  const selectCell = (field: string, value: string, options: string[], placeholder: string) => editing
+                    ? <select value={s(editingAccess?.[field], "")} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })}>
+                        <option value="">{placeholder}</option>
+                        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+                      </select>
                     : <button className="link-button" onClick={beginEdit}>{value || "—"}</button>;
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
@@ -3332,8 +3337,8 @@ function Golden() {
                         target: r.access_target,
                       })}
                     </Sub>,
-                    cell("application", application || "Unknown", "Application"),
-                    cell("business_permission", businessPermission || "Not provided", "Permission"),
+                    selectCell("application", application || "Unknown", applicationOptions, "Select application"),
+                    selectCell("business_permission", businessPermission || "Not provided", capabilityOptions.map((option) => s(option.id, s(option.label))), "Select permission"),
                     editing ? (
                       <input list="golden-access-owners" value={s(editingAccess?.owner, "")} placeholder="source/identifier" onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} />
                     ) : <button className="link-button" onClick={beginEdit}>{owner || "—"}</button>,
