@@ -3331,6 +3331,13 @@ function Golden() {
                   const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "";
                   const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
+                  const ownerIdentity = arr(ownerOptions.data?.items).find((identity) => {
+                    const reference = `${s(identity.provider)}/${s(identity.identifier, s(identity.id))}`;
+                    return reference === owner || s(identity.identifier, s(identity.id)) === owner;
+                  });
+                  const ownerDisplay = ownerIdentity
+                    ? `${s(ownerIdentity.provider)}/${s(ownerIdentity.identifier, s(ownerIdentity.id))} · ${s(ownerIdentity.display_name, s(ownerIdentity.identifier, s(ownerIdentity.id)))}`
+                    : owner;
                   const beginEdit = () => setEditingAccess({
                     key,
                     access_id: r.access_id,
@@ -3373,7 +3380,7 @@ function Golden() {
                     selectCell("business_permission", businessPermission || "Not provided", capabilityOptions.map((option) => s(option.id, s(option.label))), "Select permission"),
                     editing ? (
                       <input list="golden-access-owners" value={s(editingAccess?.owner, "")} placeholder="source/identifier" onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} />
-                    ) : <button className="link-button" onClick={beginEdit}>{owner || "—"}</button>,
+                    ) : <button className="link-button" onClick={beginEdit}>{ownerDisplay || "—"}</button>,
                     s(r.access_provider),
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.expected_identities, "0")} people
