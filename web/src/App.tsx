@@ -1618,6 +1618,11 @@ function AccessDetail({ access }: { access: Row }) {
       queryKey: ["holders", provider, name],
       queryFn: () => getJson(`accesses/${encodeURIComponent(provider)}/${encodeURIComponent(name)}/holders`),
     }),
+    ownerIdentities = useQuery({
+      queryKey: ["access-owner-identities", provider],
+      queryFn: () => getPage("identities", { provider, limit: 500 }),
+      retry: false,
+    }),
     saveContext = useMutation({
       mutationFn: () => putJson(`accesses/${encodeURIComponent(accessId)}/enrichment`, manual),
       onSuccess: async () => {
@@ -1631,7 +1636,13 @@ function AccessDetail({ access }: { access: Row }) {
       onError: (error) => toast("error", s(error, "Unable to save access information")),
     });
   const direct = arr(q.data?.holders),
-    effective = arr(q.data?.effective_holders);
+    effective = arr(q.data?.effective_holders),
+    ownerReference = contextValue(access.business_context, "owner", "manual") || contextValue(access.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
+    ownerParts = ownerReference.split("/", 2),
+    ownerProvider = ownerParts.length === 2 ? ownerParts[0] : s((access.access_owner as Row | undefined)?.provider, provider),
+    ownerId = ownerParts.length === 2 ? ownerParts[1] : ownerReference,
+    ownerIdentity = arr(ownerIdentities.data?.items).find((identity) => s(identity.identifier, s(identity.id)) === ownerId || s(identity.native_id) === ownerId),
+    ownerDisplay = ownerIdentity ? `${ownerProvider}/${s(ownerIdentity.display_name, ownerId)}` : ownerReference ? `${ownerProvider}/Unknown identity` : "—";
   return (
     <>
       <div className="tabs">
@@ -1667,7 +1678,7 @@ function AccessDetail({ access }: { access: Row }) {
           <h4>DETAILS</h4>
           <p>
             Owner:{" "}
-            {refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, "—")}
+            {ownerDisplay}
           </p>
           <h4>WHO HOLDS IT</h4>
           <p>
