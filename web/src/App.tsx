@@ -59,6 +59,7 @@ const s = (v: unknown, f = "—") =>
   vals = (v: unknown) => (Array.isArray(v) ? v.map(String) : []),
   pct = (v: unknown) => Math.max(0, Math.min(100, Number(v) || 0));
 const count = (rows: Row[], keep: (row: Row) => boolean) => rows.filter(keep).length;
+const DEFAULT_GOLDEN_CAPABILITIES = ["read", "write", "delete", "execute", "approve", "admin", "grant"];
 // The collectors store structured references; the WebUI must read them as a sentence.
 const refText = (v: unknown): string => {
   if (typeof v === "string") return v;
@@ -3353,6 +3354,9 @@ function Golden() {
                     ...vals(accessesQuery.data?.application_options),
                   ]));
                   const capabilityOptions = arr(functionalModelQuery.data?.capabilities);
+                  const permissionOptions = capabilityOptions.length
+                    ? capabilityOptions.map((option) => s(option.id, s(option.label)))
+                    : DEFAULT_GOLDEN_CAPABILITIES;
                   const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "";
                   const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
@@ -3396,7 +3400,7 @@ function Golden() {
                       })}
                     </Sub>,
                     applicationCell,
-                    selectCell("business_permission", businessPermission || "Not provided", capabilityOptions.map((option) => s(option.id, s(option.label))), "Select permission"),
+                    selectCell("business_permission", businessPermission || "Not provided", permissionOptions, "Select permission"),
                     editing ? (
                       <select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })}>
                         <option value="">Select owner</option>
@@ -3688,7 +3692,7 @@ function Golden() {
           </select></label>
           <label>Capability<select required value={s(functionalEditing.capability_id, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, capability_id: event.target.value })}>
             <option value="">Select a capability</option>
-            {arr(functionalModelQuery.data?.capabilities).map((capability) => <option key={s(capability.id)} value={s(capability.id)}>{s(capability.label, s(capability.id))}</option>)}
+            {(arr(functionalModelQuery.data?.capabilities).length ? arr(functionalModelQuery.data?.capabilities).map((capability) => ({ id: s(capability.id), label: s(capability.label, s(capability.id)) })) : DEFAULT_GOLDEN_CAPABILITIES.map((id) => ({ id, label: id }))).map((capability) => <option key={capability.id} value={capability.id}>{capability.label}</option>)}
           </select></label>
           <label>Target service<input value={s(functionalEditing.service_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, service_identifier: event.target.value })} /></label>
           <label>Target resource<input value={s(functionalEditing.resource_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, resource_identifier: event.target.value })} /></label>
