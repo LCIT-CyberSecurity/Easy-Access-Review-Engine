@@ -3301,6 +3301,12 @@ function Golden() {
               Authentication policy
             </button>
             <button
+              className={tab === "catalog" ? "text-button active" : "text-button"}
+              onClick={() => setTab("catalog")}
+            >
+              Application catalogue
+            </button>
+            <button
               className={tab === "history" ? "text-button active" : "text-button"}
               onClick={() => setTab("history")}
             >
@@ -3627,6 +3633,30 @@ function Golden() {
                 ])}
               />
             </>
+          )}
+          {tab === "catalog" && (
+            <section className="panel">
+              <div className="panel-title">
+                <div>
+                  <h2>Application catalogue</h2>
+                  <p className="muted">Shared business applications used to enrich Golden access rights. Historical usage protects applications from deletion.</p>
+                </div>
+                <button className="button primary" onClick={() => setNewApplication({ name: "", comment: "", similar: [] })}>
+                  + Add application
+                </button>
+              </div>
+              {applicationCatalog.isError ? <p className="form-error">{s(applicationCatalog.error, "Unable to load the application catalogue")}</p> : null}
+              <Table
+                cols={["Application", "Comment", "Status", "Golden usage"]}
+                rows={arr(applicationCatalog.data?.applications).map((application) => [
+                  <strong>{s(application.name)}</strong>,
+                  s(application.comment, ""),
+                  application.active === false ? <Status v="inactive" /> : <Status v="active" />,
+                  s(application.usage_count, "0"),
+                ])}
+              />
+              {!arr(applicationCatalog.data?.applications).length && !applicationCatalog.isLoading ? <p className="muted">No applications in the catalogue yet.</p> : null}
+            </section>
           )}
           {tab === "history" && (
             <Table
