@@ -66,6 +66,22 @@ const refText = (v: unknown): string => {
   return row ? s(row.display_name, s(row.identifier, s(row.name, ""))) : "";
 };
 const permissionText = (v: unknown): string => refText(v);
+const ownerDisplayLabel = (value: unknown, identities: Row[], fallbackProvider = ""): string => {
+  const raw = typeof value === "string" ? value.trim() : refText(value).trim();
+  if (!raw) return "";
+  const parts = raw.split("/");
+  const provider = parts.length > 1 ? parts.shift()!.trim() : fallbackProvider;
+  const reference = parts.join("/").trim() || raw;
+  const normalize = (candidate: string) => candidate.replace(/^entry:/i, "").trim().toLowerCase();
+  const referenceForms = new Set([reference, raw, normalize(reference), normalize(raw)].filter(Boolean).map((item) => item.toLowerCase()));
+  const identity = identities.find((row) => {
+    if (provider && s(row.provider, "") !== provider) return false;
+    return [s(row.identifier, ""), s(row.native_id, ""), s(row.id, "")]
+      .filter(Boolean)
+      .some((candidate) => referenceForms.has(candidate.toLowerCase()) || referenceForms.has(normalize(candidate)));
+  });
+  return identity ? `${s(identity.provider, provider)}/${s(identity.display_name, s(identity.identifier, s(identity.id)))}` : `${provider}/Unknown identity`;
+};
 const providerLabel = (provider: Row): string => {
   const name = s(provider.name),
     display = s(provider.display_name, name);
@@ -1638,11 +1654,7 @@ function AccessDetail({ access }: { access: Row }) {
   const direct = arr(q.data?.holders),
     effective = arr(q.data?.effective_holders),
     ownerReference = contextValue(access.business_context, "owner", "manual") || contextValue(access.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
-    ownerParts = ownerReference.split("/", 2),
-    ownerProvider = ownerParts.length === 2 ? ownerParts[0] : s((access.access_owner as Row | undefined)?.provider, provider),
-    ownerId = ownerParts.length === 2 ? ownerParts[1] : ownerReference,
-    ownerIdentity = arr(ownerIdentities.data?.items).find((identity) => s(identity.identifier, s(identity.id)) === ownerId || s(identity.native_id) === ownerId),
-    ownerDisplay = ownerIdentity ? `${ownerProvider}/${s(ownerIdentity.display_name, ownerId)}` : ownerReference ? `${ownerProvider}/Unknown identity` : "—";
+    ownerDisplay = ownerReference ? ownerDisplayLabel(ownerReference, arr(ownerIdentities.data?.items), s((access.access_owner as Row | undefined)?.provider, provider)) : "—";
   return (
     <>
       <div className="tabs">
@@ -3344,18 +3356,7 @@ function Golden() {
                   const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "";
                   const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
-                  const ownerParts = owner.split("/", 2);
-                  const ownerProvider = ownerParts.length === 2 ? ownerParts[0] : s(r.access_provider);
-                  const ownerReference = ownerParts.length === 2 ? ownerParts[1] : owner;
-                  const ownerIdentity = arr(ownerOptions.data?.items).find((identity) => {
-                    const identifier = s(identity.identifier, s(identity.id));
-                    const nativeId = s(identity.native_id);
-                    return s(identity.provider) === ownerProvider
-                      && (identifier === ownerReference || nativeId === ownerReference || identifier === owner || nativeId === owner);
-                  });
-                  const ownerDisplay = ownerIdentity
-                    ? `${s(ownerIdentity.provider)}/${s(ownerIdentity.display_name, s(ownerIdentity.identifier, s(ownerIdentity.id)))}`
-                    : owner ? `${ownerProvider}/Unknown identity` : "";
+                  const ownerDisplay = owner ? ownerDisplayLabel(owner, arr(ownerOptions.data?.items), s(r.access_provider)) : "";
                   const beginEdit = () => setEditingAccess({
                     key,
                     access_id: r.access_id,
@@ -3397,7 +3398,14 @@ function Golden() {
                     applicationCell,
                     selectCell("business_permission", businessPermission || "Not provided", capabilityOptions.map((option) => s(option.id, s(option.label))), "Select permission"),
                     editing ? (
-                      <input list="golden-access-owners" value={s(editingAccess?.owner, "")} placeholder="source/identifier" onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} />
+                      <select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })}>
+                        <option value="">Select owner</option>
+                        {arr(ownerOptions.data?.items).map((identity) => {
+                          const identifier = s(identity.identifier, s(identity.id));
+                          const value = `${s(identity.provider)}/${identifier}`;
+                          return <option key={value} value={value}>{s(identity.provider)}/{s(identity.display_name, identifier)}</option>;
+                        })}
+                      </select>
                     ) : <button className="link-button" onClick={beginEdit}>{ownerDisplay || "—"}</button>,
                     s(r.access_provider),
                     <button className="link-button" onClick={() => setHolders(r)}>
