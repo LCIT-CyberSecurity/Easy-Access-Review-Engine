@@ -2224,6 +2224,7 @@ function Campaigns() {
 }
 function CampaignNew({ principal }: { principal: Principal }) {
   const snap = useQuery({ queryKey: ["snapshots"], queryFn: () => getPage("snapshots", { limit: 100 }) }),
+    pilotQuery = useQuery({ queryKey: ["campaign-pilots"], queryFn: () => getJson("campaign-pilots") }),
     gold = useQuery({
       queryKey: ["golden-versions"],
       queryFn: () => getPage("golden-source-versions", { limit: 100 }),
@@ -2231,6 +2232,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
     providerQuery = useQuery({ queryKey: ["campaign-providers"], queryFn: () => getPage("providers", { limit: 500 }) }),
     [form, setForm] = useState<Row>({
       name: "",
+      pilot: principal.username,
       snapshot_id: "",
       golden_source_version_id: "",
       due_at: "",
@@ -2284,6 +2286,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
       onError: (e) => toast("error", s(e, "Unable to create the campaign")),
     }),
     snapshots = arr(snap.data?.items),
+    pilots = arr(pilotQuery.data?.items),
     versions = arr(gold.data?.items),
     providers = arr(providerQuery.data?.items),
     accessOptions = arr(accessQuery.data?.items),
@@ -2320,6 +2323,14 @@ function CampaignNew({ principal }: { principal: Principal }) {
               value={s(form.name, "")}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
+          </label>
+          <label>
+            Campaign pilot
+            <select required value={s(form.pilot, principal.username)} onChange={(e) => setForm({ ...form, pilot: e.target.value })}>
+              <option value="">Select an ADMIN or OPERATOR</option>
+              {pilots.map((pilot) => <option key={s(pilot.username)} value={s(pilot.username)}>{s(pilot.display_name, s(pilot.username))} · {s(pilot.role)}</option>)}
+            </select>
+            <span className="field-note">The pilot manages the campaign. Group or role owners remain the reviewers.</span>
           </label>
           <label>
             <span className="step-label">1</span> Scope

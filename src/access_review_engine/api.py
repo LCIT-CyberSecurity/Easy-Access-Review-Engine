@@ -451,6 +451,20 @@ def create_app(db_path: str | None = None):
             providers = _authorized_domain_options(repo)
         return {"users": users, "identity_providers": list_idps(system_conn), "providers": providers, "roles": sorted(ROLES), "external_user_api_enabled": external_user_api_enabled(system_conn)}
 
+    @app.get("/api/campaign-pilots")
+    def campaign_pilots(request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        items = [
+            {
+                "username": str(user.get("username")),
+                "display_name": str(user.get("display_name") or user.get("username")),
+                "role": str(user.get("role")),
+            }
+            for user in list_users(system_conn)
+            if user.get("enabled") and user.get("role") in {"ADMIN", "OPERATOR"}
+        ]
+        return {"items": sorted(items, key=lambda item: str(item["display_name"]).casefold())}
+
     @app.post("/api/system/users/{username}/reassign-reviews")
     def system_user_reassign_reviews(username: str, request: Request, payload: dict[str, Any] = Body(...)):
         """Hand the pending reviews of one person to another, so a leaver cannot block a campaign."""
@@ -1565,7 +1579,7 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=404, detail="Golden Source version not found")
         return hydrate_golden_version(payload)
 
-    def _campaign_payload(payload: dict[str, Any], *, draft_id: str | None = None):
+    def _campaign_payload(payload: dict[str, Any], *, draft_id: str | None = None, pilot: str | None = None):
         from access_review_engine.domain import Campaign, OwnerRef
         def owner(value: Any):
             if value is None:
@@ -1584,6 +1598,11 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         allowed["default_reviewer"] = owner(payload.get("default_reviewer"))
         allowed["manager"] = owner(payload.get("manager"))
+        pilot_username = str(payload.get("pilot") or pilot or "").strip().lower()
+        pilot_user = _stored_user(pilot_username) if pilot_username else None
+        if pilot_user is None or pilot_user.get("role") not in {"ADMIN", "OPERATOR"} or not pilot_user.get("enabled", True):
+            raise HTTPException(status_code=400, detail="Campaign pilot must be an enabled ADMIN or OPERATOR account")
+        allowed["pilot"] = pilot_username
         if draft_id:
             allowed["id"] = draft_id
         return Campaign(**allowed)
@@ -1715,7 +1734,7 @@ def create_app(db_path: str | None = None):
     @app.post("/api/campaigns/preview")
     def campaign_preview(request: Request, payload: dict[str, Any] = Body(...)):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
-        campaign = _campaign_payload(payload)
+        campaign = _campaign_payload(payload, pilot=principal.username)
         with Repository(db_path) as repo:
             snapshot = _snapshot(repo, campaign.snapshot_id)
             golden = _golden_version(repo, campaign.golden_source_version_id)
@@ -1731,7 +1750,7 @@ def create_app(db_path: str | None = None):
     @app.post("/api/campaigns")
     def campaign_create(request: Request, payload: dict[str, Any] = Body(...)):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
-        campaign = _campaign_payload(payload)
+        campaign = _campaign_payload(payload, pilot=principal.username)
         with Repository(db_path) as repo:
             snapshot = _snapshot(repo, campaign.snapshot_id)
             golden = _golden_version(repo, campaign.golden_source_version_id)
@@ -1754,6 +1773,11 @@ def create_app(db_path: str | None = None):
             if raw is None:
                 raise HTTPException(status_code=404, detail="Campaign not found")
             campaign = hydrate_campaign(raw)
+            if not campaign.pilot:
+                campaign.pilot = principal.username
+            pilot_user = _stored_user(campaign.pilot)
+            if pilot_user is None or pilot_user.get("role") not in {"ADMIN", "OPERATOR"} or not pilot_user.get("enabled", True):
+                raise HTTPException(status_code=409, detail="Campaign pilot must be an enabled ADMIN or OPERATOR account")
             if payload and "allow_unresolved_reviewers" in payload:
                 campaign.allow_unresolved_reviewers = bool(payload["allow_unresolved_reviewers"])
             snapshot = _snapshot(repo, campaign.snapshot_id)

@@ -612,6 +612,7 @@ class Campaign:
     scope: JsonDict = field(default_factory=lambda: {"type": "all"})
     default_reviewer: OwnerRef | None = None
     manager: OwnerRef | None = None
+    pilot: str | None = None
     allow_unresolved_reviewers: bool = False
     id: str = field(default_factory=new_id)
     created_at: str = field(default_factory=now_utc)
