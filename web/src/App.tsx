@@ -3333,13 +3333,18 @@ function Golden() {
                   const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "";
                   const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
+                  const ownerParts = owner.split("/", 2);
+                  const ownerProvider = ownerParts.length === 2 ? ownerParts[0] : s(r.access_provider);
+                  const ownerReference = ownerParts.length === 2 ? ownerParts[1] : owner;
                   const ownerIdentity = arr(ownerOptions.data?.items).find((identity) => {
-                    const reference = `${s(identity.provider)}/${s(identity.identifier, s(identity.id))}`;
-                    return reference === owner || s(identity.identifier, s(identity.id)) === owner;
+                    const identifier = s(identity.identifier, s(identity.id));
+                    const nativeId = s(identity.native_id);
+                    return s(identity.provider) === ownerProvider
+                      && (identifier === ownerReference || nativeId === ownerReference || identifier === owner || nativeId === owner);
                   });
                   const ownerDisplay = ownerIdentity
                     ? `${s(ownerIdentity.provider)}/${s(ownerIdentity.display_name, s(ownerIdentity.identifier, s(ownerIdentity.id)))}`
-                    : owner;
+                    : owner ? `${ownerProvider}/Unknown identity` : "";
                   const beginEdit = () => setEditingAccess({
                     key,
                     access_id: r.access_id,
