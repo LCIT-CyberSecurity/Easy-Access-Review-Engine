@@ -329,7 +329,7 @@ tbody tr { transition:background-color .12s ease; }
 .table-wrap tr.clickable:focus-within { background:#f4f7ff; }
 
 /* Company branding: the product name leads, LCIT signs the rail. */
-.brand-logo { width:48px; height:38px; flex:none; object-fit:contain; }
+.brand-logo { width:52px; height:41px; flex:none; object-fit:contain; }
 .brand > div { display:grid; }
 .brand span { font-size:15px; font-weight:700; letter-spacing:-.01em; line-height:18px; }
 .brand small { color:var(--text-muted); font-size:11px; font-weight:500; letter-spacing:.01em; }
@@ -388,7 +388,7 @@ tbody tr { transition:background-color .12s ease; }
 :root[data-theme="violet"] .sidebar { background:#f7f8fd; border-right-color:#e0e4ef; overflow:hidden; }
 :root[data-theme="violet"] .sidebar::before { content:""; position:absolute; width:420px; height:420px; right:-262px; top:-240px; border:1px solid rgba(118,87,169,.16); border-radius:50%; box-shadow:0 0 0 70px rgba(118,87,169,.035), 0 0 0 140px rgba(118,87,169,.022); pointer-events:none; }
 :root[data-theme="violet"] .brand, :root[data-theme="violet"] .sidebar nav, :root[data-theme="violet"] .sidebar-footer { position:relative; z-index:1; }
-:root[data-theme="violet"] .brand-logo { width:52px; height:42px; padding:4px; border:1px solid #e2dcf0; border-radius:12px; background:#f3effb; }
+:root[data-theme="violet"] .brand-logo { width:56px; height:45px; padding:4px; border:1px solid #e2dcf0; border-radius:12px; background:#f3effb; }
 :root[data-theme="violet"] .brand span { color:#152339; font-size:16px; font-weight:700; letter-spacing:.09em; }
 :root[data-theme="violet"] .brand small { margin-top:2px; color:#7a869b; }
 :root[data-theme="violet"] .nav-heading { color:#8b96a9; font-weight:750; letter-spacing:.14em; }
@@ -486,7 +486,7 @@ tbody tr { transition:background-color .12s ease; }
 :root[data-theme="azure"] .sidebar { background:#f4f8fe; border-right-color:#dde7f6; overflow:hidden; }
 :root[data-theme="azure"] .sidebar::before { content:""; position:absolute; width:420px; height:420px; right:-262px; top:-240px; border:1px solid rgba(47,95,187,.14); border-radius:50%; box-shadow:0 0 0 70px rgba(47,95,187,.03), 0 0 0 140px rgba(47,95,187,.02); pointer-events:none; }
 :root[data-theme="azure"] .brand, :root[data-theme="azure"] .sidebar nav, :root[data-theme="azure"] .sidebar-footer { position:relative; z-index:1; }
-:root[data-theme="azure"] .brand-logo { width:52px; height:42px; padding:4px; border:1px solid #d5e1f2; border-radius:12px; background:#e8f0fc; }
+:root[data-theme="azure"] .brand-logo { width:56px; height:45px; padding:4px; border:1px solid #d5e1f2; border-radius:12px; background:#e8f0fc; }
 :root[data-theme="azure"] .nav-link.active { color:#23478f; background:#e2ecfb; }
 :root[data-theme="azure"] .nav-link.active::before { background:#2f5fbb; }
 :root[data-theme="azure"] .topbar { background:rgba(247,250,254,.78); border-bottom-color:#dde7f6; }
@@ -532,7 +532,7 @@ tbody tr { transition:background-color .12s ease; }
 /* Chrome: hairlines, tighter rhythm, no blur. */
 :root[data-theme="studio"] .sidebar { width:232px; padding:14px 10px 12px; background:#fff; border-right:1px solid var(--border); }
 :root[data-theme="studio"] .brand { gap:9px; padding:6px 8px 20px; font-size:14px; }
-:root[data-theme="studio"] .brand-logo { width:38px; height:32px; }
+:root[data-theme="studio"] .brand-logo { width:42px; height:35px; }
 :root[data-theme="studio"] .brand span { font-size:14px; letter-spacing:-.02em; }
 :root[data-theme="studio"] .brand small { font-size:11px; }
 :root[data-theme="studio"] .nav-heading { padding:12px 9px 5px; color:#9a9aa8; font-size:10px; font-weight:600; letter-spacing:.07em; }
