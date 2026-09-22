@@ -12,6 +12,23 @@ services:
       - ./seed:/opt/crashtests-crm/seed:ro
     command: ["/bin/sh", "-c", "rm -f /srv/crm/.ready && python3 /opt/crashtests-crm/seed/generate_data.py --root /srv/crm --policy /opt/crashtests-crm/policy && touch /srv/crm/.ready && sleep infinity"]
 
+  crashtests-openldap:
+    build:
+      context: ../CrashTests-OpenLDAP
+      dockerfile: Dockerfile
+    image: eare-crashtests-crm-openldap:debian13-slim
+    container_name: eare-crashtests-crm-openldap
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://127.0.0.1:389 -b dc=example,dc=com -s base -o nettimeout=2 '(objectClass=*)' dn >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      start_period: 5s
+      retries: 15
+
   crashtests-api:
     build:
       context: ../../..
@@ -27,6 +44,9 @@ services:
       EARE_COOKIE_SECURE: "0"
     volumes:
       - crashtests-crm-api-data:/data
+    depends_on:
+      crashtests-openldap:
+        condition: service_healthy
     networks:
       default:
         # web/nginx.conf proxies /api to the fixed upstream name `eare-api`.

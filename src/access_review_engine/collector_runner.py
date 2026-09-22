@@ -52,6 +52,7 @@ def build_command(config: dict[str, object], output: Path, root: str | Path | No
         if extra_attributes:
             env["EXTRA_GROUP_ATTRIBUTES"] = ",".join(extra_attributes)
         if collection.get("allow_partial"): env["ALLOW_PARTIAL"] = "1"
+        if collection.get("allow_anonymous") is True: env["ALLOW_ANONYMOUS"] = "1"
         if config.get("_check_only"): env["CHECK_ONLY"] = "1"
         return ["bash", str(base / "exporters/openldap/export-openldap.sh"), str(output)], env
     raise ValueError(f"Unsupported connector type: {kind}")
