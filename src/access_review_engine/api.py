@@ -1909,12 +1909,80 @@ def create_app(db_path: str | None = None):
             events = repo.list_payloads("audit_events")
         return {"items": events[bounded_offset : bounded_offset + bounded_limit], "total": len(events), "limit": bounded_limit, "offset": bounded_offset}
 
+    def _golden_application_usage(repo: Repository, application_name: str) -> list[dict[str, Any]]:
+        def key(value: Any) -> str:
+            return str(value or "").strip().casefold()
+
+        wanted = key(application_name)
+        accesses = {str(row.get("id")): row for row in repo.list_payloads("accesses")}
+        enrichments = {str(row.get("access_id")): row for row in repo.list_payloads("access_enrichments")}
+        sources = {str(row.get("id")): row for row in repo.list_payloads("golden_sources")}
+        usages: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for version in repo.list_payloads("golden_source_versions"):
+            access_keys = {(str(item.get("access_provider")), str(item.get("access_name"))) for item in version.get("assignments", [])}
+            source = sources.get(str(version.get("golden_source_id")), {})
+            source_name = str(source.get("display_name") or source.get("name") or version.get("golden_source_id") or "Golden Source")
+            for provider, access_name in access_keys:
+                access = next((row for row in accesses.values() if str(row.get("provider")) == provider and str(row.get("name")) == access_name), None)
+                if not access:
+                    continue
+                enrichment = enrichments.get(str(access.get("id"))) or {}
+                context = access_context_for_payload(repo, access).get("fields", {})
+                candidates = [enrichment.get("application")]
+                source_application = context.get("application", {}).get("source") if isinstance(context.get("application"), dict) else None
+                manual_application = context.get("application", {}).get("manual") if isinstance(context.get("application"), dict) else None
+                candidates.extend([
+                    source_application.get("value") if isinstance(source_application, dict) else None,
+                    manual_application.get("value") if isinstance(manual_application, dict) else None,
+                ])
+                if not any(key(candidate) == wanted for candidate in candidates):
+                    continue
+                usage_key = (str(version.get("id")), f"{provider}/{access_name}")
+                if usage_key in seen:
+                    continue
+                seen.add(usage_key)
+                usages.append({"source": source_name, "version": version.get("version"), "access": f"{provider}/{access_name}"})
+        return usages
+
     @app.get("/api/golden-applications")
     def golden_applications_list(request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
-            items = repo.list_payloads("golden_applications")
+            items = []
+            for item in repo.list_payloads("golden_applications"):
+                usage = _golden_application_usage(repo, str(item.get("name") or ""))
+                items.append({**item, "usage_count": len(usage), "usage": usage})
         return {"applications": sorted(items, key=lambda item: str(item.get("name") or "").casefold())}
+
+    @app.put("/api/golden-applications/{application_id}")
+    def golden_application_update(application_id: str, request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN",))
+        comment = str(payload.get("comment") or "").strip()
+        if len(comment) > 4000:
+            raise HTTPException(status_code=400, detail="Application comment is limited to 4000 characters")
+        with Repository(db_path) as repo:
+            record = repo.get_payload("golden_applications", application_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail="Application not found")
+            record = {**record, "comment": comment, "active": bool(payload.get("active", record.get("active", True)))}
+            repo.upsert("golden_applications", record)
+            record_audit(repo, request, "golden_application.updated", "golden_application", application_id, {"name": record.get("name"), "active": record.get("active")})
+            return record
+
+    @app.delete("/api/golden-applications/{application_id}")
+    def golden_application_delete(application_id: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN",))
+        with Repository(db_path) as repo:
+            record = repo.get_payload("golden_applications", application_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail="Application not found")
+            usage = _golden_application_usage(repo, str(record.get("name") or ""))
+            if usage:
+                raise HTTPException(status_code=409, detail={"message": "Application is used by Golden Source versions and cannot be deleted", "usage": usage})
+            repo.delete_ids("golden_applications", {application_id})
+            record_audit(repo, request, "golden_application.deleted", "golden_application", application_id, {"name": record.get("name")})
+            return {"deleted": True, "id": application_id}
 
     @app.post("/api/golden-applications")
     def golden_application_create(request: Request, payload: dict[str, Any] = Body(...)):
