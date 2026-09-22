@@ -3306,6 +3306,7 @@ function Golden() {
                   "Source",
                   "Expected holders",
                   "Comment",
+                  "Actions",
                 ]}
                 fields={[
                   "access_display_name",
@@ -3316,6 +3317,7 @@ function Golden() {
                   "access_provider",
                   "expected_identities",
                   "access_comment",
+                  null,
                 ]}
                 sorting={sorting}
                 filtering={columns.filtering}
@@ -3392,6 +3394,21 @@ function Golden() {
                         <button className="link-button" onClick={() => setEditingAccess(null)}>Cancel</button>
                       </>
                     ) : <button className="link-button" onClick={beginEdit}>{s(r.access_comment, "Add comment")}</button>,
+                    <button
+                      className="link-button"
+                      onClick={() => setRemoving({
+                        access_display_name: r.access_display_name,
+                        access_name: r.access_name,
+                        access_provider: r.access_provider,
+                        remove_access: true,
+                        remove_assignments: arr(r.identities).map((identity) => ({
+                          access_provider: r.access_provider,
+                          access_name: r.access_name,
+                          identity_provider: identity.identity_provider,
+                          identity_identifier: identity.identity_identifier,
+                        })),
+                      })}
+                    >Remove</button>,
                   ];
                 })}
               />
@@ -3793,9 +3810,10 @@ function Golden() {
           intro={
             <>
               <p>
-                {s(removing.identity_display_name, s(removing.identity_identifier))} →{" "}
-                {s(removing.access_display_name, s(removing.access_name))} ({s(removing.access_provider)})
-                stops being expected. If the systems still grant it, the next review reports it as unexpected.
+                {removing.remove_access
+                  ? `${s(removing.access_display_name, s(removing.access_name))} and all its expected holders will be removed from the Golden Source.`
+                  : `${s(removing.identity_display_name, s(removing.identity_identifier))} → ${s(removing.access_display_name, s(removing.access_name))} (${s(removing.access_provider)}) stops being expected.`}
+                {removing.remove_access ? " If the systems still grant it, the next review reports it as unexpected." : " If the systems still grant it, the next review reports it as unexpected."}
               </p>
               <p className="muted">A new version is recorded. The current one stays in the history.</p>
             </>
@@ -3804,7 +3822,7 @@ function Golden() {
           danger
           pending={edit.isPending}
           cancel={() => setRemoving(null)}
-          confirm={() => edit.mutate({ remove: [removing] })}
+          confirm={() => edit.mutate({ remove: removing.remove_assignments ?? [removing] })}
         />
       )}
     </>
