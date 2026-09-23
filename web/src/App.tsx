@@ -1733,6 +1733,7 @@ function AccessDetail({ access }: { access: Row }) {
     });
   const direct = arr(q.data?.holders),
     effective = arr(q.data?.effective_holders),
+    holderLabel = (row: Row) => `${s(row.identity_provider, provider)} · ${s(row.identity_display_name, s(row.identity_identifier))}`,
     ownerReference = contextValue(access.business_context, "owner", "manual") || contextValue(access.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
     ownerDisplay = ownerReference ? ownerDisplayLabel(ownerReference, arr(ownerIdentities.data?.items), s((access.access_owner as Row | undefined)?.provider, provider)) : "—";
   return (
@@ -1785,11 +1786,11 @@ function AccessDetail({ access }: { access: Row }) {
             ...direct.map((r) => ({ ...r, mode: "Direct" })),
             ...effective.map((r) => ({ ...r, mode: "Effective" })),
           ].map((r: Row) => [
-            <strong>{s(r.identity_display_name, s(r.identity_identifier))}</strong>,
+            <strong>{holderLabel(r)}</strong>,
             s(r.mode),
             <AccessPath
               direct={r.mode === "Direct"}
-              identity={s(r.identity_display_name, s(r.identity_identifier))}
+              identity={holderLabel(r)}
               paths={arr(r.paths)}
             />,
           ])}

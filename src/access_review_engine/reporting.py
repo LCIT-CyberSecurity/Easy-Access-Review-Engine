@@ -25,13 +25,29 @@ def identity_names_from_snapshot(snapshot: Snapshot | None) -> dict[tuple[str, s
     return names
 
 
+def access_names_from_snapshot(snapshot: Snapshot | None) -> dict[tuple[str, str], str]:
+    """Resolve technical Access references to their business/group names."""
+    if snapshot is None:
+        return {}
+    names: dict[tuple[str, str], str] = {}
+    for access in snapshot.accesses:
+        control_object = access.control_object
+        label = access.display_name or (control_object.display_name if control_object else None) or access.name
+        for reference in (access.name, control_object.native_id if control_object else None, access.id):
+            if reference:
+                names[(access.provider, reference)] = label
+    return names
+
+
 def build_report_rows(
     review_items: list[ReviewItem],
     decisions: list[Decision],
     identity_names: dict[tuple[str, str], str] | None = None,
+    access_names: dict[tuple[str, str], str] | None = None,
 ) -> list[dict[str, object]]:
     latest = latest_decisions(decisions)
     identity_names = identity_names or {}
+    access_names = access_names or {}
     rows: list[dict[str, object]] = []
     for item in review_items:
         decision = latest.get(item.id)
@@ -56,7 +72,8 @@ def build_report_rows(
                 "control_object": item.control_object.get("display_name")
                 or item.control_object.get("identifier", ""),
                 "permission": item.permission.get("display_name") or item.permission.get("identifier", ""),
-                "access": item.access_name,
+                "access": access_names.get((item.access_provider, item.access_name)) or item.control_object.get("display_name") or item.control_object.get("identifier") or item.access_name,
+                "access_identifier": item.access_name,
                 "description": item.description or "",
                 "identity": identity_names.get((item.identity_provider, item.identity_identifier), item.identity_identifier),
                 "identity_identifier": item.identity_identifier,
@@ -86,10 +103,11 @@ def write_reports(
     golden_version: GoldenSourceVersion | None = None,
     authentication_posture: AuthenticationPosture | None = None,
     identity_names: dict[tuple[str, str], str] | None = None,
+    access_names: dict[tuple[str, str], str] | None = None,
 ) -> None:
     path = Path(output_dir)
     path.mkdir(parents=True, exist_ok=True)
-    rows = build_report_rows(review_items, decisions, identity_names)
+    rows = build_report_rows(review_items, decisions, identity_names, access_names)
     (path / "campaign-results.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
     with (path / "campaign-results.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]) if rows else ["campaign"])

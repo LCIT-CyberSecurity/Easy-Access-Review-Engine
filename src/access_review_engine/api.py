@@ -56,7 +56,7 @@ from access_review_engine.domain import (
     target_path,
 )
 from access_review_engine.golden_annotations import annotation_for_assignment, copy_assignment_annotations, normalize_assignment_comment, set_assignment_annotation
-from access_review_engine.reporting import build_report_rows, identity_names_from_snapshot, render_pdf_report, report_summary, write_reports
+from access_review_engine.reporting import access_names_from_snapshot, build_report_rows, identity_names_from_snapshot, render_pdf_report, report_summary, write_reports
 from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, compare_snapshot, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
 from access_review_engine.source_inspector import SourceInspectorError, browse_source_tree, discover_source_attributes, get_source_object, search_source_objects, source_object_kinds
 from access_review_engine.source_mapping import mapping_diagnostics
@@ -1396,7 +1396,8 @@ def create_app(db_path: str | None = None):
             decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
             snapshot = _snapshot(repo, campaign.snapshot_id)
             identity_names = identity_names_from_snapshot(snapshot)
-        rows = build_report_rows(items, decisions, identity_names)
+            access_names = access_names_from_snapshot(snapshot)
+        rows = build_report_rows(items, decisions, identity_names, access_names)
         summary = report_summary(rows)
         facets = {
             "classification": sorted({str(row["classification"]) for row in rows if row["classification"]}),
@@ -1444,11 +1445,12 @@ def create_app(db_path: str | None = None):
             golden = _golden_version(repo, campaign.golden_source_version_id)
             snapshot = _snapshot(repo, campaign.snapshot_id)
             identity_names = identity_names_from_snapshot(snapshot)
+            access_names = access_names_from_snapshot(snapshot)
             with tempfile.TemporaryDirectory(prefix="eare-report-") as directory:
                 if format == "pdf":
-                    content = render_pdf_report(campaign, build_report_rows(items, decisions, identity_names), golden)
+                    content = render_pdf_report(campaign, build_report_rows(items, decisions, identity_names, access_names), golden)
                 else:
-                    write_reports(directory, campaign, items, decisions, golden, snapshot.authentication_posture, identity_names)
+                    write_reports(directory, campaign, items, decisions, golden, snapshot.authentication_posture, identity_names, access_names)
                     filename = {"html": "campaign-report.html", "csv": "campaign-results.csv", "json": "campaign-results.json"}[format]
                     content = (Path(directory) / filename).read_bytes()
             filename = {"html": "campaign-report.html", "csv": "campaign-results.csv", "json": "campaign-results.json", "pdf": "campaign-report.pdf"}[format]
@@ -2432,6 +2434,21 @@ def create_app(db_path: str | None = None):
         _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
         snapshot = _snapshot_covering(provider)
         rows = [row for row in snapshot.get("access_assignments", []) if row.get("provider") == provider and row.get("access_name") == access_name]
+        identities = {
+            (str(identity.get("provider") or ""), str(identity.get("identifier") or "")): identity
+            for identity in snapshot.get("identities", [])
+        }
+        rows = [
+            {
+                **row,
+                "identity_display_name": (
+                    identities.get((str(row.get("identity_provider") or ""), str(row.get("identity_identifier") or "")), {})
+                    .get("display_name")
+                    or row.get("identity_identifier")
+                ),
+            }
+            for row in rows
+        ]
         hydrated = hydrate_snapshot(snapshot)
         evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
         effective = [
@@ -2440,6 +2457,17 @@ def create_app(db_path: str | None = None):
             if item.access_provider == provider
             and item.access_name == access_name
             and not item.direct
+        ]
+        effective = [
+            {
+                **item,
+                "identity_display_name": (
+                    identities.get((str(item.get("identity_provider") or ""), str(item.get("identity_identifier") or "")), {})
+                    .get("display_name")
+                    or item.get("identity_identifier")
+                ),
+            }
+            for item in effective
         ]
         return {"access": {"provider": provider, "name": access_name}, "holders": rows, "effective_holders": effective, "paths": [path for item in effective for path in item.get("paths", [])]}
 
