@@ -104,7 +104,11 @@
     "never_synced": "Never collected",
     "enabled": "Active",
     "disabled": "Désactivé",
-    "exported": "Exported",
+    "exported": "Exportée",
+    "completed": "Réalisée",
+    "not_completed": "Non réalisée",
+    "completed": "Réalisée",
+    "not_completed": "Non réalisée",
     "added": "To add",
     "removed": "No longer present",
     "unchanged": "Unchanged",
@@ -233,5 +237,18 @@
     "sortZA": "Sort Z → A",
     "filter": "Filter {{label}}",
     "tryAgain": "Try again"
+  },
+  "labels": {
+    "campaign": "Campagne", "scope": "Périmètre", "status": "Statut", "progress": "Progression", "pending": "En attente", "dueDate": "Échéance",
+    "identity": "Identité", "access": "Accès", "application": "Application", "permission": "Permission", "state": "État", "decision": "Décision",
+    "reason": "Motif", "reviewer": "Réviseur", "source": "Source", "provider": "Fournisseur", "target": "Cible", "findings": "Constats",
+    "reviews": "Revues", "decided": "Décidées", "stillWaiting": "Encore en attente", "reviewItems": "Éléments à examiner", "observedSnapshot": "Instantané observé",
+    "expectedState": "État attendu", "openCampaign": "Ouvrir la campagne", "closeCampaign": "Clôturer la campagne", "prepare": "Préparer", "review": "Revue", "closed": "Clôturée", "remediation": "Remédiation", "report": "Rapport", "updateBaseline": "Mettre à jour la référence", "classification": "Classification", "observed": "Observé", "expected": "Attendu", "requestedAction": "Action demandée", "accessApplication": "Accès / application", "action": "Action", "accesses": "Accès", "sourceIdp": "Source / IdP", "mode": "Mode", "directEffective": "Direct / effectif", "why": "Pourquoi", "latestDecision": "Dernière décision", "decide": "Décider", "finding": "Constat", "change": "Changement", "goldenComment": "Commentaire Golden", "control": "Contrôle", "assessment": "Évaluation", "goldenUsage": "Utilisation Golden", "version": "Version", "origin": "Origine", "created": "Créé le", "when": "Date", "actor": "Acteur", "event": "Événement", "object": "Objet", "details": "Détails", "user": "Utilisateur", "username": "Identifiant", "signsInWith": "Se connecte avec", "role": "Rôle", "authorizedDomains": "Domaines autorisés", "apiAccess": "Accès API", "pendingReviews": "Revues en attente", "actions": "Actions", "person": "Personne", "login": "Connexion", "email": "E-mail"
+  },
+  "ui": {
+    "noCampaignYet": "Aucune campagne", "createCampaign": "Créer une campagne", "hideReport": "Masquer le rapport", "viewReport": "Afficher le rapport",
+    "downloadHtml": "Télécharger le HTML", "downloadCsv": "Télécharger le CSV", "downloadJson": "Télécharger le JSON", "downloadPdf": "Télécharger le PDF",
+    "openFullReport": "Ouvrir le rapport complet", "finalCampaignReport": "Rapport final de campagne", "governanceEvidence": "Éléments de preuve de gouvernance",
+    "actionsToImplement": "Actions à mettre en œuvre", "operationalFollowUp": "Suivi opérationnel", "noReviewsAssigned": "Aucune revue attribuée", "noCampaignOpen": "Aucune campagne ouverte", "reportExplain": "Un rapport décrit les décisions prises dans une campagne. Lancez d’abord une campagne.", "reportDisplayed": "Le rapport est affiché ici comme un document complet. Utilisez les téléchargements ci-dessus pour le diffuser.", "remediationReadonly": "Ces éléments sont des consignes pour les administrateurs. EARE ne modifie pas AD, LDAP, le cloud ni les applications.", "actionCount_one": "action", "actionCount_other": "actions"
   }
 }

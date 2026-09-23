@@ -276,19 +276,112 @@ Collection completeness drives safety:
 
 A scoped or unknown collection must never erase objects outside scope or produce certain missing access for unobserved data.
 
-## 12. Campaigns and Reports
+## 12. Campaign workflow, reports and remediation
 
-A campaign is opened from an immutable snapshot. Later imports do not mutate what reviewers saw.
+The WebUI follows this workflow:
 
-Review items include identity, access, expected/observed state, classification, findings, reviewer, decision, and comment.
+`Sources & IdPs → Synchronize → Golden Source → Campaigns → New campaign → Preview → Open → My Reviews → Campaign progress → Close → Remediation actions → Reports`
 
-Reports include:
+### Running a campaign step by step
 
-- campaign result HTML;
-- CSV and JSON exports;
-- findings and classifications;
-- reviewer decisions;
-- remediation exports.
+Use this procedure when you need to run a normal access review from the WebUI.
+
+#### 1. Prepare the observed state
+
+1. Open **Sources & IdPs** and verify that every provider in scope is configured.
+2. Select **Synchronize** and wait until the collection is complete. Do not start a campaign from a failed or incomplete collection unless the scope and its limitations are understood.
+3. Open **Golden Source** and verify the expected access version that should be used as the reference. A campaign may be run without a Golden Source, but the result will then contain `No reference` findings rather than an expected-state comparison.
+
+#### 2. Create the campaign
+
+Open **Campaigns → New campaign**. Complete the five preparation steps:
+
+1. **Scope** — enter the campaign name and choose **all authorized sources**, **selected providers**, or **selected accesses**. These choices keep their existing meaning.
+2. **Observed state** — select the Snapshot to review. Check its date, identity and providers before continuing.
+3. **Expected state** — select the Golden Source version, or explicitly choose **No Golden** when this is an observation-only review.
+4. **Reviewers** — select the campaign pilot and resolve reviewers. The pilot coordinates the campaign; access owners and group/role owners remain the people who certify their assigned items.
+5. **Preview & launch** — enter the due date and inspect the preview before opening.
+
+The preview must be treated as a check, not as a save operation. It shows the scope, Snapshot, Golden version, review-item count, reviewer count, resolved and unresolved reviewers, important findings and whether opening is allowed. If the preview is not correct, go back and edit the draft.
+
+#### 3. Preview versus open
+
+**Preview** calculates what would be reviewed and does not create review evidence. **Open campaign** starts the campaign and freezes its evidence. Opening materializes the ReviewItems, resolves assignments and preserves the Snapshot and business context used by the reviewers. A later provider synchronization cannot rewrite what this campaign is reviewing.
+
+Only open the campaign after checking:
+
+- the selected providers and accesses;
+- the Snapshot date and collection completeness;
+- the expected Golden version;
+- the number of review items;
+- the resolved/unresolved reviewers;
+- the due date and pilot.
+
+#### 4. Run the review
+
+Reviewers use **My Reviews**. For each assigned item, inspect the identity, source, access or group/role, application/target and expected versus observed state.
+
+Choose one decision:
+
+- **Approve** — keep the access as certified;
+- **Revoke** — the administrator must remove the access, group membership or role;
+- **Not applicable** — the item is outside the reviewer’s responsibility or scope.
+
+**Revoke** and **Not applicable** require a reason. Reviewers can follow their pending count from **My Reviews**. The campaign pilot can follow total reviews, decided items, pending items, percentage complete, findings, due date, overdue status and the prominent **Who still has to decide** view from the campaign page.
+
+#### 5. Close the campaign
+
+When all required decisions are recorded, return to the campaign page and choose **Close campaign**. The confirmation explains that closing:
+
+- stops further review decisions;
+- freezes the campaign result and historical evidence;
+- generates remediation actions;
+- does not modify any provider.
+
+A campaign with pending reviews cannot be closed. After closure, the result panel shows the number of decisions and generated remediation actions.
+
+#### 6. Give administrators the remediation plan
+
+Open **Actions** or the remediation section of the closed campaign. This is an operational queue, not the audit report. It answers: **what must be changed, where, for whom and why?**
+
+Use the filters to isolate a provider, action, status or campaign. For example, an AD administrator can select `AD-CORP` and `REVOKE`. The queue uses the historical context captured when the campaign opened, including the source/provider, identity, access/group/role, application/target, permission, decision reason, decision maker and campaign.
+
+Use **Download remediation CSV** to send the actionable list to technical administrators. Exporting an action changes its status to `exported` only where the existing lifecycle permits it; it does not mean that the provider change was completed.
+
+#### 7. Read and distribute the final report
+
+Open **Reports**, choose the closed campaign and select **View report**. The HTML report is displayed directly in the page. The available downloads are **HTML**, **PDF**, **CSV** and **JSON**.
+
+The final campaign report is for governance, audit, compliance, RSSI, management and auditors. It contains campaign metadata, counts, expected/observed comparison, findings and review evidence including reviewer decisions and comments. It is deliberately different from the remediation plan; do not ask technical administrators to extract operational work from the audit report.
+
+#### 8. Optional: promote decisions to Golden
+
+From the closed campaign, **Promote decisions to Golden** creates a new immutable expected-state version based on the campaign decisions. It does not execute remediation, modify AD/LDAP/cloud/SaaS providers or prove that a technical change was applied.
+
+Closing a campaign and promoting decisions are independent operations:
+
+`Close campaign → create remediation actions`
+
+`Promote to Golden → update the expected state`
+
+Promotion is optional and must only be done after the pilot or governance owner confirms that the campaign decisions should become the next baseline.
+
+The campaign screen makes the following steps visible:
+
+1. **Prepare** — choose the scope, immutable observed Snapshot, optional Golden version, pilot and reviewers.
+2. **Review** — reviewers certify each access as Approve, Revoke or Not applicable.
+3. **Close** — once every review is decided, closing freezes the result and stops new decisions.
+4. **Remediate** — closing generates operational actions for administrators. EARE never writes to AD, LDAP, AWS or SaaS providers.
+5. **Report** — the final governance/audit report is available as an in-application preview and as HTML, PDF, CSV and JSON downloads.
+6. **Update baseline** — optionally promote decisions to a new immutable Golden version.
+
+Preview is non-persistent: it calculates what would be reviewed. Opening the campaign freezes the Snapshot evidence, materializes ReviewItems, resolves reviewers and captures historical business context. Later synchronizations do not rewrite that campaign.
+
+The **Final Campaign Report** is evidence for governance, audit, compliance, management and auditors. The **Remediation Plan** is an operational queue for IAM, directory and application administrators. They are separate outputs; a report is not a remediation plan.
+
+Promoting decisions to Golden is also separate from remediation. Promotion changes the expected state by creating a new immutable Golden version; it does not execute, verify or mark technical remediation as completed.
+
+Review items include identity, access, expected/observed state, classification, findings, reviewer, decision and comment. Technical and business values from the Snapshot remain unchanged; only interface labels are translated.
 
 EARE exports remediation evidence. It does not apply remediation directly to directories.
 

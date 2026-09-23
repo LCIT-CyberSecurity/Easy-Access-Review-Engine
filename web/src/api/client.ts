@@ -91,6 +91,12 @@ export async function putJson(path: string, body: Row): Promise<Row> {
     body: JSON.stringify(body),
   }) as Promise<Row>;
 }
+export async function patchJson(path: string, body: Row): Promise<Row> {
+  return request(`/api/${path}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  }) as Promise<Row>;
+}
 export async function deleteJson(path: string): Promise<Row> {
   return request(`/api/${path}`, { method: "DELETE" }) as Promise<Row>;
 }

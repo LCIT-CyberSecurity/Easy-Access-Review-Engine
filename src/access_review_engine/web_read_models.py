@@ -33,6 +33,16 @@ def _display_names(repo: Repository) -> tuple[dict[tuple[str, str], str], dict[t
         (str(row.get("provider")), str(row.get("name"))): str(row.get("display_name") or row.get("name") or "")
         for row in repo.list_payloads("accesses")
     }
+    identities_by_reference = {
+        (str(row.get("provider")), str(row.get("identifier") or row.get("native_id") or row.get("id"))): str(row.get("display_name") or row.get("identifier") or "")
+        for row in repo.list_payloads("identities")
+        if str(row.get("type") or "").casefold() == "group"
+    }
+    for key, value in list(accesses.items()):
+        provider, access_name = key
+        parts = access_name.split(":")
+        if value == access_name and len(parts) >= 2 and parts[0].casefold() == "group":
+            accesses[key] = identities_by_reference.get((provider, parts[1]), value)
     return identities, accesses
 
 
@@ -230,6 +240,14 @@ def _sort_key(row: dict[str, Any], field: str) -> tuple[float, str]:
 
 def sorted_rows(rows: list[dict[str, Any]], field: str, order: str | None) -> list[dict[str, Any]]:
     """Sort on a column, always keeping rows without a value at the end."""
+    if field == "source_group":
+        def group_key(row: dict[str, Any]) -> tuple[str, str, str]:
+            source = str(row.get("provider") or row.get("access_provider") or "").casefold()
+            group = str(row.get("access_display_name") or row.get("access_name") or row.get("service") or row.get("access") or "").casefold()
+            identity = str(row.get("identity_display_name") or row.get("identity_identifier") or row.get("identity") or "").casefold()
+            return source, group, identity
+
+        return sorted(rows, key=group_key, reverse=str(order).lower() == "desc")
     present = [row for row in rows if not _is_empty(row.get(field))]
     missing = [row for row in rows if _is_empty(row.get(field))]
     present.sort(key=lambda item: _sort_key(item, field), reverse=str(order).lower() == "desc")
@@ -337,6 +355,9 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                     row["comment"] = decision.get("comment")
                     row["decided_by"] = decision.get("decided_by")
                     row["decided_at"] = decision.get("created_at")
+            # Reuse the campaign snapshot path so operational actions retain the historical
+            # application/target context captured when the campaign was opened.
+            _add_review_provenance(repo, rows)
         if table == "review_items" and reviewer_username is not None:
             rows = [row for row in rows if (row.get("reviewer") or {}).get("identity") == reviewer_username]
         if campaign and table == "review_items":
@@ -426,6 +447,8 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                 row["technical_grant"] = "Group membership" if str(technical_permission or "").casefold() == "member" else "Direct assignment"
         if table == "campaigns":
             items = repo.list_payloads("review_items")
+            actions = repo.list_payloads("remediation_actions")
+            action_review_ids = {str(item.get("review_item_id")) for item in actions}
             for row in rows:
                 scoped = [item for item in items if item.get("campaign_id") == row.get("id")]
                 decisions = [latest_decisions.get(str(item.get("id"))) for item in scoped]
@@ -438,6 +461,7 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                 row["progress"] = round(decided / len(scoped) * 100, 1) if scoped else 0
                 row["findings_count"] = sum(len(item.get("findings", [])) for item in scoped)
                 row["reviewer_resolution"] = {"resolved": sum(item.get("reviewer") is not None for item in scoped), "unresolved": sum(item.get("reviewer") is None for item in scoped)}
+                row["remediation_actions"] = sum(str(item.get("id")) in action_review_ids for item in scoped)
         if search:
             needle = search.casefold()
             rows = [row for row in rows if needle in _search_text(row).casefold()]
@@ -452,7 +476,9 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             rows = [row for row in rows if row.get("classification") == classification]
         rows = apply_field_filters(rows, filters)
         summary = review_summary(rows) if table == "review_items" else None
-        if sort and any(sort in row for row in rows):
+        if table in {"findings", "remediation_actions"} and not sort:
+            rows = sorted_rows(rows, "source_group", "asc")
+        elif sort and (sort == "source_group" or any(sort in row for row in rows)):
             rows = sorted_rows(rows, sort, order)
         elif table == "review_items":
             rows.sort(

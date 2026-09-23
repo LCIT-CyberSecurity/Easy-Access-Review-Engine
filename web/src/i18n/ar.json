@@ -105,6 +105,8 @@
     "enabled": "Active",
     "disabled": "معطل",
     "exported": "Exported",
+    "completed": "مكتمل",
+    "not_completed": "غير مكتمل",
     "added": "To add",
     "removed": "No longer present",
     "unchanged": "Unchanged",
@@ -233,5 +235,18 @@
     "sortZA": "Sort Z → A",
     "filter": "Filter {{label}}",
     "tryAgain": "Try again"
+  },
+  "labels": {
+    "campaign": "الحملة", "scope": "النطاق", "status": "الحالة", "progress": "التقدم", "pending": "قيد الانتظار", "dueDate": "تاريخ الاستحقاق",
+    "identity": "الهوية", "access": "الوصول", "application": "التطبيق", "permission": "الإذن", "state": "الحالة", "decision": "القرار",
+    "reason": "السبب", "reviewer": "المراجع", "source": "المصدر", "provider": "المزوّد", "target": "الهدف", "findings": "الملاحظات",
+    "reviews": "المراجعات", "decided": "تم اتخاذ القرار", "stillWaiting": "ما زال بانتظار القرار", "reviewItems": "عناصر المراجعة", "observedSnapshot": "اللقطة المرصودة",
+    "expectedState": "الحالة المتوقعة", "openCampaign": "فتح الحملة", "closeCampaign": "إغلاق الحملة", "prepare": "التحضير", "review": "المراجعة", "closed": "مغلقة", "remediation": "المعالجة", "report": "التقرير", "updateBaseline": "تحديث خط الأساس", "classification": "التصنيف", "observed": "مرصود", "expected": "متوقع", "requestedAction": "الإجراء المطلوب", "accessApplication": "الوصول / التطبيق", "action": "الإجراء", "accesses": "عمليات الوصول", "sourceIdp": "المصدر / موفر الهوية", "mode": "الوضع", "directEffective": "مباشر / فعلي", "why": "السبب", "latestDecision": "آخر قرار", "decide": "اتخاذ القرار", "finding": "ملاحظة", "change": "تغيير", "goldenComment": "تعليق Golden", "control": "التحكم", "assessment": "التقييم", "goldenUsage": "استخدام Golden", "version": "الإصدار", "origin": "المصدر", "created": "تاريخ الإنشاء", "when": "متى", "actor": "المنفذ", "event": "الحدث", "object": "الكائن", "details": "التفاصيل", "user": "المستخدم", "username": "اسم المستخدم", "signsInWith": "يسجل الدخول باستخدام", "role": "الدور", "authorizedDomains": "النطاقات المصرح بها", "apiAccess": "الوصول إلى API", "pendingReviews": "المراجعات المعلقة", "actions": "الإجراءات", "person": "الشخص", "login": "تسجيل الدخول", "email": "البريد الإلكتروني"
+  },
+  "ui": {
+    "noCampaignYet": "لا توجد حملة بعد", "createCampaign": "إنشاء حملة", "hideReport": "إخفاء التقرير", "viewReport": "عرض التقرير",
+    "downloadHtml": "تنزيل HTML", "downloadCsv": "تنزيل CSV", "downloadJson": "تنزيل JSON", "downloadPdf": "تنزيل PDF",
+    "openFullReport": "فتح التقرير الكامل", "finalCampaignReport": "التقرير النهائي للحملة", "governanceEvidence": "أدلة الحوكمة",
+    "actionsToImplement": "الإجراءات المطلوب تنفيذها", "operationalFollowUp": "المتابعة التشغيلية", "noReviewsAssigned": "لا توجد مراجعات معيّنة", "noCampaignOpen": "لا توجد حملة مفتوحة", "reportExplain": "يصف التقرير القرارات المتخذة في الحملة. ابدأ حملة أولاً.", "reportDisplayed": "يُعرض التقرير هنا كمستند كامل. استخدم خيارات التنزيل أعلاه لتوزيعه.", "remediationReadonly": "هذه تعليمات للمسؤولين. لا يغيّر EARE أنظمة AD أو LDAP أو السحابة أو التطبيقات.", "actionCount_one": "إجراء", "actionCount_other": "إجراءات"
   }
 }

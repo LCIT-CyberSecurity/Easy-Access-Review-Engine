@@ -105,6 +105,10 @@
     "enabled": "Active",
     "disabled": "Disabled",
     "exported": "Exported",
+    "completed": "Completed",
+    "not_completed": "Not completed",
+    "completed": "Completed",
+    "not_completed": "Not completed",
     "added": "To add",
     "removed": "No longer present",
     "unchanged": "Unchanged",
@@ -233,5 +237,18 @@
     "sortZA": "Sort Z → A",
     "filter": "Filter {{label}}",
     "tryAgain": "Try again"
+  },
+  "labels": {
+    "campaign": "Campaign", "scope": "Scope", "status": "Status", "progress": "Progress", "pending": "Pending", "dueDate": "Due date",
+    "identity": "Identity", "access": "Access", "application": "Application", "permission": "Permission", "state": "State", "decision": "Decision",
+    "reason": "Reason", "reviewer": "Reviewer", "source": "Source", "provider": "Provider", "target": "Target", "findings": "Findings",
+    "reviews": "Reviews", "decided": "Decided", "stillWaiting": "Still waiting", "reviewItems": "Review items", "observedSnapshot": "Observed snapshot",
+    "expectedState": "Expected state", "openCampaign": "Open campaign", "closeCampaign": "Close campaign", "prepare": "Prepare", "review": "Review", "closed": "Closed", "remediation": "Remediation", "report": "Report", "updateBaseline": "Update baseline", "classification": "Classification", "observed": "Observed", "expected": "Expected", "requestedAction": "Requested action", "accessApplication": "Access / Application", "action": "Action", "accesses": "Accesses", "sourceIdp": "Source / IdP", "mode": "Mode", "directEffective": "Direct / Effective", "why": "Why", "latestDecision": "Latest decision", "decide": "Decide", "finding": "Finding", "change": "Change", "goldenComment": "Golden comment", "control": "Control", "assessment": "Assessment", "goldenUsage": "Golden usage", "version": "Version", "origin": "Origin", "created": "Created", "when": "When", "actor": "Actor", "event": "Event", "object": "Object", "details": "Details", "user": "User", "username": "Username", "signsInWith": "Signs in with", "role": "Role", "authorizedDomains": "Authorized domains", "apiAccess": "API access", "pendingReviews": "Pending reviews", "actions": "Actions", "person": "Person", "login": "Login", "email": "Email"
+  },
+  "ui": {
+    "noCampaignYet": "No campaign yet", "createCampaign": "Create a campaign", "hideReport": "Hide report", "viewReport": "View report",
+    "downloadHtml": "Download HTML", "downloadCsv": "Download CSV", "downloadJson": "Download JSON", "downloadPdf": "Download PDF",
+    "openFullReport": "Open full report", "finalCampaignReport": "Final campaign report", "governanceEvidence": "Governance evidence",
+    "actionsToImplement": "Actions to implement", "operationalFollowUp": "Operational follow-up", "noReviewsAssigned": "No reviews assigned", "noCampaignOpen": "No campaign is open", "reportExplain": "A report describes what a campaign decided. Run one first.", "reportDisplayed": "The report is displayed here as a complete document. Use the downloads above to distribute it.", "remediationReadonly": "These are instructions for administrators. EARE does not change AD, LDAP, cloud or application providers.", "actionCount_one": "action", "actionCount_other": "actions"
   }
 }

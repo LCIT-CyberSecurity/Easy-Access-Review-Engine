@@ -105,6 +105,8 @@
     "enabled": "Active",
     "disabled": "Disabilitato",
     "exported": "Exported",
+    "completed": "Completata",
+    "not_completed": "Non completata",
     "added": "To add",
     "removed": "No longer present",
     "unchanged": "Unchanged",
@@ -233,5 +235,18 @@
     "sortZA": "Sort Z → A",
     "filter": "Filter {{label}}",
     "tryAgain": "Try again"
+  },
+  "labels": {
+    "campaign": "Campagna", "scope": "Ambito", "status": "Stato", "progress": "Avanzamento", "pending": "In attesa", "dueDate": "Scadenza",
+    "identity": "Identità", "access": "Accesso", "application": "Applicazione", "permission": "Autorizzazione", "state": "Stato", "decision": "Decisione",
+    "reason": "Motivo", "reviewer": "Revisore", "source": "Fonte", "provider": "Fornitore", "target": "Destinazione", "findings": "Rilievi",
+    "reviews": "Revisioni", "decided": "Decise", "stillWaiting": "Ancora in attesa", "reviewItems": "Elementi da rivedere", "observedSnapshot": "Snapshot osservato",
+    "expectedState": "Stato atteso", "openCampaign": "Apri campagna", "closeCampaign": "Chiudi campagna", "prepare": "Preparazione", "review": "Revisione", "closed": "Chiusa", "remediation": "Rimedi", "report": "Report", "updateBaseline": "Aggiorna riferimento", "classification": "Classificazione", "observed": "Osservato", "expected": "Atteso", "requestedAction": "Azione richiesta", "accessApplication": "Accesso / applicazione", "action": "Azione", "accesses": "Accessi", "sourceIdp": "Fonte / IdP", "mode": "Modalità", "directEffective": "Diretto / effettivo", "why": "Perché", "latestDecision": "Ultima decisione", "decide": "Decidi", "finding": "Rilievo", "change": "Modifica", "goldenComment": "Commento Golden", "control": "Controllo", "assessment": "Valutazione", "goldenUsage": "Uso di Golden", "version": "Versione", "origin": "Origine", "created": "Creato", "when": "Quando", "actor": "Attore", "event": "Evento", "object": "Oggetto", "details": "Dettagli", "user": "Utente", "username": "Nome utente", "signsInWith": "Accede con", "role": "Ruolo", "authorizedDomains": "Domini autorizzati", "apiAccess": "Accesso API", "pendingReviews": "Revisioni in sospeso", "actions": "Azioni", "person": "Persona", "login": "Accesso", "email": "E-mail"
+  },
+  "ui": {
+    "noCampaignYet": "Nessuna campagna", "createCampaign": "Crea una campagna", "hideReport": "Nascondi report", "viewReport": "Visualizza report",
+    "downloadHtml": "Scarica HTML", "downloadCsv": "Scarica CSV", "downloadJson": "Scarica JSON", "downloadPdf": "Scarica PDF",
+    "openFullReport": "Apri report completo", "finalCampaignReport": "Report finale della campagna", "governanceEvidence": "Evidenze di governance",
+    "actionsToImplement": "Azioni da implementare", "operationalFollowUp": "Seguito operativo", "noReviewsAssigned": "Nessuna revisione assegnata", "noCampaignOpen": "Nessuna campagna aperta", "reportExplain": "Un report descrive le decisioni di una campagna. Esegui prima una campagna.", "reportDisplayed": "Il report è visualizzato qui come documento completo. Usa i download sopra per distribuirlo.", "remediationReadonly": "Sono istruzioni per gli amministratori. EARE non modifica AD, LDAP, cloud o applicazioni.", "actionCount_one": "azione", "actionCount_other": "azioni"
   }
 }

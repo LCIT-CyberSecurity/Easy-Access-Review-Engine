@@ -71,6 +71,19 @@ def _login(client: TestClient, username: str, password: str) -> None:
     assert response.status_code == 200
 
 
+def test_remediation_export_is_filtered_and_keeps_campaign_context() -> None:
+    client = _client()
+    _login(client, "operator", "operator-password")
+
+    response = client.get("/api/remediation-actions/export?provider=finance")
+
+    assert response.status_code == 200
+    assert "remediation-plan.csv" in response.headers["content-disposition"]
+    assert "action,access_provider" in response.text
+    assert "finance" in response.text
+    assert "support" not in response.text
+
+
 def _operator_client(db: Path, scopes: list[str] | None = None) -> TestClient:
     app = create_app(str(db))
     conn = sqlite3.connect(db)

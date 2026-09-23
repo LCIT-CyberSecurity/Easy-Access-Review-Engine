@@ -6,10 +6,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from access_review_engine.domain import Campaign, DecisionValue, OwnerRef
+from access_review_engine.domain import Campaign, DecisionValue, OwnerRef, ReviewItem
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif
-from access_review_engine.reporting import build_report_rows, render_access_matrix, render_html_report, write_reports
+from access_review_engine.reporting import build_report_rows, render_access_matrix, render_html_report, render_pdf_report, write_reports
 from access_review_engine.services import create_decision, create_snapshot, open_campaign
 
 
@@ -136,6 +136,42 @@ def test_html_report_contains_required_sections_and_filters(tmp_path: Path) -> N
     assert (out / "campaign-report.html").exists()
     assert (out / "campaign-results.csv").exists()
     assert (out / "campaign-results.json").exists()
+
+
+def test_pdf_report_is_a_valid_downloadable_document() -> None:
+    pdf = render_pdf_report(Campaign("pdf-campaign", "snapshot-1"), [])
+    assert pdf.startswith(b"%PDF-1.4")
+    assert b"%%EOF" in pdf
+
+
+def test_report_uses_readable_identity_name_and_keeps_technical_reference() -> None:
+    item = ReviewItem(
+        campaign_id="campaign",
+        identity_provider="ldap",
+        identity_identifier="entry:technical-id",
+        identity_status="active",
+        access_provider="ldap",
+        access_name="CRM-Admin",
+        control_object={"type": "group", "identifier": "CRM-Admin"},
+        permission={"identifier": "member"},
+        target=None,
+        description="CRM administrator access",
+        origin=None,
+        expected=True,
+        observed=True,
+        classification="expected_and_observed",
+        findings=[],
+        account_owner=None,
+        access_owner=None,
+        reviewer=None,
+    )
+    rows = build_report_rows(
+        [item],
+        [],
+        {("ldap", "entry:technical-id"): "Alice Martin"},
+    )
+    assert rows[0]["identity"] == "Alice Martin"
+    assert rows[0]["identity_identifier"] == "entry:technical-id"
 
 
 

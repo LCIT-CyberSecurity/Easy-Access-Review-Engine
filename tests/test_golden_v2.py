@@ -2,15 +2,20 @@ from __future__ import annotations
 
 
 from access_review_engine.domain import (
+    Access,
+    Campaign,
+    ControlObject,
+    DecisionValue,
     ExpectedAccessModel,
     FunctionalModelCompleteness,
     FunctionalRight,
     GoldenAccessComment,
     GoldenSource,
     GoldenSourceAssignment,
+    ReviewItem,
     Target,
 )
-from access_review_engine.services import create_golden_version
+from access_review_engine.services import create_decision, create_golden_version, promote_campaign
 from access_review_engine.storage import Repository, hydrate_golden_version
 
 
@@ -58,3 +63,46 @@ def test_golden_v1_is_not_defined_and_v2_round_trips_frozen_rights(tmp_path) -> 
     assert hydrated.functional_access_models == [model]
     assert hydrated.access_comments[0].comment == "Accounting access"
     assert hydrated.checksum == version.checksum
+
+
+def test_campaign_promotion_preserves_golden_v2_context() -> None:
+    source = GoldenSource("campaign-v2")
+    expected_access = Access(
+        name="billing-admin",
+        provider="crm",
+        control_object=ControlObject("role", "billing-admin"),
+        target=Target(resource={"identifier": "billing"}),
+    )
+    model = ExpectedAccessModel(
+        "crm",
+        "billing-admin",
+        FunctionalModelCompleteness.COMPLETE,
+        (FunctionalRight(Target(resource={"identifier": "billing"}), "read"),),
+    )
+    comment = GoldenAccessComment("crm", "billing-admin", "Reviewed baseline")
+    previous = create_golden_version(
+        source,
+        [GoldenSourceAssignment("crm", "billing-admin", "directory", "alice")],
+        "manual",
+        schema_version=2,
+        expected_access_definitions=[expected_access],
+        functional_access_models=[model],
+        access_comments=[comment],
+    )
+    item = ReviewItem(
+        campaign_id="campaign-1", identity_provider="directory", identity_identifier="alice",
+        identity_status="active", access_provider="crm", access_name="billing-admin",
+        control_object={"type": "role", "identifier": "billing-admin"}, permission={},
+        target={"resource": {"identifier": "billing"}}, description=None, origin=None,
+        expected=True, observed=True, classification="expected_and_observed", findings=[],
+        account_owner=None, access_owner=None, reviewer=None,
+    )
+    campaign = Campaign("campaign-1", "snapshot-1", status="closed", golden_source_version_id=previous.id)
+    promoted = promote_campaign(
+        source, campaign, [item], [create_decision(item, DecisionValue.APPROVE, None, "pilot")], previous
+    )
+
+    assert promoted.schema_version == 2
+    assert promoted.expected_access_definitions == [expected_access]
+    assert promoted.functional_access_models == [model]
+    assert promoted.access_comments == [comment]

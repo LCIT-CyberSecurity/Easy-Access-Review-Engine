@@ -135,7 +135,22 @@ def preview_campaign_review(
     preview_campaign.allow_unresolved_reviewers = True
     _, items = open_campaign(preview_campaign, preparation.snapshot, fallback_reviewer)  # type: ignore[arg-type]
     unresolved = [{"identity": item.identity_identifier, "identity_provider": item.identity_provider, "access": item.access_name, "access_provider": item.access_provider} for item in items if item.reviewer is None]
-    return {"total_review_items": len(items), "resolved_reviewers": len(items) - len(unresolved), "unresolved_reviewers": len(unresolved), "unresolved": unresolved, "comparison_states": preparation.comparison_states}
+    reviewer_keys = {
+        (item.reviewer.provider, item.reviewer.identity)
+        if item.reviewer is not None
+        else ("unresolved", item.identity_provider + ":" + item.identity_identifier)
+        for item in items
+    }
+    resolved_keys = {(item.reviewer.provider, item.reviewer.identity) for item in items if item.reviewer is not None}
+    unresolved_keys = {("unresolved", item.identity_provider + ":" + item.identity_identifier) for item in items if item.reviewer is None}
+    return {
+        "total_review_items": len(items),
+        "reviewer_count": len(reviewer_keys),
+        "resolved_reviewers": len(resolved_keys),
+        "unresolved_reviewers": len(unresolved_keys),
+        "unresolved": unresolved,
+        "comparison_states": preparation.comparison_states,
+    }
 
 
 def list_payloads(

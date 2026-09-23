@@ -129,6 +129,8 @@ class RemediationActionType(StrEnum):
 class RemediationStatus(StrEnum):
     PENDING = "pending"
     EXPORTED = "exported"
+    COMPLETED = "completed"
+    NOT_COMPLETED = "not_completed"
 
 
 def now_utc() -> str:

@@ -8,12 +8,30 @@ import json
 from pathlib import Path
 
 from access_review_engine.authentication import compare_authentication_posture
-from access_review_engine.domain import AuthenticationPosture, Campaign, Decision, GoldenSourceVersion, ReviewItem
+from access_review_engine.domain import AuthenticationPosture, Campaign, Decision, GoldenSourceVersion, ReviewItem, Snapshot
 from access_review_engine.services import latest_decisions
 
 
-def build_report_rows(review_items: list[ReviewItem], decisions: list[Decision]) -> list[dict[str, object]]:
+def identity_names_from_snapshot(snapshot: Snapshot | None) -> dict[tuple[str, str], str]:
+    """Resolve readable identity labels without losing technical references."""
+    if snapshot is None:
+        return {}
+    names: dict[tuple[str, str], str] = {}
+    for identity in snapshot.identities:
+        label = identity.display_name or identity.email or identity.identifier
+        for reference in (identity.identifier, identity.native_id, identity.id):
+            if reference:
+                names[(identity.provider, reference)] = label
+    return names
+
+
+def build_report_rows(
+    review_items: list[ReviewItem],
+    decisions: list[Decision],
+    identity_names: dict[tuple[str, str], str] | None = None,
+) -> list[dict[str, object]]:
     latest = latest_decisions(decisions)
+    identity_names = identity_names or {}
     rows: list[dict[str, object]] = []
     for item in review_items:
         decision = latest.get(item.id)
@@ -24,6 +42,10 @@ def build_report_rows(review_items: list[ReviewItem], decisions: list[Decision])
         component = (target.get("component") or {}).get("display_name") or (
             target.get("component") or {}
         ).get("identifier")
+        decision_value = decision.value if decision else "pending"
+        action = "Revoke access" if decision_value == "revoke" else (
+            "Grant access" if decision_value == "approve" and item.expected and not item.observed else "No action"
+        )
         rows.append(
             {
                 "owner": _owner_label(item.reviewer),
@@ -36,7 +58,8 @@ def build_report_rows(review_items: list[ReviewItem], decisions: list[Decision])
                 "permission": item.permission.get("display_name") or item.permission.get("identifier", ""),
                 "access": item.access_name,
                 "description": item.description or "",
-                "identity": item.identity_identifier,
+                "identity": identity_names.get((item.identity_provider, item.identity_identifier), item.identity_identifier),
+                "identity_identifier": item.identity_identifier,
                 "identity_provider": item.identity_provider,
                 "identity_status": item.identity_status,
                 "expected": "yes" if item.expected else "no",
@@ -44,7 +67,10 @@ def build_report_rows(review_items: list[ReviewItem], decisions: list[Decision])
                 "classification": item.classification,
                 "findings": ", ".join(item.findings),
                 "issue": _issue_label(item.classification, item.findings),
-                "decision": decision.value if decision else "pending",
+                "observed_description": item.description or "Observed access recorded in the campaign snapshot",
+                "action": action,
+                "action_reason": decision.comment if decision and decision.comment else _issue_label(item.classification, item.findings),
+                "decision": decision_value,
                 "reviewer": _owner_label(item.reviewer),
                 "comment": decision.comment if decision else "",
             }
@@ -59,10 +85,11 @@ def write_reports(
     decisions: list[Decision],
     golden_version: GoldenSourceVersion | None = None,
     authentication_posture: AuthenticationPosture | None = None,
+    identity_names: dict[tuple[str, str], str] | None = None,
 ) -> None:
     path = Path(output_dir)
     path.mkdir(parents=True, exist_ok=True)
-    rows = build_report_rows(review_items, decisions)
+    rows = build_report_rows(review_items, decisions, identity_names)
     (path / "campaign-results.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
     with (path / "campaign-results.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]) if rows else ["campaign"])
@@ -87,6 +114,102 @@ def write_reports(
             campaign, rows, golden_version, reference_links, role_permissions, authentication_posture
         ), encoding="utf-8"
     )
+
+
+def render_pdf_report(
+    campaign: Campaign,
+    rows: list[dict[str, object]],
+    golden_version: GoldenSourceVersion | None = None,
+) -> bytes:
+    """Render a dependency-free, printable PDF snapshot of the final campaign report.
+
+    The HTML report remains the rich primary presentation. This compact PDF deliberately uses
+    only the standard library so API deployments do not need a system browser or PDF daemon.
+    """
+    summary = _summary(rows)
+    lines = [
+        "EARE - FINAL CAMPAIGN REPORT",
+        f"Campaign: {campaign.display_name or campaign.name}",
+        f"State: {campaign.status} | Scope: {campaign.scope.get('type', 'all')}",
+        f"Opened: {campaign.opened_at or '—'} | Closed: {campaign.closed_at or '—'} | Due: {campaign.due_at or '—'}",
+        f"Snapshot: {campaign.snapshot_id} | Golden version: {golden_version.version if golden_version else 'none'}",
+        "",
+        "SUMMARY",
+        " | ".join(f"{key}: {value}" for key, value in summary.items()),
+        "",
+        "REVIEW EVIDENCE",
+        "Decision | Identity | Provider | Access | Permission | Classification | Reviewer | Comment",
+    ]
+    for row in rows:
+        lines.append(" | ".join(
+            str(row.get(key, ""))
+            for key in ("decision", "identity", "provider", "access", "permission", "classification", "reviewer", "comment")
+        ))
+    return _pdf_document(lines)
+
+
+def _pdf_document(lines: list[str]) -> bytes:
+    """Build a small valid PDF from wrapped text without external rendering dependencies."""
+    wrapped: list[str] = []
+    for line in lines:
+        text = str(line)
+        if not text:
+            wrapped.append("")
+            continue
+        while len(text) > 112:
+            wrapped.append(text[:112])
+            text = text[112:]
+        wrapped.append(text)
+    per_page = 58
+    pages = [wrapped[index:index + per_page] for index in range(0, len(wrapped), per_page)] or [[]]
+    objects: list[str] = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "",
+    ]
+    page_refs: list[str] = []
+    content_refs: list[str] = []
+    for page in pages:
+        page_number = len(objects) + 1
+        content_number = page_number + 1
+        page_refs.append(f"{page_number} 0 R")
+        content_refs.append(f"{content_number} 0 R")
+        objects.append("")
+        commands = ["BT /F1 8 Tf 40 800 Td 10 TL"]
+        for line in page:
+            safe = line.encode("latin-1", "replace").decode("latin-1")
+            safe = safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            commands.append(f"({safe}) Tj T*" if safe else "T*")
+        commands.append("ET")
+        stream = " ".join(commands)
+        objects.append(stream)
+    pages_number = 2
+    font_number = len(objects) + 1
+    objects[1] = f"<< /Type /Pages /Kids [{' '.join(page_refs)}] /Count {len(pages)} >>"
+    for index, (page_ref, content_ref) in enumerate(zip(page_refs, content_refs)):
+        page_number = int(page_ref.split()[0])
+        content_number = int(content_ref.split()[0])
+        objects[page_number - 1] = (
+            f"<< /Type /Page /Parent {pages_number} 0 R /MediaBox [0 0 595 842] "
+            f"/Resources << /Font << /F1 {font_number} 0 R >> >> /Contents {content_number} 0 R >>"
+        )
+        objects[content_number - 1] = (
+            f"<< /Length {len(objects[content_number - 1].encode('latin-1'))} >>\nstream\n"
+            f"{objects[content_number - 1]}\nendstream"
+        )
+    objects.append("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    output = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for number, value in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{number} 0 obj\n{value}\nendobj\n".encode("latin-1"))
+    xref = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode())
+    output.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return bytes(output)
 
 
 def _role_permission_summary(csv_path: str | Path) -> dict[str, list[str]]:
@@ -421,6 +544,19 @@ h1 { margin:0; font-size:40px; line-height:1.08; letter-spacing:0; }
 .references { margin-top:28px; display:flex; gap:14px; flex-wrap:wrap; }
 .references a { color:white; border:1px solid rgba(255,255,255,.32); border-radius:999px; padding:8px 13px; text-decoration:none; font-weight:800; }
 .report-section { margin-top:88px; }
+.report-lead { margin-top:28px; }
+.management-brief { background:linear-gradient(135deg,#eff6ff,#ffffff); border:1px solid #bfdbfe; border-radius:12px; padding:32px; box-shadow:var(--shadow); }
+.management-conclusion { margin:0; font-size:21px; line-height:1.45; font-weight:800; max-width:1000px; }
+.brief-grid, .context-grid, .control-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin-top:28px; }
+.brief-grid div, .context-cell, .control-card { background:white; border:1px solid var(--line); border-radius:8px; padding:18px; }
+.brief-grid span, .context-cell span, .control-card span { display:block; color:var(--muted); font-size:12px; font-weight:900; text-transform:uppercase; letter-spacing:.04em; }
+.brief-grid strong, .context-cell strong { display:block; margin-top:8px; font-size:17px; overflow-wrap:anywhere; }
+.control-grid { margin-top:0; }
+.control-card strong { display:block; font-size:32px; line-height:1; }
+.control-card span { margin-top:12px; }
+.empty-panel { background:var(--surface); border:1px dashed var(--line-strong); border-radius:8px; color:var(--muted); padding:28px; font-weight:800; }
+.action-table { background:var(--surface); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); overflow:auto; }
+.action-table table { min-width:1100px; }
 .section-heading { margin-bottom:38px; max-width:780px; }
 .section-number { color:var(--blue); font-size:15px; font-weight:900; letter-spacing:.12em; }
 .section-kicker { margin-top:10px; color:var(--muted); font-size:13px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; }
@@ -492,6 +628,7 @@ input, select {
 table { width:100%; min-width:1080px; border-collapse:separate; border-spacing:0; font-size:15px; }
 th { position:sticky; top:0; z-index:1; background:#f8fafc; color:var(--muted); font-size:12px; font-weight:900; text-transform:uppercase; text-align:left; padding:16px; border-bottom:1px solid var(--line-strong); cursor:pointer; }
 td { padding:18px 16px; min-height:52px; border-bottom:1px solid var(--line); vertical-align:middle; }
+.technical-reference { display:block; margin-top:5px; color:var(--muted); font-size:11px; font-weight:600; overflow-wrap:anywhere; }
 tbody tr:hover { background:#f8fbff; }
 .badge { display:inline-flex; align-items:center; min-height:28px; border-radius:999px; padding:0 10px; background:var(--surface-soft); color:var(--muted); font-size:13px; font-weight:900; white-space:nowrap; }
 .badge.expected_and_observed, .badge.approve, .badge.yes, .badge.active { background:var(--green-soft); color:#166534; }
@@ -503,7 +640,7 @@ tbody tr:hover { background:#f8fbff; }
 .no-findings { color:var(--muted); font-weight:800; }
 .results-summary { margin:0 0 22px; color:var(--muted); font-weight:800; }
 @media (max-width:1180px) {
-  .hero-meta, .kpi-group, .charts-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .hero-meta, .kpi-group, .charts-grid, .brief-grid, .context-grid, .control-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .filter-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 @media (max-width:760px) {
@@ -512,7 +649,7 @@ tbody tr:hover { background:#f8fbff; }
   h1 { font-size:34px; }
   h2 { font-size:28px; }
   .report-section { margin-top:76px; }
-  .hero-meta, .kpi-group, .charts-grid, .filter-grid, .search-row { grid-template-columns:1fr; }
+  .hero-meta, .kpi-group, .charts-grid, .filter-grid, .search-row, .brief-grid, .context-grid, .control-grid { grid-template-columns:1fr; }
   .service-toggle { grid-template-columns:1fr; }
   .service-counts { min-width:0; justify-content:flex-start; }
 }
@@ -545,6 +682,25 @@ tbody tr:hover { background:#f8fbff; }
   </div>
 </header>
 <main>
+  <section class="report-section report-lead" aria-labelledby="management-title">
+    <div class="section-heading">
+      <div class="section-number">Executive brief</div>
+      <div class="section-kicker">Management synthesis</div>
+      <h2 id="management-title">Campaign conclusion</h2>
+    </div>
+    __MANAGEMENT_SUMMARY__
+  </section>
+
+  <section class="report-section" aria-labelledby="context-title">
+    <div class="section-heading">
+      <div class="section-number">00</div>
+      <div class="section-kicker">Engagement context</div>
+      <h2 id="context-title">Campaign context</h2>
+      <p class="section-copy">Scope, responsibilities, evidence dates and reference versions used for this review.</p>
+    </div>
+    __CAMPAIGN_CONTEXT__
+  </section>
+
   <section class="report-section" aria-labelledby="overview-title">
     <div class="section-heading">
       <div class="section-number">01</div>
@@ -555,9 +711,19 @@ tbody tr:hover { background:#f8fbff; }
     __SUMMARY__
   </section>
 
-  <section class="report-section" aria-labelledby="authentication-title">
+  <section class="report-section" aria-labelledby="controlled-title">
     <div class="section-heading">
       <div class="section-number">02</div>
+      <div class="section-kicker">Control perimeter</div>
+      <h2 id="controlled-title">Elements controlled</h2>
+      <p class="section-copy">The population and access attributes included in the certification.</p>
+    </div>
+    __CONTROLLED__
+  </section>
+
+  <section class="report-section" aria-labelledby="authentication-title">
+    <div class="section-heading">
+      <div class="section-number">03</div>
       <div class="section-kicker">Golden Source</div>
       <h2 id="authentication-title">Authentication Posture</h2>
       <p class="section-copy">Expected authentication controls used as the reference for access reviews.</p>
@@ -581,7 +747,7 @@ tbody tr:hover { background:#f8fbff; }
 
   <section class="report-section" aria-labelledby="findings-title">
     <div class="section-heading">
-      <div class="section-number">03</div>
+      <div class="section-number">04</div>
       <div class="section-kicker">Attention Points</div>
       <h2 id="findings-title">Findings</h2>
       <p class="section-copy">Findings requiring attention.</p>
@@ -589,12 +755,22 @@ tbody tr:hover { background:#f8fbff; }
     <div class="findings-grid" id="findings-grid"></div>
   </section>
 
+  <section class="report-section" aria-labelledby="actions-title">
+    <div class="section-heading">
+      <div class="section-number">05</div>
+      <div class="section-kicker">Operational follow-up</div>
+      <h2 id="actions-title">Actions to implement</h2>
+      <p class="section-copy">Concrete actions for source and application administrators. This plan is separate from the audit evidence below.</p>
+    </div>
+    __ACTIONS__
+  </section>
+
   <section class="report-section" aria-labelledby="details-title">
     <div class="section-heading">
-      <div class="section-number">04</div>
+      <div class="section-number">06</div>
       <div class="section-kicker">Detailed Results</div>
       <h2 id="details-title">By Service / Access</h2>
-      <p class="section-copy">Identity and access details.</p>
+      <p class="section-copy">Observed access, expected state, findings and reviewer decisions, grouped by source and access/role.</p>
     </div>
     <section class="filter-panel" aria-label="Report filters">
       <div class="search-row">
@@ -612,8 +788,8 @@ tbody tr:hover { background:#f8fbff; }
 const rows = __DATA__;
 const labels = __LABELS__;
 const filterNames = ["service","classification","decision","finding","status","reviewer"];
-const sortFields = ["identity","identity_status","expected","observed","classification","findings","decision","reviewer"];
-let sortState = { key: "identity", direction: "asc" };
+const sortFields = ["source_group","provider","service","access","identity","identity_status","expected","observed","classification","findings","decision","reviewer"];
+let sortState = { key: "source_group", direction: "asc" };
 const chartColors = ["#16a34a", "#dc2626", "#f59e0b", "#64748b", "#1d4ed8", "#0f766e"];
 
 function value(row, key) { return row[key] ?? ""; }
@@ -647,8 +823,11 @@ function matches(row) {
 }
 
 function compareRows(a, b) {
-  const av = value(a, sortState.key).toLowerCase();
-  const bv = value(b, sortState.key).toLowerCase();
+  const composite = row => sortState.key === "source_group"
+    ? [value(row, "provider"), value(row, "service"), value(row, "access"), value(row, "identity")].join(" ").toLowerCase()
+    : value(row, sortState.key).toLowerCase();
+  const av = composite(a);
+  const bv = composite(b);
   const result = av.localeCompare(bv, "en", { numeric: true, sensitivity: "base" });
   return sortState.direction === "asc" ? result : -result;
 }
@@ -656,11 +835,11 @@ function compareRows(a, b) {
 function groupedRows(items) {
   const groups = new Map();
   for (const row of items) {
-    const key = value(row, "service") + "||" + value(row, "access");
+    const key = value(row, "provider") + "||" + value(row, "service") + "||" + value(row, "access");
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   }
-  return Array.from(groups.values()).sort((a, b) => (value(a[0], "service") + value(a[0], "access")).localeCompare(value(b[0], "service") + value(b[0], "access")));
+  return Array.from(groups.values()).sort((a, b) => ["provider", "service", "access"].map(key => value(a[0], key)).join(" ").localeCompare(["provider", "service", "access"].map(key => value(b[0], key)).join(" "), "en", { sensitivity: "base" }));
 }
 
 function renderFindingsCell(td, row) {
@@ -682,7 +861,7 @@ function renderTable(container, items) {
   const trh = document.createElement("tr");
   const columns = [
     ["identity", "Identity"], ["identity_status", "Status"], ["expected", "Expected"], ["observed", "Observed"],
-    ["classification", "Classification"], ["findings", "Findings"], ["decision", "Decision"], ["reviewer", "Reviewer"], ["comment", "Comment"]
+    ["observed_description", "Observed description"], ["classification", "Classification"], ["findings", "Findings"], ["action", "Action"], ["decision", "Decision"], ["reviewer", "Decision by"], ["comment", "Comment"]
   ];
   for (const [key, title] of columns) {
     const th = textEl("th", title + (sortState.key === key ? (sortState.direction === "asc" ? " ↑" : " ↓") : ""));
@@ -695,12 +874,17 @@ function renderTable(container, items) {
   for (const row of items.slice().sort(compareRows)) {
     const tr = document.createElement("tr");
     tr.dataset.classification = value(row, "classification");
-    tr.appendChild(textEl("td", value(row, "identity")));
+    const identity = document.createElement("td");
+    identity.appendChild(textEl("strong", value(row, "identity")));
+    if (value(row, "identity_identifier") && value(row, "identity_identifier") !== value(row, "identity")) identity.appendChild(textEl("small", value(row, "identity_identifier"), "technical-reference"));
+    tr.appendChild(identity);
     const status = document.createElement("td"); status.appendChild(badge(label(value(row, "identity_status")), value(row, "identity_status"))); tr.appendChild(status);
     const expected = document.createElement("td"); expected.appendChild(badge(label(value(row, "expected")), value(row, "expected"))); tr.appendChild(expected);
     const observed = document.createElement("td"); observed.appendChild(badge(label(value(row, "observed")), value(row, "observed"))); tr.appendChild(observed);
+    tr.appendChild(textEl("td", value(row, "observed_description")));
     const classification = document.createElement("td"); classification.appendChild(badge(label(value(row, "classification")), value(row, "classification"))); tr.appendChild(classification);
     const findingsTd = document.createElement("td"); renderFindingsCell(findingsTd, row); tr.appendChild(findingsTd);
+    const action = document.createElement("td"); action.appendChild(badge(value(row, "action") || "No action", value(row, "action") === "No action" ? "not_applicable" : "revoke")); tr.appendChild(action);
     const decision = document.createElement("td"); decision.appendChild(badge(label(value(row, "decision")), value(row, "decision"))); tr.appendChild(decision);
     tr.appendChild(textEl("td", value(row, "reviewer")));
     tr.appendChild(textEl("td", value(row, "comment")));
@@ -725,8 +909,8 @@ function renderDetails() {
     button.className = "service-toggle";
     button.type = "button";
     const titleWrap = document.createElement("div");
-    titleWrap.appendChild(textEl("div", value(first, "service") || "No service", "service-title"));
-    const meta = textEl("div", "Owner: " + (value(first, "owner") || "unassigned") + " · Access: " + (value(first, "access") || "none"), "service-meta");
+    titleWrap.appendChild(textEl("div", (value(first, "provider") || "No source") + " · " + (value(first, "service") || "No service"), "service-title"));
+    const meta = textEl("div", "Access / role: " + (value(first, "access") || "none") + " · Owner: " + (value(first, "owner") || "unassigned"), "service-meta");
     titleWrap.appendChild(meta);
     const counts = document.createElement("div"); counts.className = "service-counts";
     const identities = new Set(group.map(row => value(row, "identity"))).size;
@@ -812,8 +996,8 @@ function renderCharts() {
   ]);
   const decisions = countBy("decision");
   barChart(document.getElementById("decision-chart"), ["approve","revoke","not_applicable","pending"].map(key => ({ label: label(key), value: decisions.get(key) || 0 })));
-  const services = Array.from(countBy("service").entries()).map(([name, value]) => ({ label: name || "No service", value })).sort((a, b) => b.value - a.value).slice(0, 8);
-  barChart(document.getElementById("service-chart"), services, "No service data");
+  const services = Array.from(countBy("access").entries()).map(([name, value]) => ({ label: name || "No access/role", value })).sort((a, b) => b.value - a.value).slice(0, 8);
+  barChart(document.getElementById("service-chart"), services, "No access/role data");
 }
 function renderFindingCards() {
   const grid = document.getElementById("findings-grid");
@@ -848,6 +1032,10 @@ renderDetails();
         "__GENERATED__": escape(generated_at),
         "__STATUS__": escape(str(campaign.status)),
         "__REFERENCES__": references,
+        "__MANAGEMENT_SUMMARY__": _management_summary_html(campaign, summary, rows),
+        "__CAMPAIGN_CONTEXT__": _campaign_context_html(campaign, golden_version, providers),
+        "__CONTROLLED__": _controlled_elements_html(rows),
+        "__ACTIONS__": _actions_html(rows),
         "__SUMMARY__": _summary_html(summary),
         "__AUTHENTICATION__": authentication_html,
         "__FILTERS__": filters,
@@ -890,6 +1078,83 @@ def _reference_links_html(reference_links: list[dict[str, str]]) -> str:
 def report_summary(rows: list[dict[str, object]]) -> dict[str, int]:
     """The counts the exported report shows, so the WebUI can show the same ones."""
     return _summary(rows)
+
+
+def _management_summary_html(campaign: Campaign, summary: dict[str, int], rows: list[dict[str, object]]) -> str:
+    actions = [row for row in rows if row.get("action") not in {None, "", "No action"}]
+    pending = summary.get("pending", 0)
+    decided = summary.get("approve", 0) + summary.get("revoke", 0) + summary.get("not_applicable", 0)
+    findings = sum(1 for row in rows if row.get("classification") not in {"expected_and_observed", ""} or row.get("findings"))
+    conclusion = "The review is complete and no operational action was identified." if not actions else (
+        f"The review identified {len(actions)} access change(s) requiring implementation by the relevant administrators."
+    )
+    if pending:
+        conclusion = f"The review is not fully closed: {pending} decision(s) remain pending. " + conclusion
+    return (
+        '<div class="management-brief">'
+        f'<p class="management-conclusion">{escape(conclusion)}</p>'
+        '<div class="brief-grid">'
+        f'<div><span>Reviewed population</span><strong>{len(rows)}</strong></div>'
+        f'<div><span>Decisions recorded</span><strong>{decided}</strong></div>'
+        f'<div><span>Findings requiring attention</span><strong>{findings}</strong></div>'
+        f'<div><span>Actions to implement</span><strong>{len(actions)}</strong></div>'
+        '</div></div>'
+    )
+
+
+def _campaign_context_html(campaign: Campaign, golden_version: GoldenSourceVersion | None, providers: list[str]) -> str:
+    manager = _owner_label(campaign.manager) or "Not assigned"
+    scope = campaign.scope.get("type", "all")
+    values = campaign.scope.get("values")
+    scope_label = str(scope).replace("_", " ").title()
+    if isinstance(values, list) and values:
+        scope_label += ": " + ", ".join(str(value) for value in values)
+    cells = [
+        ("Campaign owner / pilot", campaign.pilot or "Not assigned"),
+        ("Manager / accountable admin", manager),
+        ("Scope", scope_label),
+        ("Sources covered", ", ".join(providers) or "None"),
+        ("Created", campaign.created_at or "Not available"),
+        ("Opened", campaign.opened_at or "Not opened"),
+        ("Closed", campaign.closed_at or "Not closed"),
+        ("Due date", campaign.due_at or "Not defined"),
+        ("Observed Snapshot", campaign.snapshot_id),
+        ("Expected Golden Source", f"Version {golden_version.version}" if golden_version else "No Golden Source selected"),
+    ]
+    return '<div class="context-grid">' + "".join(
+        f'<div class="context-cell"><span>{escape(label)}</span><strong>{escape(str(value))}</strong></div>'
+        for label, value in cells
+    ) + "</div>"
+
+
+def _controlled_elements_html(rows: list[dict[str, object]]) -> str:
+    identities = {str(row.get("identity_identifier", row.get("identity", ""))) for row in rows}
+    accesses = {str(row.get("access", "")) for row in rows}
+    permissions = {str(row.get("permission", "")) for row in rows}
+    sources = {str(row.get("provider", "")) for row in rows}
+    cells = [("Sources", len(sources)), ("Identities", len(identities)), ("Accesses / roles", len(accesses)), ("Permissions", len(permissions))]
+    return '<div class="control-grid">' + "".join(
+        f'<div class="control-card"><strong>{value}</strong><span>{label}</span></div>'
+        for label, value in cells
+    ) + '</div>'
+
+
+def _actions_html(rows: list[dict[str, object]]) -> str:
+    actions = [row for row in rows if row.get("action") not in {None, "", "No action"}]
+    if not actions:
+        return '<div class="empty-panel">No operational action was generated from the recorded decisions.</div>'
+    grouped = sorted(actions, key=lambda row: (str(row.get("provider", "")), str(row.get("access", "")), str(row.get("identity", ""))))
+    body = "".join(
+        '<tr>'
+        + "".join(
+            f'<td>{escape(str(row.get(key, "")))}</td>'
+            for key in ("action", "provider", "access", "identity", "permission", "action_reason", "reviewer")
+        )
+        + '</tr>'
+        for row in grouped
+    )
+    headers = ("Action", "Source", "Access / role", "Identity", "Permission", "Reason", "Decision by")
+    return '<div class="action-table"><table><thead><tr>' + "".join(f'<th>{header}</th>' for header in headers) + '</tr></thead><tbody>' + body + '</tbody></table></div>'
 
 
 def _summary(rows: list[dict[str, object]]) -> dict[str, int]:

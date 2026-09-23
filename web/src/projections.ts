@@ -12,6 +12,7 @@ export function pageLabel(total: number, limit: number, offset: number): string 
 export function roleHome(role: string): string {
   if (role === "GROUP_OWNER") return "/reviews";
   if (role === "BUSINESS_ADMIN") return "/actions";
+  if (role === "REMEDIATION_MANAGER") return "/remediation";
   return "/";
 }
 export function pendingFirst(a: { decision?: unknown }, b: { decision?: unknown }): number {

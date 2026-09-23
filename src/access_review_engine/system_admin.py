@@ -8,7 +8,7 @@ import secrets
 import sqlite3
 from typing import Any, Callable
 
-ROLES = {"ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN"}
+ROLES = {"ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}
 LOCAL_SOURCE = "local"
 
 def init_system(conn: sqlite3.Connection) -> None:

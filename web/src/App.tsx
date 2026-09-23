@@ -10,6 +10,7 @@ import {
   Database,
   FileDown,
   KeyRound,
+  Languages,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -35,6 +36,7 @@ import {
   logout,
   postDecision,
   postJson,
+  patchJson,
   putJson,
   type Principal,
   type Row,
@@ -404,6 +406,31 @@ const UI_LABEL_KEYS: Record<string, string> = {
   Save: "common.save", Cancel: "common.cancel", Close: "common.close", Edit: "common.edit", Delete: "common.delete",
   Add: "common.add", Remove: "common.remove", Search: "common.search", Loading: "common.loading",
   Approve: "campaign.approve", Revoke: "campaign.revoke", "Not applicable": "campaign.notApplicable",
+  Campaign: "labels.campaign", Scope: "labels.scope", Status: "labels.status", Progress: "labels.progress",
+  Pending: "labels.pending", "Due date": "labels.dueDate", Identity: "labels.identity", Access: "labels.access",
+  State: "labels.state", Decision: "labels.decision", Reason: "labels.reason", Reviewer: "labels.reviewer", Provider: "labels.provider",
+  Findings: "labels.findings", Reviews: "labels.reviews", Decided: "labels.decided",
+  Classification: "labels.classification", Observed: "labels.observed", Expected: "labels.expected",
+  "Requested action": "labels.requestedAction", "Access / Application": "labels.accessApplication", Action: "labels.action",
+  Accesses: "labels.accesses", "Source / IdP": "labels.sourceIdp", Mode: "labels.mode", "Direct / Effective": "labels.directEffective",
+  Why: "labels.why", "Latest decision": "labels.latestDecision", Decide: "labels.decide", Finding: "labels.finding", Change: "labels.change",
+  "Golden comment": "labels.goldenComment", Control: "labels.control", Assessment: "labels.assessment", "Golden usage": "labels.goldenUsage",
+  Version: "labels.version", Origin: "labels.origin", Created: "labels.created", When: "labels.when", Actor: "labels.actor", Event: "labels.event",
+  Object: "labels.object", Details: "labels.details", User: "labels.user", Username: "labels.username", "Signs in with": "labels.signsInWith",
+  Role: "labels.role", "Authorized domains": "labels.authorizedDomains", "API access": "labels.apiAccess", "Pending reviews": "labels.pendingReviews",
+  Person: "labels.person", Login: "labels.login", Email: "labels.email",
+  "Still waiting": "labels.stillWaiting", "Review items": "labels.reviewItems", "Observed snapshot": "labels.observedSnapshot",
+  "Expected state": "labels.expectedState", "Open campaign": "labels.openCampaign", "Close campaign": "labels.closeCampaign",
+  Prepare: "labels.prepare", Review: "labels.review", Closed: "labels.closed", Remediation: "labels.remediation",
+  Report: "labels.report", "Update baseline": "labels.updateBaseline",
+  "No campaign yet": "ui.noCampaignYet", "Create a campaign": "ui.createCampaign", "Hide report": "ui.hideReport", "View report": "ui.viewReport",
+  "Download HTML": "ui.downloadHtml", "Download CSV": "ui.downloadCsv", "Download JSON": "ui.downloadJson", "Download PDF": "ui.downloadPdf",
+  "Open full report": "ui.openFullReport", "Final campaign report": "ui.finalCampaignReport", "Governance evidence": "ui.governanceEvidence",
+  "Actions to implement": "ui.actionsToImplement", "Operational follow-up": "ui.operationalFollowUp", "Open campaigns": "dashboard.openCampaigns",
+  "Reviews waiting": "dashboard.reviewsWaiting", "Remediation actions": "dashboard.remediationActions", "in progress": "dashboard.inProgress",
+  "to be decided": "dashboard.toBeDecided", "to carry out": "dashboard.toCarryOut", "Your reviews": "dashboard.yourReviews",
+  "Open my queue": "dashboard.openMyQueue", "Needs attention": "dashboard.needsAttention", "Campaigns in progress": "dashboard.campaignsInProgress",
+  "No results": "common.noResults", "No reviews assigned": "ui.noReviewsAssigned", "No campaign is open": "ui.noCampaignOpen",
 };
 const uiLabel = (value: string) => UI_LABEL_KEYS[value] ? ui(UI_LABEL_KEYS[value]) : value;
 
@@ -435,7 +462,7 @@ const navSections = [
     items: [
       { to: "/campaigns", label: "Campaigns", icon: Check, roles: ["ADMIN", "OPERATOR"] },
       { to: "/findings", label: "Findings", icon: AlertTriangle, roles: ["ADMIN", "OPERATOR"] },
-      { to: "/actions", label: "Actions", icon: Check, roles: ["ADMIN", "OPERATOR", "BUSINESS_ADMIN"] },
+      { to: "/actions", label: "Actions", icon: Check, roles: ["ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"] },
       { to: "/reports", label: "Reports", icon: FileDown, roles: ["ADMIN", "OPERATOR"] },
     ],
   },
@@ -586,6 +613,7 @@ const STATUS_LABELS: Record<string, string> = {
   OPERATOR: "Operator",
   GROUP_OWNER: "Group owner",
   BUSINESS_ADMIN: "Business admin",
+  REMEDIATION_MANAGER: "Remediation manager",
   QUEUED: "Queued",
   RUNNING: "Running",
   SUCCEEDED: "Completed",
@@ -629,6 +657,14 @@ function Status({ v }: { v: unknown }) {
       {label}
     </span>
   );
+}
+function expectedMeaning(row: Row): string {
+  const classification = s(row.classification, "");
+  if (classification === "no_reference" || classification === "unknown_due_to_scope") return ui("ui.expectedNotDetermined", { defaultValue: "Non déterminé" });
+  return row.expected ? ui("ui.accessExpected", { defaultValue: "Oui" }) : ui("ui.accessNotExpected", { defaultValue: "Non" });
+}
+function observedMeaning(row: Row): string {
+  return row.observed ? ui("ui.accessObserved", { defaultValue: "Présent" }) : ui("ui.accessNotObserved", { defaultValue: "Absent" });
 }
 function Filter({
   v,
@@ -683,7 +719,7 @@ function ProviderFilter({
   const q = useQuery({ queryKey: ["provider-options"], queryFn: () => getPage("providers", { limit: 500 }) });
   return (
     <select className="filter-button" value={value} onChange={(event) => onChange(event.target.value)}>
-      <option value="">{placeholder}</option>
+      <option value="">{uiLabel(placeholder)}</option>
       {arr(q.data?.items).map((provider) => (
         <option key={s(provider.name)} value={s(provider.name)}>
           {providerLabel(provider)}
@@ -928,19 +964,23 @@ function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: (
         </div>
         <ApiTokenPanel menuOpen={menuOpen} />
         <div className="user-menu-section">
-          <span className="user-menu-label">{ui("settings.language")}</span>
-          <select
-            aria-label={ui("settings.selectLanguage")}
-            value={(SUPPORTED_LOCALES as readonly string[]).includes(i18n.language) ? i18n.language : "en"}
-            onChange={(event) => void setLocale(event.target.value)}
-          >
-            {SUPPORTED_LOCALES.map((locale: Locale) => <option key={locale} value={locale}>{LOCALE_LABELS[locale]}</option>)}
-          </select>
-        </div>
-        <div className="user-menu-section">
           <span className="user-menu-label">
             <Palette size={13} /> {ui("settings.settings")}
           </span>
+          <label className="setting-option">
+            <Languages size={16} />
+            <span className="style-option-text">
+              <strong>{ui("settings.language")}</strong>
+              <small>{ui("settings.selectLanguage")}</small>
+            </span>
+            <select
+              aria-label={ui("settings.selectLanguage")}
+              value={(SUPPORTED_LOCALES as readonly string[]).includes(i18n.language) ? i18n.language : "en"}
+              onChange={(event) => void setLocale(event.target.value)}
+            >
+              {SUPPORTED_LOCALES.map((locale: Locale) => <option key={locale} value={locale}>{LOCALE_LABELS[locale]}</option>)}
+            </select>
+          </label>
           {THEMES.map((option) => (
             <button
               className={"style-option" + (theme === option.id ? " active" : "")}
@@ -1071,8 +1111,8 @@ function Table({
             <tr className="empty-row">
               <td colSpan={cols.length}>
                 <div className="empty">
-                  <strong>{emptyTitle}</strong>
-                  <span>{emptyText}</span>
+                <strong>{uiLabel(emptyTitle)}</strong>
+                <span>{uiLabel(emptyText)}</span>
                 </div>
               </td>
             </tr>
@@ -1269,9 +1309,9 @@ function Home() {
       <div className="metrics">
         {tiles.map(([label, value, link, hint]) => (
           <NavLink className="metric" to={link} key={label}>
-            <div className="metric-label">{label}</div>
+            <div className="metric-label">{uiLabel(label)}</div>
             <strong>{s(value, "0")}</strong>
-            <small>{hint}</small>
+            <small>{uiLabel(hint)}</small>
           </NavLink>
         ))}
       </div>
@@ -1279,9 +1319,9 @@ function Home() {
         <div className="dashboard-grid">
           <section className="panel">
             <div className="panel-title">
-              <h2>Your reviews</h2>
+              <h2>{uiLabel("Your reviews")}</h2>
               <NavLink className="text-button" to="/reviews">
-                Open my queue
+                {uiLabel("Open my queue")}
               </NavLink>
             </div>
             {Number(myReviews.total ?? 0) ? (
@@ -1307,12 +1347,12 @@ function Home() {
                 </small>
               </div>
             ) : (
-              <p className="muted">No review is assigned to you right now.</p>
+              <p className="muted">{ui("dashboard.noReviewAssigned")}</p>
             )}
           </section>
           <section className="panel">
             <div className="panel-title">
-              <h2>Access rights you own</h2>
+            <h2>{ui("dashboard.accessRightsYouOwn")}</h2>
               <span className="muted">
                 {s(mine.owned_total, "0")} right(s)
                 {vals(mine.applications).length ? ` · ${vals(mine.applications).join(", ")}` : ""}
@@ -1342,7 +1382,7 @@ function Home() {
       <div className="dashboard-grid">
         <section className="panel">
           <div className="panel-title">
-            <h2>Needs attention</h2>
+            <h2>{uiLabel("Needs attention")}</h2>
             <span className="muted">
               {attention.length ? `${attention.length} item(s)` : "nothing pending"}
             </span>
@@ -1376,9 +1416,9 @@ function Home() {
         </section>
         <section className="panel">
           <div className="panel-title">
-            <h2>Campaigns in progress</h2>
+            <h2>{uiLabel("Campaigns in progress")}</h2>
             <NavLink className="text-button" to="/campaigns">
-              See all
+              {ui("nav.seeAll")}
             </NavLink>
           </div>
           {campaigns.length ? (
@@ -1407,9 +1447,9 @@ function Home() {
             <p className="muted">No campaign is open. Start one when a collection is up to date.</p>
           )}
           <div className="panel-title" style={{ marginTop: 24 }}>
-            <h2>Sources</h2>
+            <h2>{ui("dashboard.sources")}</h2>
             <NavLink className="text-button" to="/sources">
-              Manage
+              {ui("nav.manage")}
             </NavLink>
           </div>
           {sources.length ? (
@@ -2100,14 +2140,16 @@ function List({ path, title }: { path: string; title: string }) {
     findings = path === "findings",
     [provider, setProvider] = useState(""),
     [status, setStatus] = useState(""),
+    [action, setAction] = useState(""),
     [campaign, setCampaign] = useState(""),
-    x = useList(path, { provider, status, campaign }),
+    x = useList(path, { provider, status, campaign, action: path === "remediation-actions" ? action : undefined }),
     [selected, setSelected] = useState<Row | null>(null),
     campaignRows = arr(campaigns.data?.items),
     selectedCampaignName = s(
       campaignRows.find((item) => s(item.id) === campaign)?.display_name,
       s(campaignRows.find((item) => s(item.id) === campaign)?.name, "Current state"),
-    );
+    ),
+    exportParams = new URLSearchParams({ provider, status, action, campaign });
   return (
     <>
       <Head title={title} />
@@ -2120,9 +2162,12 @@ function List({ path, title }: { path: string; title: string }) {
         <SelectFilter
           value={status}
           onChange={setStatus}
-          options={findings ? ["unexpected", "missing", "expected_and_observed"] : ["pending", "exported"]}
+          options={findings ? ["unexpected", "missing", "expected_and_observed"] : ["pending", "exported", "completed", "not_completed"]}
           placeholder="Status"
         />
+        {!findings ? (
+          <SelectFilter value={action} onChange={setAction} options={["revoke", "grant"]} placeholder="Action" />
+        ) : null}
         <CampaignFilter
           value={campaign}
           onChange={setCampaign}
@@ -2130,34 +2175,34 @@ function List({ path, title }: { path: string; title: string }) {
         />
       </Filter>
       <Table
-        cols={
-          findings
-            ? ["Classification", "Identity", "Access", "Source", "Campaign", "Observed", "Expected"]
-            : ["Identity", "Requested action", "Access / Application", "Campaign", "Status"]
-        }
-        fields={
-          findings
-            ? ["classification", "identity_identifier", "access_name", "access_provider", null, null, null]
-            : ["identity_display_name", "action", "access_display_name", "campaign_id", "status"]
-        }
+          cols={
+            findings
+            ? ["Identity", "Access", "Source", "Classification", "Campaign", "Observed", "Expected"]
+            : ["Identity", "Requested action", "Access / Application", "Campaign", "Reason", "Decision by", "Status"]
+          }
+          fields={
+            findings
+            ? ["identity_identifier", "access_name", "access_provider", "classification", null, null, null]
+            : ["identity_display_name", "action", "access_display_name", "campaign_id", "comment", "decided_by", "status"]
+          }
         sorting={x.sorting}
         filtering={x.filtering}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) =>
           findings
             ? [
-                <Status v={r.classification} />,
                 <button
                   className="link-button"
-                  onClick={() => setSelected({ ...r, campaign_name: selectedCampaignName })}
+                  onClick={() => setSelected({ ...r, campaign_id: campaign || null, campaign_name: selectedCampaignName })}
                 >
                   {s((r.identity as Row | undefined)?.display_name, s(r.identity_identifier))}
                 </button>,
                 s((r.access as Row | undefined)?.display_name, s(r.access_name)),
                 s(r.access_provider),
+                <Status v={r.classification} />,
                 selectedCampaignName,
-                s(r.observed),
-                s(r.expected),
+                observedMeaning(r),
+                expectedMeaning(r),
               ]
             : [
                 <button className="link-button" onClick={() => setSelected(r)}>
@@ -2166,10 +2211,13 @@ function List({ path, title }: { path: string; title: string }) {
                 s(r.action, s(r.decision)),
                 s(r.access_display_name, s(r.access_name)),
                 s(r.campaign_name, s(r.campaign_id)),
+                s(r.comment),
+                s(r.decided_by),
                 <Status v={r.status} />,
               ],
         )}
       />
+      {!findings ? <div className="button-row action-export-row"><a className="button subtle" href={`/api/remediation-actions/export?${exportParams.toString()}`}>Download remediation CSV</a></div> : null}
       <Pager
         total={x.q.data?.total ?? 0}
         limit={x.limit}
@@ -2187,6 +2235,23 @@ function List({ path, title }: { path: string; title: string }) {
   );
 }
 function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
+  const toast = useToast(),
+    [ticket, setTicket] = useState(s((row.finding_tracking as Row | undefined)?.ticket, "")),
+    [comment, setComment] = useState(s((row.finding_tracking as Row | undefined)?.comment, "")),
+    save = useMutation({
+      mutationFn: () => patchJson("findings/tracking", {
+        campaign_id: row.campaign_id,
+        access_provider: row.access_provider,
+        access_name: row.access_name,
+        identity_provider: row.identity_provider,
+        identity_identifier: row.identity_identifier,
+        classification: row.classification,
+        ticket,
+        comment,
+      }),
+      onSuccess: () => toast("ok", "Finding tracking saved"),
+      onError: (error) => toast("error", s(error, "Unable to save finding tracking")),
+    });
   return (
     <Drawer title="Finding" close={close}>
       <h4>WHAT HAPPENED</h4>
@@ -2199,10 +2264,26 @@ function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
       <p className="muted">{describeAccess((row.access as Row) ?? row)}</p>
       <p>Source: {s(row.access_provider)}</p>
       {row.campaign_id != null || row.campaign_name ? <p>Campaign: {s(row.campaign_name, s(row.campaign_id))}</p> : null}
+      <h4>OPTIONAL TICKET</h4>
+      <label>Ticket reference<input value={ticket} onChange={(event) => setTicket(event.target.value)} placeholder="INC-1234 or Jira key" /></label>
+      <label>Follow-up comment<textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Business or operational follow-up" /></label>
+      <button className="button primary" disabled={save.isPending} onClick={() => save.mutate()}>Save ticket and comment</button>
     </Drawer>
   );
 }
 function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
+  const queryClient = useQueryClient(),
+    toast = useToast(),
+    [comment, setComment] = useState(""),
+    update = useMutation({
+      mutationFn: (status: string) => patchJson(`remediation-actions/${encodeURIComponent(s(row.id))}/status`, { status, comment }),
+      onSuccess: async () => {
+        toast("ok", "Remediation status saved");
+        await queryClient.invalidateQueries({ queryKey: ["remediation-actions"] });
+        close();
+      },
+      onError: (error) => toast("error", s(error, "Unable to update remediation status")),
+    });
   return (
     <Drawer title={`${s(row.action, s(row.decision))} · ${s(row.access_display_name, s(row.access_name))}`} close={close}>
       <h4>WHAT TO DO</h4>
@@ -2216,7 +2297,55 @@ function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
       <p>Comment: {s(row.comment)}</p>
       <h4>STATUS</h4>
       <Status v={row.status} />
+      {s((row.details as Row | undefined)?.status_comment, "") ? <p className="muted">{s((row.details as Row | undefined)?.status_comment)}</p> : null}
+      <label>
+        Administrator comment
+        <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="What was done, or why is it not completed?" />
+      </label>
+      <div className="button-row">
+        <button className="button subtle" disabled={update.isPending} onClick={() => update.mutate("not_completed")}>Acknowledge / not completed</button>
+        <button className="button" disabled={update.isPending} onClick={() => update.mutate("completed")}>Acknowledge completed</button>
+      </div>
     </Drawer>
+  );
+}
+function RemediationManager() {
+  return (
+    <>
+      <Head title="Remediation follow-up" />
+      <div className="panel page-intro">
+        <h3>Operational remediation queue</h3>
+        <p className="muted">Administrators record what was done or not done. EARE only records the follow-up and never changes a source.</p>
+      </div>
+      <List path="remediation-actions" title="Actions to follow up" />
+    </>
+  );
+}
+function CampaignWorkflow({ status, pending }: { status: string; pending: number }) {
+  const steps = [
+    ["Prepare", status === "draft" ? "active" : "done"],
+    ["Review", status === "open" ? "active" : status === "draft" ? "pending" : "done"],
+    ["Closed", status === "closed" ? "done" : "pending"],
+    ["Remediation", status === "closed" ? (pending ? "active" : "done") : "pending"],
+    ["Report", status === "closed" ? "active" : "pending"],
+  ];
+  return (
+    <section className="panel campaign-workflow" aria-label="Campaign workflow">
+      <div className="workflow-steps">
+        {steps.map(([label, state], index) => (
+          <div className={`workflow-step ${state}`} key={label}>
+            <span>{state === "done" ? "✓" : index + 1}</span>
+            <strong>{uiLabel(label)}</strong>
+            {label === "Review" && status === "open" ? <small>{pending} pending</small> : null}
+          </div>
+        ))}
+      </div>
+      <p className="muted workflow-note">
+        {status === "draft" ? "Prepare the scope, observed state, expected state and reviewers before opening." : null}
+        {status === "open" ? "Reviewers certify access rights. Close the campaign when every review is decided." : null}
+        {status === "closed" ? "The result is frozen. Remediation actions and the final report are now available." : null}
+      </p>
+    </section>
   );
 }
 function Campaigns() {
@@ -2381,7 +2510,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
             />
           </label>
           <label>
-            Campaign pilot
+            <span className="step-label">4</span> Campaign pilot / reviewers
             <select required value={s(form.pilot, principal.username)} onChange={(e) => setForm({ ...form, pilot: e.target.value })}>
               <option value="">Select an ADMIN or OPERATOR</option>
               {pilots.map((pilot) => <option key={s(pilot.username)} value={s(pilot.username)}>{s(pilot.display_name, s(pilot.username))} · {s(pilot.role)}</option>)}
@@ -2504,7 +2633,8 @@ function CampaignNew({ principal }: { principal: Principal }) {
       </section>
       {preview && (
         <section className="panel">
-          <h2>Campaign preview</h2>
+          <h2><span className="step-label">5</span> Preview before opening</h2>
+          <p className="muted">Preview calculates what would be reviewed. Open campaign freezes the Snapshot evidence, materializes ReviewItems and starts the review.</p>
           <div className="preview-context">
             <span><strong>Scope</strong>{scopeType === "providers" ? vals(form.providers).join(", ") : scopeType === "accesses" ? selectedAccesses.map((access) => `${s(access.provider)}/${s(access.name)}`).join(", ") : "All authorized sources"}</span>
             <span><strong>Snapshot</strong>{when(snapshots.find((row) => row.id === form.snapshot_id)?.created_at)}</span>
@@ -2516,8 +2646,12 @@ function CampaignNew({ principal }: { principal: Principal }) {
               <small>Review items</small>
             </div>
             <div className="metric">
+              <strong>{s(preview.reviewer_count, "0")}</strong>
+              <small>Reviewers</small>
+            </div>
+            <div className="metric">
               <strong>{s(preview.resolved_reviewers, "0")}</strong>
-              <small>Reviewers resolved</small>
+              <small>Resolved</small>
             </div>
             <div className="metric">
               <strong>{s(preview.unresolved_reviewers, "0")}</strong>
@@ -2632,6 +2766,7 @@ function CampaignDetail() {
           })}
         </div>
       </Head>
+      <CampaignWorkflow status={status} pending={pending} />
       <div className="tabs">
         <button
           className={tab === "overview" ? "text-button active" : "text-button"}
@@ -2668,6 +2803,26 @@ function CampaignDetail() {
               </div>
             ))}
           </div>
+          {status === "closed" ? (
+            <section className="panel campaign-result-panel">
+              <div>
+                <span className="eyebrow">Campaign result</span>
+                <h2>Review completed</h2>
+                <p className="muted">
+                  {s(c.review_items ?? reviews.length, "0")} review items · {s(c.remediation_actions ?? (q.data?.remediation_summary as Row | undefined)?.total, "0")} remediation actions
+                </p>
+              </div>
+              <div className="result-actions">
+                <NavLink className="button primary" to={`/reports?campaign=${encodeURIComponent(id)}`}>View final report</NavLink>
+                <a className="button subtle" href={`/api/reports/${encodeURIComponent(id)}/html`}>{uiLabel("Download HTML")}</a>
+                <a className="button subtle" href={`/api/reports/${encodeURIComponent(id)}/pdf`}>{uiLabel("Download PDF")}</a>
+                <a className="button subtle" href={`/api/reports/${encodeURIComponent(id)}/csv`}>{uiLabel("Download CSV")}</a>
+                <a className="button subtle" href={`/api/reports/${encodeURIComponent(id)}/json`}>{uiLabel("Download JSON")}</a>
+                <NavLink className="button subtle" to={`/actions?campaign=${encodeURIComponent(id)}`}>View remediation actions</NavLink>
+                <button className="button subtle" type="button" onClick={() => setConfirmAction("promote")}>Promote decisions to Golden</button>
+              </div>
+            </section>
+          ) : null}
           <div className="dashboard-grid">
             <section className="panel">
               <div className="panel-title">
@@ -3105,6 +3260,25 @@ function Golden() {
       },
       onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to change the Golden Source") }),
     }),
+    addExpectedAccess = useMutation({
+      mutationFn: () => postJson(`golden-sources/${encoded}/functional-model`, {
+        access_provider: s(adding?.access_provider, "").trim(),
+        access_name: s(adding?.access_name, "").trim(),
+        manual_access: true,
+        access_display_name: s(adding?.access_name, "").trim(),
+        access_type: "access",
+        completeness: "not_defined",
+        rights: [],
+        grants: [],
+        version_comment: "Expected access defined without an expected holder",
+      }),
+      onSuccess: async (data) => {
+        setAdding(null);
+        setNotice({ tone: "ok", text: `Expected access added in Golden v${s(data.version)}` });
+        await refresh();
+      },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to add the expected access") }),
+    }),
     updateVersionComment = useMutation({
       mutationFn: () => postJson(`golden-sources/${encoded}/version-comment`, { comment: versionComment }),
       onSuccess: async (data) => {
@@ -3531,7 +3705,7 @@ function Golden() {
                 </button>
               </Filter>
               <Table
-                cols={["Identity", "Access", "Application", "Permission", "Golden comment", "Source", ""]}
+                cols={["Identity", "Access", "Application", "Permission", "Golden comment", "Source", "Actions"]}
                 fields={[
                   "identity_display_name",
                   "access_display_name",
@@ -3544,17 +3718,44 @@ function Golden() {
                 sorting={sorting}
                 filtering={columns.filtering}
                 q={content}
-                rows={expected.map((r) => [
-                  s(r.identity_display_name, s(r.identity_identifier)),
-                  s(r.access_display_name, s(r.access_name)),
-                  contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "Unknown",
-                  contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "Not provided",
-                  <button className="link-button" onClick={() => { setCommenting(r); setAssignmentComment(s(r.golden_comment, "")); }}>
-                    {s(r.golden_comment, "Add comment")}
-                  </button>,
-                  s(r.access_provider),
-                  <button className="link-button" onClick={() => setRemoving(r)}>Remove</button>,
-                ])}
+                rows={expected.map((r) => {
+                  const key = `${s(r.access_provider)}:${s(r.access_name)}:${s(r.identity_provider)}:${s(r.identity_identifier)}`;
+                  const editing = editingHolder?.key === key;
+                  return [
+                    editing ? (
+                      <div className="inline-edit-stack">
+                        <select value={s(editingHolder?.identity_provider, "")} onChange={(event) => setEditingHolder({ ...editingHolder, identity_provider: event.target.value, identity_identifier: "" })}>
+                          <option value="">Select source</option>
+                          {arr(providerOptions.data?.items).map((provider) => <option key={s(provider.name)} value={s(provider.name)}>{s(provider.display_name, s(provider.name))}</option>)}
+                        </select>
+                        <select value={s(editingHolder?.identity_identifier, "")} onChange={(event) => setEditingHolder({ ...editingHolder, identity_identifier: event.target.value })}>
+                          <option value="">Select holder</option>
+                          {arr(holderIdentityOptions.data?.items).map((identity) => {
+                            const identifier = s(identity.identifier, s(identity.id));
+                            return <option key={identifier} value={identifier}>{s(identity.display_name, identifier)}</option>;
+                          })}
+                        </select>
+                      </div>
+                    ) : s(r.identity_display_name, s(r.identity_identifier)),
+                    s(r.access_display_name, s(r.access_name)),
+                    contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "Unknown",
+                    contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "Not provided",
+                    <button className="link-button" onClick={() => { setCommenting(r); setAssignmentComment(s(r.golden_comment, "")); }}>
+                      {s(r.golden_comment, "Add comment")}
+                    </button>,
+                    s(r.access_provider),
+                    <div className="row-actions">
+                      {editing ? <>
+                        <button className="link-button" disabled={edit.isPending || !s(editingHolder?.identity_provider, "") || !s(editingHolder?.identity_identifier, "")} onClick={() => edit.mutate({
+                          remove: [{ access_provider: r.access_provider, access_name: r.access_name, identity_provider: r.identity_provider, identity_identifier: r.identity_identifier, access_native_id: r.access_native_id, access_permission: r.access_permission, identity_native_id: r.identity_native_id }],
+                          add: [{ access_provider: r.access_provider, access_name: r.access_name, identity_provider: editingHolder?.identity_provider, identity_identifier: editingHolder?.identity_identifier, access_native_id: r.access_native_id, access_permission: r.access_permission, identity_native_id: editingHolder?.identity_native_id }],
+                        })}>Save</button>
+                        <button className="link-button" onClick={() => setEditingHolder(null)}>Cancel</button>
+                      </> : <button className="link-button" onClick={() => setEditingHolder({ ...r, key, original_identity_provider: r.identity_provider, original_identity_identifier: r.identity_identifier })}>Edit</button>}
+                      {!editing ? <button className="link-button" onClick={() => setRemoving(r)}>Remove</button> : null}
+                    </div>,
+                  ];
+                })}
               />
               <Pager
                 total={Number(content.data?.total ?? 0)}
@@ -3870,13 +4071,13 @@ function Golden() {
             className="admin-form"
             onSubmit={(e) => {
               e.preventDefault();
-              edit.mutate({ add: [adding] });
+              if (s(adding.identity_identifier, "").trim()) edit.mutate({ add: [adding] });
+              else addExpectedAccess.mutate();
             }}
           >
             <label>
-              Identity
+              Expected holder (optional)
               <input
-                required
                 list="golden-assignment-identities"
                 placeholder="alice.martin"
                 value={s(adding.identity_identifier, "")}
@@ -3884,9 +4085,8 @@ function Golden() {
               />
             </label>
             <label>
-              Identity source
+              Holder source (optional)
               <input
-                required
                 list="golden-assignment-providers"
                 placeholder="corp-ad"
                 value={s(adding.identity_provider, "")}
@@ -3921,7 +4121,8 @@ function Golden() {
                 onChange={(e) => setAdding({ ...adding, access_permission: e.target.value })}
               />
             </label>
-            <button className="button primary" type="submit" disabled={edit.isPending}>
+            <p className="field-note">No holder? The access will still be added to the expected state, and you can assign one or more holders later from <strong>Who holds them</strong>.</p>
+            <button className="button primary" type="submit" disabled={edit.isPending || addExpectedAccess.isPending}>
               Add to the expected state
             </button>
           </form>
@@ -4452,6 +4653,7 @@ function Reports() {
     }),
     campaigns = arr(campaignsQuery.data?.items),
     [chosen, setChosen] = useState(() => new URLSearchParams(window.location.search).get("campaign") ?? ""),
+    [showPreview, setShowPreview] = useState(true),
     // Reports are read after a campaign is closed: offer that one first.
     selected =
       campaigns.find((r) => s(r.id) === chosen) ??
@@ -4508,9 +4710,15 @@ function Reports() {
         }),
       enabled: Boolean(id),
     }),
+    remediationQuery = useQuery({
+      queryKey: ["report-remediation", id],
+      queryFn: () => getPage("remediation-actions", { campaign: id, limit: 100 }),
+      enabled: Boolean(id),
+    }),
     summary = (q.data?.summary ?? {}) as Row,
     facets = (q.data?.facets ?? {}) as Row,
     rows = arr(q.data?.items),
+    remediationActions = arr(remediationQuery.data?.items),
     campaign = (q.data?.campaign ?? {}) as Row;
   useEffect(() => setOffset(0), [debounced, classification, decision, provider, owner, id]);
   if (!campaigns.length)
@@ -4519,10 +4727,10 @@ function Reports() {
         <Head title="Reports" />
         <div className="table-wrap">
           <div className="empty">
-            <strong>No campaign yet</strong>
-            <span>A report describes what a campaign decided. Run one first.</span>
+            <strong>{uiLabel("No campaign yet")}</strong>
+            <span>{ui("ui.reportExplain", { defaultValue: "A report describes what a campaign decided. Run one first." })}</span>
             <NavLink className="button subtle" to="/campaigns/new">
-              Create a campaign
+              {uiLabel("Create a campaign")}
             </NavLink>
           </div>
         </div>
@@ -4532,14 +4740,20 @@ function Reports() {
     <>
       <Head title="Reports">
         <div className="button-row">
+          <button className="button primary" type="button" onClick={() => setShowPreview((value) => !value)}>
+            {showPreview ? uiLabel("Hide report") : uiLabel("View report")}
+          </button>
+          <a className="button subtle" href={`/api/reports/${id}/html`}>
+            {uiLabel("Download HTML")}
+          </a>
           <a className="button subtle" href={`/api/reports/${id}/csv`}>
-            Download CSV
+            {uiLabel("Download CSV")}
           </a>
           <a className="button subtle" href={`/api/reports/${id}/json`}>
-            Download JSON
+            {uiLabel("Download JSON")}
           </a>
-          <a className="button primary" href={`/api/reports/${id}/html`}>
-            Download report
+          <a className="button subtle" href={`/api/reports/${id}/pdf`}>
+            {uiLabel("Download PDF")}
           </a>
         </div>
       </Head>
@@ -4560,6 +4774,61 @@ function Reports() {
               : "not opened yet"}
         </span>
       </div>
+      {showPreview ? <section className="report-workspace">
+        <div className="report-workspace-head">
+          <div>
+            <span className="eyebrow">{uiLabel("Governance evidence")}</span>
+            <h2>{uiLabel("Final campaign report")}</h2>
+            <p className="muted">{ui("ui.reportDisplayed", { defaultValue: "The report is displayed here as a complete document. Use the downloads above to distribute it." })}</p>
+          </div>
+          <a className="button subtle" href={`/api/reports/${id}/html?inline=true`} target="_blank" rel="noreferrer">
+            {uiLabel("Open full report")}
+          </a>
+        </div>
+        <section className="remediation-focus" aria-labelledby="remediation-focus-title">
+          <div className="remediation-focus-head">
+            <div>
+              <span className="eyebrow">{uiLabel("Operational follow-up")}</span>
+              <h2 id="remediation-focus-title">{uiLabel("Actions to implement")}</h2>
+              <p>{ui("ui.remediationReadonly", { defaultValue: "These are instructions for administrators. EARE does not change AD, LDAP, cloud or application providers." })}</p>
+            </div>
+            <div className="remediation-count">
+              <strong>{remediationActions.length}</strong>
+              <span>{ui("ui.actionCount", { count: remediationActions.length })}</span>
+            </div>
+          </div>
+          {remediationActions.length ? <>
+            <div className="remediation-summary">
+              {(["revoke", "grant", "pending", "exported"] as const).map((key) => {
+                const value = key === "pending" || key === "exported"
+                  ? remediationActions.filter((item) => s(item.status, "pending") === key).length
+                  : remediationActions.filter((item) => s(item.action, "").toLowerCase() === key).length;
+                return <div key={key}><strong>{value}</strong><span>{key === "revoke" ? "to remove" : key === "grant" ? "to grant" : key}</span></div>;
+              })}
+            </div>
+            <div className="remediation-table-wrap">
+              <table className="remediation-table">
+                <thead><tr><th>Action</th><th>Account</th><th>Source</th><th>Access / role</th><th>Permission</th><th>Reason</th><th>Status</th></tr></thead>
+                <tbody>{remediationActions.slice(0, 12).map((item) => {
+                  const context = item.business_context;
+                  const application = contextValue(context, "application", "source");
+                  return <tr key={s(item.id, `${s(item.identity_identifier)}-${s(item.access_name)}`)}>
+                    <td><span className={`action-pill ${s(item.action, "").toLowerCase()}`}>{s(item.action, s(item.decision, "—"))}</span></td>
+                    <td><strong>{s(item.identity_display_name, s(item.identity_identifier))}</strong><small>{s(item.identity_provider)}</small></td>
+                    <td>{s(item.access_provider)}</td>
+                    <td><strong>{s(item.access_display_name, s(item.access_name))}</strong><small>{application || targetText(item.target)}</small></td>
+                    <td>{s(item.permission, s(item.technical_permission, "—"))}</td>
+                    <td>{s(item.comment, "Decision requires operational change")}</td>
+                    <td><Status v={item.status ?? "pending"} /></td>
+                  </tr>;
+                })}</tbody>
+              </table>
+              {remediationActions.length > 12 ? <p className="remediation-more">Showing 12 of {remediationActions.length}. <NavLink to={`/actions?campaign=${encodeURIComponent(id)}`}>View all actions</NavLink></p> : null}
+            </div>
+          </> : <div className="remediation-empty"><Check size={18} /> No remediation action was generated for this campaign.</div>}
+        </section>
+        <iframe className="report-document" title={`Final report for ${s(campaign.name)}`} src={`/api/reports/${id}/html?inline=true`} loading="lazy" />
+      </section> : null}
       <div className="metrics">
         {[
           ["Reviewed accesses", q.data?.total, "in this campaign"],
@@ -5053,6 +5322,7 @@ function UsersPage() {
                 <option>OPERATOR</option>
                 <option>GROUP_OWNER</option>
                 <option>BUSINESS_ADMIN</option>
+                <option>REMEDIATION_MANAGER</option>
               </select>
             </label>
             <p className="field-note">{roleHelp(s(form.role))}</p>
@@ -5151,6 +5421,7 @@ function roleHelp(role: string) {
   if (role === "OPERATOR")
     return "Manages campaigns only when every provider/domain exposed by the campaign is authorized.";
   if (role === "GROUP_OWNER") return "Only sees and decides the reviews assigned to this person.";
+  if (role === "REMEDIATION_MANAGER") return "Tracks remediation work for the authorized source domains and records completion evidence.";
   return "Only sees the remediation actions of the authorized domains selected for this account.";
 }
 function DirectoryPicker({

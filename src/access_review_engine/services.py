@@ -1043,6 +1043,9 @@ def promote_campaign(
             result.add(assignment)
         elif decision.value == DecisionValue.REVOKE and previous is not None:
             result.discard(previous)
+    # A campaign changes expected assignments, not the rest of the Golden V2 model. Carry the
+    # immutable definitions and policy forward so promotion cannot silently downgrade a V2
+    # version to an assignments-only V1 payload.
     return create_golden_version(
         golden_source,
         result,
@@ -1050,6 +1053,20 @@ def promote_campaign(
         [previous_version] if previous_version else [],
         source_campaign_id=campaign.id,
         parent_version_id=previous_version.id if previous_version else None,
+        golden_authentication_policy=(
+            previous_version.golden_authentication_policy if previous_version else None
+        ),
+        schema_version=previous_version.schema_version if previous_version else 1,
+        expected_access_definitions=(
+            previous_version.expected_access_definitions if previous_version else ()
+        ),
+        expected_access_relations=(
+            previous_version.expected_access_relations if previous_version else ()
+        ),
+        functional_access_models=(
+            previous_version.functional_access_models if previous_version else ()
+        ),
+        access_comments=previous_version.access_comments if previous_version else (),
     )
 
 
