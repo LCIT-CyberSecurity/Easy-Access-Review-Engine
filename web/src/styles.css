@@ -630,3 +630,19 @@ tbody tr { transition:background-color .12s ease; }
 .api-key-once { display: grid; gap: 6px; padding: 8px 10px; overflow-wrap: anywhere; }
 .api-key-once code { font-size: 11px; user-select: all; }
 .check-row { display: flex; align-items: center; gap: 8px; }
+
+
+/* Arabic uses document direction plus logical spacing so controls and data tables remain usable. */
+[dir="rtl"] { direction: rtl; }
+[dir="rtl"] body { text-align: right; }
+[dir="rtl"] .app-shell, [dir="rtl"] .topbar, [dir="rtl"] .nav-link, [dir="rtl"] .user-menu-head, [dir="rtl"] .button-row, [dir="rtl"] .tabs, [dir="rtl"] .pagination { direction: rtl; }
+[dir="rtl"] .sidebar { border-right: 0; border-left: 1px solid var(--border); }
+[dir="rtl"] .drawer { margin-left: 0; margin-right: auto; }
+[dir="rtl"] .action-menu-panel { right: auto; left: 0; text-align: right; }
+[dir="rtl"] .menu-panel { left: auto; right: 0; }
+[dir="rtl"] .toast { border-left: 1px solid var(--border); border-right: 3px solid var(--success); }
+[dir="rtl"] .toast.error { border-right-color: var(--danger); }
+[dir="rtl"] .golden-metrics > div { border-left: 0; border-right: 1px solid var(--border); }
+[dir="rtl"] .golden-metrics > div:first-child { border-right: 0; }
+[dir="rtl"] .review-kpi { border-left: 0; border-right: 1px solid var(--border); }
+[dir="rtl"] .review-kpi:first-child { border-right: 0; }

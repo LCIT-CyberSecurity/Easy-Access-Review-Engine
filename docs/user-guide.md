@@ -327,3 +327,7 @@ CSV files use the columns access_provider, access_name, identity_provider, and i
 ## Golden functional model (V2)
 
 Golden Source versions can record what an Access is expected to grant as well as who should hold it. A functional right is a Target plus Capability, such as `Invoices / approve`; a capability alone is not an authorization identity. Native permissions such as `SELECT`, `member`, and `s3:GetObject` retain their technical meaning.
+
+## Language selection
+
+The WebUI language is selected from the current-user menu. Available languages are English, Français, Español, Português, Italiano and العربية. English is used by default and whenever a translation is unavailable. The choice applies immediately and is persisted as a browser UI preference only; business data, technical values and user-entered comments are never translated. Arabic switches the interface to right-to-left layout.

@@ -23,6 +23,8 @@ import {
   X,
 } from "lucide-react";
 import { applyTheme, readTheme, storeTheme, THEMES, type ThemeId } from "./theme";
+import { LOCALE_LABELS, SUPPORTED_LOCALES, i18n, setLocale, type Locale } from "./i18n";
+import { useTranslation } from "react-i18next";
 import {
   changePassword,
   deleteJson,
@@ -58,6 +60,7 @@ const s = (v: unknown, f = "—") =>
     Array.isArray(v) ? v.filter((x): x is Row => !!x && typeof x === "object") : [],
   vals = (v: unknown) => (Array.isArray(v) ? v.map(String) : []),
   pct = (v: unknown) => Math.max(0, Math.min(100, Number(v) || 0));
+const ui = (key: string, options?: Record<string, string | number>) => String(i18n.t(key, options as never));
 const count = (rows: Row[], keep: (row: Row) => boolean) => rows.filter(keep).length;
 const DEFAULT_GOLDEN_CAPABILITIES = ["read", "write", "delete", "execute", "approve", "admin", "grant"];
 // The collectors store structured references; the WebUI must read them as a sentence.
@@ -192,9 +195,10 @@ function Toasts({ children }: { children: ReactNode }) {
   );
 }
 function App() {
+  useTranslation();
   const q = useQuery({ queryKey: ["session"], queryFn: getSession, retry: false });
   return q.isLoading ? (
-    <div className="loading-page">Loading EARE…</div>
+    <div className="loading-page">{ui("common.loading")} EARE</div>
   ) : q.isError ? (
     <Login />
   ) : q.data!.must_change_password ? (
@@ -215,25 +219,25 @@ function AuthFrame({ children }: { children: ReactNode }) {
             <span><strong>EARE</strong><small>Access Review Engine</small></span>
           </div>
           <div className="auth-message">
-            <span className="auth-eyebrow">ACCESS GOVERNANCE, MADE CLEAR</span>
-            <h2>Every access.<br /><em>Accounted for.</em></h2>
-            <p>See what people have, compare it with what they should have, and turn every review into a clear decision.</p>
+            <span className="auth-eyebrow">{ui("auth.accessGovernance")}</span>
+            <h2>{ui("auth.everyAccess")}<br /><em>{ui("auth.accountedFor")}</em></h2>
+            <p>{ui("auth.intro")}</p>
           </div>
           <div className="auth-process">
-            <div><span>01</span><strong>Collect</strong><small>Know the current state</small></div>
-            <div><span>02</span><strong>Compare</strong><small>Find what needs attention</small></div>
-            <div><span>03</span><strong>Certify</strong><small>Record the right decision</small></div>
+            <div><span>01</span><strong>{ui("auth.collect")}</strong><small>{ui("auth.knowCurrentState")}</small></div>
+            <div><span>02</span><strong>{ui("auth.compare")}</strong><small>{ui("auth.findAttention")}</small></div>
+            <div><span>03</span><strong>{ui("auth.certify")}</strong><small>{ui("auth.recordDecision")}</small></div>
           </div>
-          <div className="auth-foot">A product by <strong>LCIT Cybersecurity</strong></div>
+          <div className="auth-foot">{ui("auth.productBy")} <strong>LCIT Cybersecurity</strong></div>
         </aside>
         <div className="auth-form-wrap">
           <div className="auth-form-content">
             <div className="auth-company">
               <img src="/lcit-logo.png" alt="LCIT logo" />
-              <div><strong>LCIT Cybersecurity</strong><span>Identity &amp; access governance</span></div>
+              <div><strong>LCIT Cybersecurity</strong><span>{ui("auth.identityGovernance")}</span></div>
             </div>
             {children}
-            <p className="auth-form-foot">Protected access to the EARE workspace</p>
+            <p className="auth-form-foot">{ui("auth.protectedWorkspace")}</p>
           </div>
         </div>
       </div>
@@ -258,27 +262,27 @@ function PasswordChange() {
         onSubmit={(x) => {
           x.preventDefault();
           if (p !== confirm) {
-            setE("Passwords do not match");
+            setE(ui("auth.passwordMismatch"));
             return;
           }
           setE("");
           m.mutate();
         }}
       >
-        <span className="auth-eyebrow">ACCOUNT SECURITY</span>
-        <h1>Change your password</h1>
-        <p>Set a new password to continue to your workspace.</p>
+        <span className="auth-eyebrow">{ui("auth.accountSecurity")}</span>
+        <h1>{ui("auth.changePassword")}</h1>
+        <p>{ui("auth.newPasswordContinue")}</p>
         <label>
-          New password
+          {ui("auth.newPassword")}
           <span className="password-field">
             <input required autoFocus autoComplete="new-password" minLength={12} type={visible ? "text" : "password"} value={p} onChange={(x) => setP(x.target.value)} />
             <button type="button" className="text-button" aria-label={visible ? "Hide password" : "Show password"} onClick={() => setVisible(!visible)}>
-              {visible ? "Hide" : "Show"}
+              {visible ? ui("common.hide") : ui("common.show")}
             </button>
           </span>
         </label>
         <label>
-          Confirm password
+          {ui("auth.confirmPassword")}
           <input
             required
             autoComplete="new-password"
@@ -290,7 +294,7 @@ function PasswordChange() {
         </label>
         {e && <p className="form-error" role="alert">{e}</p>}
         <button className="button primary" disabled={m.isPending}>
-          {m.isPending ? "Changing password…" : "Change password"}
+          {m.isPending ? ui("auth.changing") : ui("auth.change")}
         </button>
       </form>
     </AuthFrame>
@@ -336,11 +340,11 @@ function Login() {
           m.mutate();
         }}
       >
-        <span className="auth-eyebrow">WELCOME BACK</span>
-        <h1>Welcome back</h1>
-        <p>Sign in to continue your access reviews.</p>
+        <span className="auth-eyebrow">{ui("auth.welcomeBack").toUpperCase()}</span>
+        <h1>{ui("auth.welcomeBack")}</h1>
+        <p>{ui("auth.signInContinue")}</p>
         <label>
-          Username
+          {ui("auth.username")}
           <input
             required
             autoFocus
@@ -350,7 +354,7 @@ function Login() {
           />
         </label>
         <label>
-          Password
+          {ui("auth.password")}
           <span className="password-field">
             <input
               required
@@ -365,23 +369,45 @@ function Login() {
               aria-label={visible ? "Hide password" : "Show password"}
               onClick={() => setVisible(!visible)}
             >
-              {visible ? "Hide" : "Show"}
+              {visible ? ui("common.hide") : ui("common.show")}
             </button>
           </span>
         </label>
         {signedOut && !e ? (
           <p className="form-notice" role="status">
-            <Check size={15} /> You have been signed out. Sign in again to continue.
+            <Check size={15} /> {ui("auth.signedOut")}
           </p>
         ) : null}
         {e && <p className="form-error" role="alert">{e}</p>}
         <button className="button primary" disabled={m.isPending}>
-          {m.isPending ? "Signing in…" : "Sign in"}
+          {m.isPending ? ui("auth.signingIn") : ui("auth.signIn")}
         </button>
       </form>
     </AuthFrame>
   );
 }
+const NAV_KEYS: Record<string, string> = {
+  "Overview": "nav.overview", "My Reviews": "nav.myReviews", "My Actions": "nav.myActions",
+  "ACCESS & REFERENCE": "nav.accessReference", Identities: "nav.identities", Access: "nav.access", "Golden Source": "nav.golden",
+  AUDIT: "nav.audit", Campaigns: "nav.campaigns", Findings: "nav.findings", Actions: "nav.actions", Reports: "nav.reports",
+  SYSTEM: "nav.system", "Sources & IdPs": "nav.sources", "Users & permissions": "nav.usersPermissions",
+  Authentication: "nav.authentication", "Audit trail": "nav.auditTrail",
+};
+const UI_LABEL_KEYS: Record<string, string> = {
+  ...NAV_KEYS,
+  "Expected access rights": "golden.expectedAccessRights", "Who holds them": "golden.whoHoldsThem",
+  "Changes since the last collection": "golden.changesSinceLastCollection", "Authentication policy": "golden.authenticationPolicy",
+  "Version history": "golden.versionHistory", "Access right": "golden.accessRight", Type: "golden.type", Target: "golden.target",
+  "Effective rights": "golden.effectiveRights", Owner: "golden.owner", Source: "golden.source", Model: "golden.model",
+  "Expected holders": "golden.expectedHolders", Comment: "golden.comment", Application: "golden.application",
+  Permission: "golden.permission", Resource: "golden.resource", Description: "golden.description",
+  Save: "common.save", Cancel: "common.cancel", Close: "common.close", Edit: "common.edit", Delete: "common.delete",
+  Add: "common.add", Remove: "common.remove", Search: "common.search", Loading: "common.loading",
+  Approve: "campaign.approve", Revoke: "campaign.revoke", "Not applicable": "campaign.notApplicable",
+};
+const uiLabel = (value: string) => UI_LABEL_KEYS[value] ? ui(UI_LABEL_KEYS[value]) : value;
+
+
 const navSections = [
   {
     heading: null,
@@ -440,7 +466,7 @@ function Shell({ principal }: { principal: Principal }) {
             const items = section.items.filter((x) => x.roles.includes(principal.role));
             return items.length ? (
               <div className="nav-section" key={section.heading ?? "product"}>
-                {section.heading && <div className="nav-heading">{section.heading}</div>}
+                {section.heading && <div className="nav-heading">{ui(NAV_KEYS[section.heading] ?? section.heading)}</div>}
                 {items.map(({ to, label, icon: I }) => (
                   <NavLink
                     key={to}
@@ -450,7 +476,7 @@ function Shell({ principal }: { principal: Principal }) {
                     className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
                   >
                     <I size={17} />
-                    {label}
+                    {ui(NAV_KEYS[label] ?? label)}
                   </NavLink>
                 ))}
               </div>
@@ -458,7 +484,7 @@ function Shell({ principal }: { principal: Principal }) {
           })}
         </nav>
         <div className="sidebar-footer">
-          A product by <strong>LCIT Cybersecurity</strong>
+          {ui("auth.productBy")} <strong>LCIT Cybersecurity</strong>
         </div>
       </aside>
       <div className="page">
@@ -467,7 +493,7 @@ function Shell({ principal }: { principal: Principal }) {
             <Menu />
           </button>
           <span className="crumb">
-            Workspace <ChevronRight size={14} /> Access governance
+            {ui("nav.workspace")} <ChevronRight size={14} /> {ui("nav.accessGovernance")}
           </span>
           <div className="top-actions">
             <UserMenu
@@ -519,7 +545,7 @@ function Head({ title, subtitle, children }: { title: string; subtitle?: string;
     <div className="page-header">
       <div>
         <div className="eyebrow">EARE</div>
-        <h1>{title}</h1>
+        <h1>{uiLabel(title)}</h1>
         {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
       </div>
       {children}
@@ -595,7 +621,7 @@ const STATUS_TONES: Record<string, string> = {
 };
 function Status({ v }: { v: unknown }) {
   const raw = s(v, "unknown"),
-    label = STATUS_LABELS[raw] ?? raw.replaceAll("_", " "),
+    label = ui(`status.${raw}`, { defaultValue: STATUS_LABELS[raw] ?? raw.replaceAll("_", " ") }),
     tone = STATUS_TONES[raw] ?? "neutral";
   return (
     <span className={`badge ${tone}`}>
@@ -617,7 +643,7 @@ function Filter({
     <div className="filterbar">
       <div className="search">
         <Search />
-        <input placeholder="Search" value={v} onChange={(e) => onChange(e.target.value)} />
+        <input placeholder={ui("common.search")} value={v} onChange={(e) => onChange(e.target.value)} />
       </div>
       {children}
     </div>
@@ -636,7 +662,7 @@ function SelectFilter({
 }) {
   return (
     <select className="filter-button" value={value} onChange={(e) => onChange(e.target.value)}>
-      <option value="">{placeholder}</option>
+      <option value="">{uiLabel(placeholder)}</option>
       {options.map((x) => (
         <option key={x} value={x}>
           {x.replaceAll("_", " ")}
@@ -677,7 +703,7 @@ function CampaignFilter({
 }) {
   return (
     <select className="filter-button" value={value} onChange={(event) => onChange(event.target.value)}>
-      <option value="">Campaign</option>
+      <option value="">{uiLabel("Campaign")}</option>
       {campaigns.map((campaign) => (
         <option key={s(campaign.id)} value={s(campaign.id)}>
           {s(campaign.display_name, s(campaign.name, s(campaign.id)))}
@@ -713,13 +739,13 @@ function Pager({
     <div className="pagination">
       <span>{pageLabel(total, limit, offset)}</span>
       <button className="button subtle" disabled={p <= 1} onClick={() => setOffset(offset - limit)}>
-        Previous
+        {ui("common.previous")}
       </button>
       <span>
-        Page {p} / {pages}
+        {ui("common.page")} {p} / {pages}
       </span>
       <button className="button subtle" disabled={p >= pages} onClick={() => setOffset(offset + limit)}>
-        Next
+        {ui("common.next")}
       </button>
       <select
         value={limit}
@@ -763,7 +789,7 @@ function ColumnMenu({
       <button
         className={active || filtered ? "sort-button active" : "sort-button"}
         onClick={() => setOpen(!open)}
-        aria-label={`Sort or filter on ${label}`}
+        aria-label={ui("table.sortOrFilter", { label })}
       >
         {label}
         <span>{active ? (sorting!.order === "desc" ? "▼" : "▲") : filtered ? "▣" : "▾"}</span>
@@ -775,10 +801,10 @@ function ColumnMenu({
             {sorting ? (
               <div className="menu-row">
                 <button className="text-button" onClick={() => sortAs("asc")}>
-                  Sort A → Z
+                  {ui("table.sortAZ")}
                 </button>
                 <button className="text-button" onClick={() => sortAs("desc")}>
-                  Sort Z → A
+                  {ui("table.sortZA")}
                 </button>
               </div>
             ) : null}
@@ -786,7 +812,7 @@ function ColumnMenu({
               <>
                 <input
                   autoFocus
-                  placeholder={`Filter ${label.toLowerCase()}`}
+                  placeholder={ui("table.filter", { label: label.toLowerCase() })}
                   value={filtered}
                   onChange={(e) => filtering.set(field, e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && setOpen(false)}
@@ -902,8 +928,18 @@ function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: (
         </div>
         <ApiTokenPanel menuOpen={menuOpen} />
         <div className="user-menu-section">
+          <span className="user-menu-label">{ui("settings.language")}</span>
+          <select
+            aria-label={ui("settings.selectLanguage")}
+            value={(SUPPORTED_LOCALES as readonly string[]).includes(i18n.language) ? i18n.language : "en"}
+            onChange={(event) => void setLocale(event.target.value)}
+          >
+            {SUPPORTED_LOCALES.map((locale: Locale) => <option key={locale} value={locale}>{LOCALE_LABELS[locale]}</option>)}
+          </select>
+        </div>
+        <div className="user-menu-section">
           <span className="user-menu-label">
-            <Palette size={13} /> Style
+            <Palette size={13} /> {ui("settings.settings")}
           </span>
           {THEMES.map((option) => (
             <button
@@ -930,7 +966,7 @@ function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: (
               onSignOut();
             }}
           >
-            <LogOut size={15} /> Sign out
+            <LogOut size={15} /> {ui("common.signOut", { defaultValue: "Sign out" })}
           </button>
         </div>
       </div>
@@ -992,7 +1028,7 @@ function Table({
   if (q?.isLoading)
     return (
       <div className="table-wrap">
-        <div className="empty">Loading…</div>
+        <div className="empty">{ui("common.loading")}</div>
       </div>
     );
   if (q?.isError)
@@ -1001,7 +1037,7 @@ function Table({
         <div className="empty">
           <strong>{s(q.error)}</strong>
           <button className="button subtle" onClick={() => q.refetch()}>
-            Try again
+            {ui("common.retry")}
           </button>
         </div>
       </div>
@@ -1013,10 +1049,10 @@ function Table({
           <tr>
             {cols.map((x, i) => {
               const field = fields ? fields[i] : null;
-              if (!field || (!sorting && !filtering)) return <th key={x}>{x}</th>;
+              if (!field || (!sorting && !filtering)) return <th key={x}>{uiLabel(x)}</th>;
               return (
                 <th key={x}>
-                  <ColumnMenu label={x} field={field} sorting={sorting} filtering={filtering} />
+                  <ColumnMenu label={uiLabel(x)} field={field} sorting={sorting} filtering={filtering} />
                 </th>
               );
             })}
@@ -1205,7 +1241,7 @@ function Home() {
       ["Findings", m.findings, "/findings", "in the last collection"],
       ["Remediation actions", m.remediation_actions, "/actions", "to carry out"],
     ];
-  if (q.isLoading) return <div className="empty">Loading…</div>;
+  if (q.isLoading) return <div className="empty">{ui("common.loading")}</div>;
   if (q.isError)
     return (
       <div className="empty">
@@ -4993,7 +5029,7 @@ function UsersPage() {
           >
             <h4>ACCOUNT</h4>
             <label>
-              Username
+              {ui("auth.username")}
               <input
                 required
                 disabled={Boolean(form.id) || fromDirectory}
