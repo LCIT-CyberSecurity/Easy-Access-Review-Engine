@@ -548,7 +548,7 @@ function Shell({ principal }: { principal: Principal }) {
             <Route path="/identities" element={<Identities />} />
             <Route path="/accesses" element={<Accesses />} />
             <Route path="/golden" element={<Golden />} />
-            <Route path="/campaigns" element={<Campaigns />} />
+            <Route path="/campaigns" element={<Campaigns principal={principal} />} />
             <Route path="/campaigns/new" element={<CampaignNew principal={principal} />} />
             <Route path="/campaigns/:id/edit" element={<CampaignNew principal={principal} />} />
             <Route path="/campaigns/:id" element={<CampaignDetail />} />
@@ -2356,8 +2356,20 @@ function CampaignWorkflow({ status, pending }: { status: string; pending: number
     </section>
   );
 }
-function Campaigns() {
-  const x = useList("campaigns");
+function Campaigns({ principal }: { principal: Principal }) {
+  const x = useList("campaigns"),
+    client = useQueryClient(),
+    [deleting, setDeleting] = useState<Row | null>(null),
+    remove = useMutation({
+      mutationFn: () => deleteJson(`campaigns/${encodeURIComponent(s(deleting?.id))}`),
+      onSuccess: async () => {
+        toast("ok", "Campaign deleted");
+        setDeleting(null);
+        await client.invalidateQueries({ queryKey: ["campaigns"] });
+      },
+      onError: (error) => toast("error", s(error, "Unable to delete the campaign")),
+    }),
+    toast = useToast();
   return (
     <>
       <Head title="Campaigns">
@@ -2367,8 +2379,8 @@ function Campaigns() {
       </Head>
       <Filter v={x.search} onChange={x.setSearch} />
       <Table
-        cols={["Campaign", "Scope", "Status", "Progress", "Pending", "Due date"]}
-        fields={["name", null, "status", "progress", "pending", "due_at"]}
+        cols={["Campaign", "Scope", "Status", "Progress", "Pending", "Due date", "Actions"]}
+        fields={["name", null, "status", "progress", "pending", "due_at", null]}
         sorting={x.sorting}
         filtering={x.filtering}
         q={x.q}
@@ -2384,6 +2396,9 @@ function Campaigns() {
           </div>,
           s(r.pending, "0"),
           when(r.due_at),
+          principal.role === "ADMIN" || (principal.role === "OPERATOR" && s(r.pilot, "").toLowerCase() === principal.username.toLowerCase()) ? (
+            <button className="button danger subtle" onClick={() => setDeleting(r)}>Delete</button>
+          ) : "—",
         ])}
       />
       <Pager
@@ -2393,6 +2408,17 @@ function Campaigns() {
         setOffset={x.setOffset}
         setLimit={x.setLimit}
       />
+      {deleting ? (
+        <Confirm
+          title={`Delete ${s(deleting.name)}?`}
+          intro={<p>This permanently removes the campaign, its reviews, decisions, remediation actions and follow-up data. The source systems are not changed.</p>}
+          confirmLabel="Delete campaign"
+          danger
+          pending={remove.isPending}
+          cancel={() => setDeleting(null)}
+          confirm={() => remove.mutate()}
+        />
+      ) : null}
     </>
   );
 }
@@ -4753,74 +4779,13 @@ function Reports() {
     }),
     campaigns = arr(campaignsQuery.data?.items),
     [chosen, setChosen] = useState(() => new URLSearchParams(window.location.search).get("campaign") ?? ""),
-    [showPreview, setShowPreview] = useState(true),
     // Reports are read after a campaign is closed: offer that one first.
     selected =
       campaigns.find((r) => s(r.id) === chosen) ??
       campaigns.find((r) => s(r.status) === "closed") ??
       campaigns[0],
     id = s(selected?.id, ""),
-    [search, setSearch] = useState(""),
-    debounced = debounce(search),
-    [classification, setClassification] = useState(""),
-    [decision, setDecision] = useState(""),
-    [provider, setProvider] = useState(""),
-    [owner, setOwner] = useState(""),
-    [offset, setOffset] = useState(0),
-    [limit, setLimit] = useState(25),
-    [sort, setSort] = useState(""),
-    [order, setOrder] = useState("asc"),
-    columns = useColumnFilters(),
-    sorting: SortState = {
-      sort,
-      order,
-      toggle: (field: string) => {
-        setOrder(sort === field && order === "asc" ? "desc" : "asc");
-        setSort(field);
-        setOffset(0);
-      },
-    },
-    q = useQuery({
-      queryKey: [
-        "report",
-        id,
-        debounced,
-        classification,
-        decision,
-        provider,
-        owner,
-        limit,
-        offset,
-        sort,
-        order,
-        columns.key,
-      ],
-      queryFn: () =>
-        getJson(`reports/${encodeURIComponent(id)}/results`, {
-          search: debounced,
-          classification,
-          decision,
-          provider,
-          owner,
-          limit,
-          offset,
-          sort,
-          order,
-          ...columns.params,
-        }),
-      enabled: Boolean(id),
-    }),
-    remediationQuery = useQuery({
-      queryKey: ["report-remediation", id],
-      queryFn: () => getPage("remediation-actions", { campaign: id, limit: 100 }),
-      enabled: Boolean(id),
-    }),
-    summary = (q.data?.summary ?? {}) as Row,
-    facets = (q.data?.facets ?? {}) as Row,
-    rows = arr(q.data?.items),
-    remediationActions = arr(remediationQuery.data?.items),
-    campaign = (q.data?.campaign ?? {}) as Row;
-  useEffect(() => setOffset(0), [debounced, classification, decision, provider, owner, id]);
+    campaign = selected ?? {};
   if (!campaigns.length)
     return (
       <>
@@ -4840,9 +4805,6 @@ function Reports() {
     <>
       <Head title="Reports">
         <div className="button-row">
-          <button className="button primary" type="button" onClick={() => setShowPreview((value) => !value)}>
-            {showPreview ? uiLabel("Hide report") : uiLabel("View report")}
-          </button>
           <a className="button subtle" href={`/api/reports/${id}/html`}>
             {uiLabel("Download HTML")}
           </a>
@@ -4874,7 +4836,7 @@ function Reports() {
               : "not opened yet"}
         </span>
       </div>
-      {showPreview ? <section className="report-workspace">
+      <section className="report-workspace">
         <div className="report-workspace-head">
           <div>
             <span className="eyebrow">{uiLabel("Governance evidence")}</span>
@@ -4885,142 +4847,8 @@ function Reports() {
             {uiLabel("Open full report")}
           </a>
         </div>
-        <section className="remediation-focus" aria-labelledby="remediation-focus-title">
-          <div className="remediation-focus-head">
-            <div>
-              <span className="eyebrow">{uiLabel("Operational follow-up")}</span>
-              <h2 id="remediation-focus-title">{uiLabel("Actions to implement")}</h2>
-              <p>{ui("ui.remediationReadonly", { defaultValue: "These are instructions for administrators. EARE does not change AD, LDAP, cloud or application providers." })}</p>
-            </div>
-            <div className="remediation-count">
-              <strong>{remediationActions.length}</strong>
-              <span>{ui("ui.actionCount", { count: remediationActions.length })}</span>
-            </div>
-          </div>
-          {remediationActions.length ? <>
-            <div className="remediation-summary">
-              {(["revoke", "grant", "pending", "exported"] as const).map((key) => {
-                const value = key === "pending" || key === "exported"
-                  ? remediationActions.filter((item) => s(item.status, "pending") === key).length
-                  : remediationActions.filter((item) => s(item.action, "").toLowerCase() === key).length;
-                return <div key={key}><strong>{value}</strong><span>{key === "revoke" ? "to remove" : key === "grant" ? "to grant" : key}</span></div>;
-              })}
-            </div>
-            <div className="remediation-table-wrap">
-              <table className="remediation-table">
-                <thead><tr><th>Action</th><th>Account</th><th>Source</th><th>Access / role</th><th>Permission</th><th>Reason</th><th>Status</th></tr></thead>
-                <tbody>{remediationActions.slice(0, 12).map((item) => {
-                  const context = item.business_context;
-                  const application = contextValue(context, "application", "source");
-                  return <tr key={s(item.id, `${s(item.identity_identifier)}-${s(item.access_name)}`)}>
-                    <td><span className={`action-pill ${s(item.action, "").toLowerCase()}`}>{s(item.action, s(item.decision, "—"))}</span></td>
-                    <td><strong>{s(item.identity_display_name, s(item.identity_identifier))}</strong><small>{s(item.identity_provider)}</small></td>
-                    <td>{s(item.access_provider)}</td>
-                    <td><strong>{s(item.access_display_name, s(item.access_name))}</strong><small>{application || targetText(item.target)}</small></td>
-                    <td>{s(item.permission, s(item.technical_permission, "—"))}</td>
-                    <td>{s(item.comment, "Decision requires operational change")}</td>
-                    <td><Status v={item.status ?? "pending"} /></td>
-                  </tr>;
-                })}</tbody>
-              </table>
-              {remediationActions.length > 12 ? <p className="remediation-more">Showing 12 of {remediationActions.length}. <NavLink to={`/actions?campaign=${encodeURIComponent(id)}`}>View all actions</NavLink></p> : null}
-            </div>
-          </> : <div className="remediation-empty"><Check size={18} /> No remediation action was generated for this campaign.</div>}
-        </section>
         <iframe className="report-document" title={`Final report for ${s(campaign.name)}`} src={`/api/reports/${id}/html?inline=true`} loading="lazy" />
-      </section> : null}
-      <div className="metrics">
-        {[
-          ["Reviewed accesses", q.data?.total, "in this campaign"],
-          ["Approved", summary.approve, "kept as is"],
-          ["Revoked", summary.revoke, "to be removed"],
-          ["Still pending", summary.pending, "no decision yet"],
-        ].map(([label, value, hint]) => (
-          <div className="metric" key={String(label)}>
-            <div className="metric-label">{String(label)}</div>
-            <strong>{s(value, "0")}</strong>
-            <small>{String(hint)}</small>
-          </div>
-        ))}
-      </div>
-      <section className="panel">
-        <div className="panel-title">
-          <h2>What the campaign found</h2>
-          <span className="muted">
-            {s(summary.identities, "0")} identities · {s(summary.providers, "0")} source(s)
-          </span>
-        </div>
-        <div className="diff-summary">
-          <strong>{s(summary.expected_and_observed, "0")} as expected</strong>
-          <strong>{s(summary.unexpected, "0")} not expected</strong>
-          <strong>{s(summary.missing, "0")} missing</strong>
-          <strong>{s(summary.disabled_with_access, "0")} disabled accounts with access</strong>
-          <strong>{s(summary.technical_account_without_owner, "0")} technical accounts without owner</strong>
-        </div>
       </section>
-      <Filter v={search} onChange={setSearch}>
-        <SelectFilter
-          value={classification}
-          onChange={setClassification}
-          options={vals(facets.classification)}
-          placeholder="Classification"
-        />
-        <SelectFilter
-          value={decision}
-          onChange={setDecision}
-          options={vals(facets.decision)}
-          placeholder="Decision"
-        />
-        <SelectFilter
-          value={provider}
-          onChange={setProvider}
-          options={vals(facets.provider)}
-          placeholder="Source"
-        />
-        <SelectFilter value={owner} onChange={setOwner} options={vals(facets.owner)} placeholder="Reviewer" />
-      </Filter>
-      <Table
-        cols={["Identity", "Access", "Application", "Permission", "State", "Decision", "Reason", "Reviewer"]}
-        fields={[
-          "identity",
-          "access",
-          "service",
-          "permission",
-          "classification",
-          "decision",
-          "comment",
-          "reviewer",
-        ]}
-        sorting={sorting}
-        filtering={columns.filtering}
-        q={q}
-        rows={rows.map((r) => [
-          <>
-            {s(r.identity)}
-            <Sub>{s(r.identity_status, "")}</Sub>
-          </>,
-          <>
-            {s(r.access)}
-            <Sub>{s(r.description, "")}</Sub>
-          </>,
-          s(r.service),
-          s(r.permission),
-          <>
-            <Status v={r.classification} />
-            <Sub>{s(r.findings, "")}</Sub>
-          </>,
-          <Status v={r.decision} />,
-          s(r.comment, ""),
-          s(r.reviewer),
-        ])}
-      />
-      <Pager
-        total={Number(q.data?.total ?? 0)}
-        limit={limit}
-        offset={offset}
-        setOffset={setOffset}
-        setLimit={setLimit}
-      />
     </>
   );
 }

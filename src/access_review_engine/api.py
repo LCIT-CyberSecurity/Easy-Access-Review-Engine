@@ -1800,6 +1800,15 @@ def create_app(db_path: str | None = None):
             _require_campaign_access(principal, campaign, repo)
         return campaign
 
+    def _require_campaign_delete_access(principal: WebPrincipal, campaign: Campaign, repo: Repository) -> None:
+        if principal.role == "ADMIN":
+            return
+        if principal.role != "OPERATOR":
+            raise HTTPException(status_code=403, detail="Only an administrator or campaign pilot can delete campaigns")
+        _require_campaign_access(principal, campaign, repo)
+        if str(campaign.pilot or "").casefold() != principal.username.casefold():
+            raise HTTPException(status_code=403, detail="An operator can only delete campaigns they pilot")
+
     @app.get("/api/campaign-scope-accesses")
     def campaign_scope_accesses(request: Request, snapshot_id: str, golden_source_version_id: str | None = None):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
@@ -1991,6 +2000,31 @@ def create_app(db_path: str | None = None):
             repo.upsert("campaigns", campaign)
             record_audit(repo, request, "campaign.cancelled", "campaign", campaign.id)
             return asdict(campaign)
+
+    @app.delete("/api/campaigns/{campaign_id}")
+    def campaign_delete(campaign_id: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            raw = repo.get_payload("campaigns", campaign_id)
+            if raw is None:
+                raise HTTPException(status_code=404, detail="Campaign not found")
+            campaign = hydrate_campaign(raw)
+            _require_campaign_delete_access(principal, campaign, repo)
+            review_items = [row for row in repo.list_payloads("review_items") if str(row.get("campaign_id")) == campaign_id]
+            review_ids = {str(row.get("id")) for row in review_items}
+            related = {
+                "review_items": review_ids,
+                "decisions": {str(row.get("id")) for row in repo.list_payloads("decisions") if str(row.get("review_item_id")) in review_ids},
+                "remediation_actions": {str(row.get("id")) for row in repo.list_payloads("remediation_actions") if str(row.get("campaign_id")) == campaign_id},
+                "finding_tracking": {str(row.get("id")) for row in repo.list_payloads("finding_tracking") if str(row.get("campaign_id") or "") == campaign_id},
+                "campaign_access_contexts": {str(row.get("id")) for row in repo.list_payloads("campaign_access_contexts") if str(row.get("campaign_id")) == campaign_id},
+            }
+            with repo.transaction():
+                record_audit(repo, request, "campaign.deleted", "campaign", campaign.id, {"status": campaign.status, "review_items": len(review_ids)})
+                for table, ids in related.items():
+                    repo.delete_ids(table, ids)
+                repo.delete_ids("campaigns", {campaign_id})
+            return {"deleted": True, "campaign_id": campaign_id, "review_items": len(review_ids)}
 
     @app.post("/api/campaigns/{campaign_id}/promote")
     def campaign_promote(campaign_id: str, request: Request):
