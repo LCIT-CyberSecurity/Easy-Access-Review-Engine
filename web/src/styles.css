@@ -275,6 +275,17 @@ tbody tr { transition:background-color .12s ease; }
 .wide-field select[multiple] { width:100%; min-height:86px; padding:6px; }
 .preview-context { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:16px 0 20px; }
 .preview-context span { display:grid; gap:3px; padding:12px; background:var(--surface-secondary); border-radius:8px; color:var(--text-secondary); font-size:12px; }
+.campaign-unresolved-warning { display:grid; gap:14px; margin:0 0 18px; padding:16px; border:1px solid color-mix(in srgb, var(--warning) 45%, var(--border)); border-radius:10px; background:color-mix(in srgb, var(--warning) 8%, var(--surface)); }
+.campaign-unresolved-warning p { margin:5px 0 0; color:var(--text-secondary); }
+.campaign-unresolved-list { display:grid; gap:8px; max-height:260px; overflow:auto; }
+.campaign-unresolved-list > div { display:grid; gap:3px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); }
+.campaign-unresolved-list span, .campaign-unresolved-list small { color:var(--text-secondary); }
+.campaign-bypass { display:flex; align-items:flex-start; gap:9px; }
+.campaign-bypass input { margin-top:3px; }
+.campaign-bypass span { display:grid; gap:2px; }
+.campaign-bypass small { color:var(--text-secondary); }
+.campaign-findings-priority { margin-bottom:18px; }
+.metric-alert strong { color:var(--danger); }
 
 /* Source preview translates storage deltas into operational impact. */
 .source-impact { margin-top:18px; }

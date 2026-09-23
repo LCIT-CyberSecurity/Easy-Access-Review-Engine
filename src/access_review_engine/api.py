@@ -1523,6 +1523,8 @@ def create_app(db_path: str | None = None):
         comment = str(payload.get("comment") or "").strip()
         if len(comment) > 4000:
             raise HTTPException(status_code=400, detail="Status comment is limited to 4000 characters")
+        if status == "not_completed" and not comment:
+            raise HTTPException(status_code=400, detail="A comment is required when the remediation is not completed")
         with Repository(db_path) as repo:
             action = repo.get_payload("remediation_actions", action_id)
             if action is None:
@@ -1911,7 +1913,15 @@ def create_app(db_path: str | None = None):
             try:
                 preparation = _prepare_campaign(repo, campaign)
                 _require_campaign_access(principal, campaign, repo, preparation)
-                opened, items = open_campaign(campaign, preparation.snapshot)
+                # A bypass must still leave every review actionable. Items whose
+                # business/access owner cannot be resolved are assigned to the
+                # campaign pilot, who can review them from My Reviews. The
+                # missing owner remains visible and should be corrected in the
+                # Golden Source afterwards.
+                fallback_reviewer = None
+                if campaign.allow_unresolved_reviewers:
+                    fallback_reviewer = campaign.manager or OwnerRef(LOCAL_SOURCE, campaign.pilot)
+                opened, items = open_campaign(campaign, preparation.snapshot, fallback_reviewer)
             except HTTPException:
                 raise
             except ValueError as exc:

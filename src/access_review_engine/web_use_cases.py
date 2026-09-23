@@ -134,7 +134,38 @@ def preview_campaign_review(
     preview_campaign = deepcopy(campaign)
     preview_campaign.allow_unresolved_reviewers = True
     _, items = open_campaign(preview_campaign, preparation.snapshot, fallback_reviewer)  # type: ignore[arg-type]
-    unresolved = [{"identity": item.identity_identifier, "identity_provider": item.identity_provider, "access": item.access_name, "access_provider": item.access_provider} for item in items if item.reviewer is None]
+    identities = {
+        (identity.provider, identity.identifier): identity
+        for identity in preparation.snapshot.identities
+    }
+    accesses = {
+        (access.provider, access.name): access
+        for access in preparation.snapshot.accesses
+    }
+    unresolved = []
+    for item in items:
+        if item.reviewer is not None:
+            continue
+        identity = identities.get((item.identity_provider, item.identity_identifier))
+        access = accesses.get((item.access_provider, item.access_name))
+        business_context = access.metadata.get(BUSINESS_CONTEXT_METADATA_KEY, {}) if access else {}
+        application = business_context.get("application", {}).get("value") if isinstance(business_context, dict) else None
+        what_it_allows = access.description if access else None
+        if not what_it_allows and access and access.control_object:
+            what_it_allows = access.control_object.description
+        if not what_it_allows and access:
+            what_it_allows = access.display_name
+        unresolved.append({
+            "identity": item.identity_identifier,
+            "identity_display_name": identity.display_name if identity else item.identity_identifier,
+            "identity_type": identity.type if identity else "unknown",
+            "identity_provider": item.identity_provider,
+            "access": item.access_name,
+            "access_provider": item.access_provider,
+            "application": application,
+            "what_it_allows": what_it_allows,
+            "missing_owner": "access owner or identity owner",
+        })
     reviewer_keys = {
         (item.reviewer.provider, item.reviewer.identity)
         if item.reviewer is not None

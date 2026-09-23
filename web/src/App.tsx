@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Navigate, NavLink, Route, Routes, useParams } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowDown,
@@ -2276,9 +2276,10 @@ function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
 function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
   const queryClient = useQueryClient(),
     toast = useToast(),
-    [comment, setComment] = useState(""),
+    [comment, setComment] = useState(s((row.details as Row | undefined)?.status_comment, "")),
+    [mitigated, setMitigated] = useState(s(row.status, "") === "completed"),
     update = useMutation({
-      mutationFn: (status: string) => patchJson(`remediation-actions/${encodeURIComponent(s(row.id))}/status`, { status, comment }),
+      mutationFn: () => patchJson(`remediation-actions/${encodeURIComponent(s(row.id))}/status`, { status: mitigated ? "completed" : "not_completed", comment }),
       onSuccess: async () => {
         toast("ok", "Remediation status saved");
         await queryClient.invalidateQueries({ queryKey: ["remediation-actions"] });
@@ -2301,12 +2302,16 @@ function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
       <Status v={row.status} />
       {s((row.details as Row | undefined)?.status_comment, "") ? <p className="muted">{s((row.details as Row | undefined)?.status_comment)}</p> : null}
       <label>
-        Administrator comment
-        <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="What was done, or why is it not completed?" />
+        <input type="checkbox" checked={mitigated} onChange={(event) => setMitigated(event.target.checked)} />
+        Action mitigated / corrected
+      </label>
+      <p className="field-note">{mitigated ? "The administrator confirms the change was applied outside EARE." : "If the action is not mitigated, explain why in the comment below."}</p>
+      <label>
+        Administrator follow-up comment
+        <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Describe what was changed, or why the action was not completed." />
       </label>
       <div className="button-row">
-        <button className="button subtle" disabled={update.isPending} onClick={() => update.mutate("not_completed")}>Acknowledge / not completed</button>
-        <button className="button" disabled={update.isPending} onClick={() => update.mutate("completed")}>Acknowledge completed</button>
+        <button className="button primary" disabled={update.isPending || (!mitigated && !comment.trim())} onClick={() => update.mutate()}>Save remediation follow-up</button>
       </div>
     </Drawer>
   );
@@ -2449,11 +2454,11 @@ function CampaignNew({ principal }: { principal: Principal }) {
           : await postJson("campaigns", payload);
         if (open && !draftId && d.id)
           await postJson("campaigns/" + s(d.id) + "/open", { allow_unresolved_reviewers: allow });
-        return d;
+        return { ...d, opened: open } as Row & { opened: boolean };
       },
-      onSuccess: (d) => {
+      onSuccess: (d: Row & { opened?: boolean }) => {
         toast("ok", draftId ? "Campaign draft updated" : "Campaign created");
-        if (d.id) window.location.href = "/campaigns/" + s(d.id);
+        if (d.id) window.location.href = "/campaigns/" + s(d.id) + (d.opened ? "?tab=reviews" : "");
       },
       onError: (e) => toast("error", s(e, "Unable to create the campaign")),
     }),
@@ -2662,10 +2667,25 @@ function CampaignNew({ principal }: { principal: Principal }) {
             </div>
           </div>
           {Number(preview.unresolved_reviewers) > 0 && (
-            <label>
-              <input type="checkbox" checked={allow} onChange={(e) => setAllow(e.target.checked)} /> Allow
-              unresolved reviewers
-            </label>
+            <div className="campaign-unresolved-warning">
+              <div>
+                <strong>{s(preview.unresolved_reviewers)} groupe(s)/rôle(s) ou identité(s) sans responsable</strong>
+                <p>Le propriétaire n&apos;est pas renseigné dans la Golden Source. Renseigne-le pour attribuer automatiquement la revue ; avec le bypass, le pilote recevra ces revues dans « Mes revues ».</p>
+              </div>
+              <div className="campaign-unresolved-list">
+                {arr(preview.unresolved).map((item) => (
+                  <div key={`${s(item.identity_provider)}:${s(item.identity)}:${s(item.access_provider)}:${s(item.access)}`}>
+                    <strong>{s(item.identity_display_name, s(item.identity))}</strong>
+                    <span>{s(item.identity_type, "identity")} · {s(item.identity_provider)} · accès {s(item.access)} ({s(item.access_provider)})</span>
+                    <small>{s(item.application, "Application non renseignée")} · {s(item.what_it_allows, "Description de l’accès non renseignée")}</small>
+                  </div>
+                ))}
+              </div>
+              <label className="campaign-bypass">
+                <input type="checkbox" checked={allow} onChange={(e) => setAllow(e.target.checked)} />
+                <span><strong>Autoriser malgré tout</strong><small>Bypass : attribuer ces revues au pilote pour traitement manuel</small></span>
+              </label>
+            </div>
           )}
           <div className="button-row">
             <button
@@ -2690,9 +2710,10 @@ function CampaignNew({ principal }: { principal: Principal }) {
 }
 function CampaignDetail() {
   const { id = "" } = useParams(),
+    [searchParams] = useSearchParams(),
     q = useQuery({ queryKey: ["campaign", id], queryFn: () => getJson("campaigns/" + id) }),
     c = q.data?.campaign as Row | undefined,
-    [tab, setTab] = useState("overview"),
+    [tab, setTab] = useState(searchParams.get("tab") === "reviews" ? "reviews" : "overview"),
     [selected, setSelected] = useState<Row | null>(null),
     [selectedFinding, setSelectedFinding] = useState<Row | null>(null),
     [confirmAction, setConfirmAction] = useState<string | null>(null),
@@ -2733,6 +2754,9 @@ function CampaignDetail() {
         return acc;
       }, {}),
     ).sort((a, b) => b[1] - a[1]),
+    decisionFindings = reviews.filter((row) => row.classification === "unexpected" || row.decision === "revoke"),
+    unexpectedCount = reviews.filter((row) => row.classification === "unexpected").length,
+    revokedCount = reviews.filter((row) => row.decision === "revoke").length,
     status = s(c?.status),
     pending = Number(c?.pending ?? reviews.filter((r) => !r.decision).length),
     ctas = campaignCtas(status, pending);
@@ -2944,20 +2968,66 @@ function CampaignDetail() {
         />
       )}{" "}
       {tab === "findings" && (
-        <Table
-          cols={["Finding", "Campaign"]}
-          rows={findings.map((f) => [
-            <button
-              className="link-button"
-              onClick={() =>
-                setSelectedFinding({ classification: "campaign finding", findings: [f], campaign_id: id })
-              }
-            >
-              {s(f)}
-            </button>,
-            s(c.name),
-          ])}
-        />
+        <>
+          <div className="metrics">
+            <div className="metric metric-alert">
+              <div className="metric-label">Unexpected access</div>
+              <strong>{unexpectedCount}</strong>
+              <small>Observed but not expected</small>
+            </div>
+            <div className="metric metric-alert">
+              <div className="metric-label">Revoked access</div>
+              <strong>{revokedCount}</strong>
+              <small>Decision requiring remediation</small>
+            </div>
+            <div className="metric">
+              <div className="metric-label">Technical findings</div>
+              <strong>{findings.length}</strong>
+              <small>Diagnostics attached to reviews</small>
+            </div>
+          </div>
+          {decisionFindings.length ? (
+            <section className="panel campaign-findings-priority">
+              <div className="panel-title">
+                <h2>Accesses requiring attention</h2>
+                <span className="muted">Unexpected and revoked</span>
+              </div>
+              <Table
+                cols={["Type", "Identity", "Access", "Source", "Decision"]}
+                rows={decisionFindings.map((row) => [
+                  <Status v={row.classification === "unexpected" ? "unexpected" : "revoke"} />,
+                  <button className="link-button" onClick={() => setSelected(row)}>{s(row.identity_display_name, s(row.identity_identifier))}</button>,
+                  s(row.access_display_name, s(row.access_name)),
+                  s(row.access_provider),
+                  <Status v={row.decision ?? "pending"} />,
+                ])}
+              />
+            </section>
+          ) : null}
+          {findings.length ? (
+            <section className="panel">
+              <div className="panel-title">
+                <h2>Technical findings</h2>
+                <span className="muted">Diagnostics from the observed evidence</span>
+              </div>
+              <Table
+                cols={["Finding", "Campaign"]}
+                rows={findings.map((f) => [
+                  <button
+                    className="link-button"
+                    onClick={() =>
+                      setSelectedFinding({ classification: "campaign finding", findings: [f], campaign_id: id })
+                    }
+                  >
+                    {s(f)}
+                  </button>,
+                  s(c.name),
+                ])}
+              />
+            </section>
+          ) : null}
+          {!decisionFindings.length && !findings.length ? <div className="empty">No unexpected, revoked or technical findings for this campaign.</div> : null}
+        </>
       )}{" "}
       {selected && (
         <ReviewDrawer item={selected} items={reviews} close={() => setSelected(null)} next={setSelected} />
