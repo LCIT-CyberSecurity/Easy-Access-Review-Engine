@@ -1053,6 +1053,7 @@ function Table({
   filtering,
   emptyTitle = "No results",
   emptyText = "No record matches the current search and filters.",
+  className = "",
 }: {
   cols: string[];
   rows: ReactNode[][];
@@ -1064,10 +1065,11 @@ function Table({
   filtering?: FilterState;
   emptyTitle?: string;
   emptyText?: string;
+  className?: string;
 }) {
   if (q?.isLoading)
     return (
-      <div className="table-wrap">
+      <div className={`table-wrap ${className}`}>
         <div className="empty">{ui("common.loading")}</div>
       </div>
     );
@@ -1083,7 +1085,7 @@ function Table({
       </div>
     );
   return (
-    <div className="table-wrap">
+    <div className={`table-wrap ${className}`}>
       <table>
         <thead>
           <tr>
@@ -1122,7 +1124,7 @@ function Table({
     </div>
   );
 }
-function Drawer({ title, close, children }: { title: string; close: () => void; children: ReactNode }) {
+function Drawer({ title, close, children, size = "normal" }: { title: string; close: () => void; children: ReactNode; size?: "normal" | "wide" }) {
   const panel = useRef<HTMLElement>(null);
   // Callers pass an inline close; reading it through a ref keeps the effect below from
   // re-running on every render, which would pull focus out of the field being typed in.
@@ -1139,7 +1141,7 @@ function Drawer({ title, close, children }: { title: string; close: () => void; 
       <aside
         aria-labelledby="drawer-title"
         aria-modal="true"
-        className="drawer"
+        className={`drawer drawer--${size}`}
         onClick={(e) => e.stopPropagation()}
         ref={panel}
         role="dialog"
@@ -1588,7 +1590,7 @@ function IdentityDrawer({ identity, close }: { identity: Row; close: () => void 
       ...arr(q.data?.effective_accesses).map((r) => ({ ...r, mode: "Effective" })),
     ];
   return (
-    <Drawer title={s(identity.display_name, s(identity.identifier))} close={close}>
+    <Drawer title={s(identity.display_name, s(identity.identifier))} close={close} size="wide">
       {access ? (
         <>
           <button className="drawer-back" onClick={() => setAccess(null)}>
@@ -1752,7 +1754,7 @@ function AccessDetail({ access }: { access: Row }) {
           <BusinessContext context={access.business_context} />
           {accessId ? <button className="button subtle" onClick={() => setEditingContext(!editingContext)}>Edit access information</button> : null}
           {editingContext ? (
-            <div className="admin-form">
+            <div className="drawer-form">
               {[
                 ["Application", "application"],
                 ["Permission", "business_permission"],
@@ -1798,7 +1800,7 @@ function AccessDetail({ access }: { access: Row }) {
 }
 function AccessDrawer({ access, close }: { access: Row; close: () => void }) {
   return (
-    <Drawer title={s(access.display_name, s(access.name ?? access.access_name))} close={close}>
+    <Drawer title={s(access.display_name, s(access.name ?? access.access_name))} close={close} size="wide">
       <AccessDetail access={access} />
     </Drawer>
   );
@@ -2501,6 +2503,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
             previewM.mutate();
           }}
         >
+          <h4 className="campaign-general">GENERAL</h4>
           <label>
             Name
             <input
@@ -2509,7 +2512,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
               onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
           </label>
-          <label>
+          <label className="campaign-pilot">
             <span className="step-label">4</span> Campaign pilot / reviewers
             <select required value={s(form.pilot, principal.username)} onChange={(e) => setForm({ ...form, pilot: e.target.value })}>
               <option value="">Select an ADMIN or OPERATOR</option>
@@ -2517,7 +2520,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
             </select>
             <span className="field-note">The pilot manages the campaign. Group or role owners remain the reviewers.</span>
           </label>
-          <label>
+          <label className="campaign-scope">
             <span className="step-label">1</span> Scope
             <select
               value={s(form.scope_type, "all")}
@@ -2529,7 +2532,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
             </select>
           </label>
           {form.scope_type === "providers" ? (
-            <label className="wide-field">
+            <label className="wide-field campaign-scope">
               Providers
               <select
                 multiple
@@ -2553,7 +2556,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
             </label>
           ) : null}
           {form.scope_type === "accesses" ? (
-            <label className="wide-field">
+            <label className="wide-field campaign-scope">
               Accesses
               <select
                 multiple
@@ -2579,7 +2582,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
               <span className="field-note">The selected technical Access references (provider, name) determine which expected and observed comparisons are reviewed.</span>
             </label>
           ) : null}
-          <label>
+          <label className="campaign-observed">
             <span className="step-label">2</span> Observed snapshot
             <select
               required
@@ -2594,7 +2597,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
               ))}
             </select>
           </label>
-          <label>
+          <label className="campaign-expected">
             <span className="step-label">3</span> Expected state
             <select
               value={s(form.golden_source_version_id, "")}
@@ -2608,7 +2611,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
               ))}
             </select>
           </label>
-          <label>
+          <label className="campaign-due">
             Due date
             <input
               type="date"
@@ -2616,7 +2619,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
               onChange={(e) => setForm({ ...form, due_at: e.target.value || undefined })}
             />
           </label>
-          <div className="button-row wide-field">
+          <div className="button-row wide-field campaign-submit">
             <button
               className="button subtle"
               type="button"
@@ -3099,6 +3102,8 @@ function Golden() {
     }),
     [commenting, setCommenting] = useState<Row | null>(null),
     [assignmentComment, setAssignmentComment] = useState(""),
+    [accessCommenting, setAccessCommenting] = useState<Row | null>(null),
+    [accessComment, setAccessComment] = useState(""),
     [editingVersionComment, setEditingVersionComment] = useState(false),
     [versionComment, setVersionComment] = useState(""),
     [search, setSearch] = useState(""),
@@ -3297,6 +3302,19 @@ function Golden() {
         await refresh();
       },
       onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to save the expected-assignment comment") }),
+    }),
+    commentAccess = useMutation({
+      mutationFn: () => postJson(`golden-sources/${encoded}/access-comment`, {
+        access_provider: accessCommenting?.access_provider,
+        access_name: accessCommenting?.access_name,
+        comment: accessComment,
+      }),
+      onSuccess: async () => {
+        setAccessCommenting(null);
+        setNotice({ tone: "ok", text: "Access comment saved" });
+        await refresh();
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to save the access comment") }),
     }),
     compareMutation = useMutation({
       mutationFn: () => getJson(`golden-sources/${encoded}/compare`),
@@ -3569,6 +3587,7 @@ function Golden() {
                 })}
               </datalist>
               <Table
+                className="golden-access-table"
                 cols={[
                   "Access right",
                   "What it allows",
@@ -3663,13 +3682,9 @@ function Golden() {
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.expected_identities, "0")} people
                     </button>,
-                    editing ? (
-                      <>
-                        <textarea value={s(editingAccess?.access_comment, "")} placeholder="Comment" onChange={(event) => setEditingAccess({ ...editingAccess, access_comment: event.target.value })} />
-                        <button className="link-button" disabled={saveAccessRow.isPending} onClick={() => saveAccessRow.mutate({ ...editingAccess, comment_dirty: s(editingAccess?.access_comment, "") !== s(editingAccess?.original_comment, "") })}>Save</button>{" "}
-                        <button className="link-button" onClick={() => setEditingAccess(null)}>Cancel</button>
-                      </>
-                    ) : <button className="link-button" onClick={beginEdit}>{s(r.access_comment, "Add comment")}</button>,
+                    <button className="link-button" onClick={() => { setAccessCommenting(r); setAccessComment(s(r.access_comment, "")); }}>
+                      {s(r.access_comment, "Add comment")}
+                    </button>,
                     <button
                       className="link-button"
                       onClick={() => setRemoving({
@@ -3944,7 +3959,7 @@ function Golden() {
         </>
       )}
       {holders && (
-        <Drawer title={s(holders.access_display_name, s(holders.access_name))} close={() => setHolders(null)}>
+        <Drawer title={s(holders.access_display_name, s(holders.access_name))} close={() => setHolders(null)} size="wide">
           <p>
             {describeAccess({
               description: holders.access_description,
@@ -4037,8 +4052,22 @@ function Golden() {
           <button className="button primary" disabled={commentAssignment.isPending} onClick={() => commentAssignment.mutate()}>Save in new version</button>
         </Drawer>
       )}
+      {accessCommenting && (
+        <Drawer title="Golden access comment" close={() => setAccessCommenting(null)}>
+          <p><strong>{s(accessCommenting.access_display_name, s(accessCommenting.access_name))}</strong></p>
+          <p className="muted">This comment explains the business meaning of the access right.</p>
+          <label className="drawer-field">
+            Comment
+            <textarea className="drawer-comment" autoFocus value={accessComment} onChange={(event) => setAccessComment(event.target.value)} />
+          </label>
+          <div className="drawer-actions">
+            <button className="button subtle" onClick={() => setAccessCommenting(null)}>Cancel</button>
+            <button className="button primary" disabled={commentAccess.isPending} onClick={() => commentAccess.mutate()}>Save</button>
+          </div>
+        </Drawer>
+      )}
       {adding && (
-        <Drawer title="Add an expected access" close={() => setAdding(null)}>
+        <Drawer title="Add an expected access" close={() => setAdding(null)} size="wide">
           <p className="muted">
             Declaring an access expected creates a new version. Nothing changes in the audited systems.
           </p>
@@ -4068,7 +4097,7 @@ function Golden() {
           </datalist>
           <p className="field-note">Les listes proposent les valeurs déjà connues. Une valeur manuelle reste possible si elle est validée métier.</p>
           <form
-            className="admin-form"
+            className="drawer-form"
             onSubmit={(e) => {
               e.preventDefault();
               if (s(adding.identity_identifier, "").trim()) edit.mutate({ add: [adding] });
@@ -5286,11 +5315,12 @@ function UsersPage() {
       )}
       {open && (
         <Drawer
+          size="wide"
           title={form.id ? "Edit user" : fromDirectory ? "Import user" : "New local user"}
           close={() => setOpen(false)}
         >
           <form
-            className="admin-form"
+            className="drawer-form"
             onSubmit={(e) => {
               e.preventDefault();
               m.mutate();
