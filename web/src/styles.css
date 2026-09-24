@@ -219,6 +219,15 @@ tbody tr { transition:background-color .12s ease; }
 .golden-access-table td:first-child, .golden-access-table td:nth-child(6) { white-space:nowrap; }
 .golden-access-table select { min-width:145px; width:100%; }
 .golden-access-table textarea { min-height:90px; min-width:180px; resize:vertical; }
+.golden-access-table th:last-child, .golden-access-table td:last-child { position:sticky; right:0; z-index:2; min-width:300px; background:var(--surface); border-left:1px solid var(--border); box-shadow:-5px 0 10px rgba(16,24,40,.06); }
+.golden-access-table th:last-child { z-index:3; background:var(--surface-secondary); }
+.golden-access-table tbody tr:hover td:last-child { background:#fafbff; }
+.golden-access-table tbody tr.golden-access-row-editing td { background:var(--primary-soft); }
+.golden-access-table tbody tr.golden-access-row-editing td:last-child { background:var(--primary-soft); }
+.golden-access-actions { min-width:260px; }
+.golden-access-actions .button { min-height:32px; padding:0 10px; }
+.unsaved-indicator { color:var(--text-secondary); font-size:12px; white-space:nowrap; }
+.golden-edit-confirm-actions { flex-wrap:wrap; }
 .drawer-body h4 { margin:0 0 9px; color:#596579; font-size:11px; }
 .drawer-section { padding:0 0 22px; margin-bottom:22px; border-bottom:1px solid var(--border); }
 .drawer-primary { display:block; color:var(--text-primary); font-size:17px; line-height:24px; }

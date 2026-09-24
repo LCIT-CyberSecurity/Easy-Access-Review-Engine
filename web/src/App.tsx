@@ -65,6 +65,16 @@ const s = (v: unknown, f = "—") =>
 const ui = (key: string, options?: Record<string, string | number>) => String(i18n.t(key, options as never));
 const count = (rows: Row[], keep: (row: Row) => boolean) => rows.filter(keep).length;
 const DEFAULT_GOLDEN_CAPABILITIES = ["read", "write", "delete", "execute", "approve", "admin", "grant"];
+export const goldenAccessEditIsDirty = (value: Row | null): boolean => Boolean(value &&
+  ["application", "business_permission", "owner"].some((field) => s(value[field], "") !== s(value[`original_${field}`], "")));
+export const goldenAccessEditPayload = (value: Row): Row => ({
+  access_id: value.access_id,
+  access_provider: value.access_provider,
+  access_name: value.access_name,
+  application: s(value.application, ""),
+  business_permission: s(value.business_permission, ""),
+  owner: s(value.owner, ""),
+});
 // The collectors store structured references; the WebUI must read them as a sentence.
 const refText = (v: unknown): string => {
   if (typeof v === "string") return v;
@@ -1054,6 +1064,7 @@ function Table({
   emptyTitle = "No results",
   emptyText = "No record matches the current search and filters.",
   className = "",
+  rowClassName,
 }: {
   cols: string[];
   rows: ReactNode[][];
@@ -1066,6 +1077,7 @@ function Table({
   emptyTitle?: string;
   emptyText?: string;
   className?: string;
+  rowClassName?: (index: number) => string;
 }) {
   if (q?.isLoading)
     return (
@@ -1103,7 +1115,7 @@ function Table({
         <tbody>
           {rows.length ? (
             rows.map((r, i) => (
-              <tr className={onRow ? "clickable" : ""} onClick={(event) => { if (onRow && !(event.target as HTMLElement).closest("button,a,input,select,textarea")) onRow(i); }} key={i}>
+              <tr className={[onRow ? "clickable" : "", rowClassName?.(i) ?? ""].filter(Boolean).join(" ")} onClick={(event) => { if (onRow && !(event.target as HTMLElement).closest("button,a,input,select,textarea")) onRow(i); }} key={i}>
                 {r.map((x, j) => (
                   <td key={j}>{x}</td>
                 ))}
@@ -3160,6 +3172,8 @@ function Golden() {
     [holders, setHolders] = useState<Row | null>(null),
     [editingHolder, setEditingHolder] = useState<Row | null>(null),
     [editingAccess, setEditingAccess] = useState<Row | null>(null),
+    [pendingAccessEdit, setPendingAccessEdit] = useState<Row | null>(null),
+    [pendingAccessTab, setPendingAccessTab] = useState<string | null>(null),
     [newApplication, setNewApplication] = useState<Row | null>(null),
     [functionalEditing, setFunctionalEditing] = useState<Row | null>(null),
     [adding, setAdding] = useState<Row | null>(null),
@@ -3290,7 +3304,7 @@ function Golden() {
       ]);
     },
     saveAccessRow = useMutation({
-      mutationFn: async (body: Row) => {
+      mutationFn: async ({ body }: { body: Row; continuation: { row?: Row; tab?: string } }) => {
         const accessId = s(body.access_id, "");
         if (accessId) {
           await putJson(`accesses/${encodeURIComponent(accessId)}/enrichment`, {
@@ -3308,12 +3322,17 @@ function Golden() {
         }
         return body;
       },
-      onSuccess: async () => {
+      onSuccess: async (_data, variables) => {
+        const continuation = variables.continuation;
         setEditingAccess(null);
-        setNotice({ tone: "ok", text: "Expected access updated" });
+        setNotice({ tone: "ok", text: "Access information saved" });
         await refresh();
+        if (continuation?.tab) setTab(continuation.tab);
+        if (continuation?.row) beginAccessEdit(continuation.row);
       },
-      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to update expected access") }),
+      onError: (error) => {
+        setNotice({ tone: "error", text: s(error, "Unable to update expected access") });
+      },
     }),
     createApplication = useMutation({
       mutationFn: (body: Row) => postJson("golden-applications", body),
@@ -3445,7 +3464,63 @@ function Golden() {
     covered = vals(content.data?.providers),
     collected = vals(content.data?.collected_providers),
     mismatch = covered.filter((name) => !collected.includes(name)),
-    counted = (state: string) => changes.filter((r) => r.status === state).length;
+    counted = (state: string) => changes.filter((r) => r.status === state).length,
+    accessEditIsDirty = goldenAccessEditIsDirty,
+    beginAccessEdit = (row: Row) => {
+      const key = `${s(row.access_provider)}:${s(row.access_name)}`;
+      const application = contextValue(row.business_context, "application", "manual") || contextValue(row.business_context, "application", "source") || "";
+      const businessPermission = contextValue(row.business_context, "business_permission", "manual") || contextValue(row.business_context, "business_permission", "source") || "";
+      const owner = contextValue(row.business_context, "owner", "manual") || contextValue(row.business_context, "owner", "source") || s(row.access_owner, "");
+      setEditingAccess({
+        key,
+        access_id: row.access_id,
+        access_provider: row.access_provider,
+        access_name: row.access_name,
+        application,
+        business_permission: businessPermission,
+        owner,
+        original_application: application,
+        original_business_permission: businessPermission,
+        original_owner: owner,
+      });
+    },
+    requestAccessEdit = (row: Row) => {
+      if (saveAccessRow.isPending) return;
+      const key = `${s(row.access_provider)}:${s(row.access_name)}`;
+      if (editingAccess && editingAccess.key !== key && accessEditIsDirty(editingAccess)) {
+        setPendingAccessEdit(row);
+        return;
+      }
+      beginAccessEdit(row);
+    },
+    requestAccessTab = (nextTab: string) => {
+      if (nextTab === tab) return;
+      if (saveAccessRow.isPending) return;
+      if (editingAccess && accessEditIsDirty(editingAccess)) {
+        setPendingAccessTab(nextTab);
+        return;
+      }
+      setEditingAccess(null);
+      setTab(nextTab);
+    },
+    saveEditedAccess = (continuation: { row?: Row; tab?: string } = {}) => {
+      if (!editingAccess || saveAccessRow.isPending) return;
+      saveAccessRow.mutate({ body: goldenAccessEditPayload(editingAccess), continuation });
+    };
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!editingAccess || pendingAccessEdit || pendingAccessTab) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setEditingAccess(null);
+      } else if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        saveEditedAccess();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editingAccess, pendingAccessEdit, pendingAccessTab, saveAccessRow.isPending]);
   useEffect(() => setOffset(0), [selected]);
   useEffect(() => {
     if (!sid && latest) setSid(s(latest.id));
@@ -3629,43 +3704,43 @@ function Golden() {
           <div className="tabs">
             <button
               className={tab === "accesses" ? "text-button active" : "text-button"}
-              onClick={() => setTab("accesses")}
+              onClick={() => requestAccessTab("accesses")}
             >
               Expected access rights
             </button>
             <button
               className={tab === "expected" ? "text-button active" : "text-button"}
-              onClick={() => setTab("expected")}
+              onClick={() => requestAccessTab("expected")}
             >
               Who holds them
             </button>
             <button
               className={tab === "changes" ? "text-button active" : "text-button"}
-              onClick={() => setTab("changes")}
+              onClick={() => requestAccessTab("changes")}
             >
               Changes since the last collection
             </button>
             <button
               className={tab === "functional" ? "text-button active" : "text-button"}
-              onClick={() => setTab("functional")}
+              onClick={() => requestAccessTab("functional")}
             >
               Functional model
             </button>
             <button
               className={tab === "authentication" ? "text-button active" : "text-button"}
-              onClick={() => setTab("authentication")}
+              onClick={() => requestAccessTab("authentication")}
             >
               Authentication policy
             </button>
             <button
               className={tab === "catalog" ? "text-button active" : "text-button"}
-              onClick={() => setTab("catalog")}
+              onClick={() => requestAccessTab("catalog")}
             >
               Application catalogue
             </button>
             <button
               className={tab === "history" ? "text-button active" : "text-button"}
-              onClick={() => setTab("history")}
+              onClick={() => requestAccessTab("history")}
             >
               Version history
             </button>
@@ -3710,6 +3785,7 @@ function Golden() {
                 sorting={sorting}
                 filtering={columns.filtering}
                 q={accessesQuery}
+                rowClassName={(index) => editingAccess?.key === `${s(expectedAccesses[index]?.access_provider)}:${s(expectedAccesses[index]?.access_name)}` ? "golden-access-row-editing" : ""}
                 rows={expectedAccesses.map((r) => {
                   const key = `${s(r.access_provider)}:${s(r.access_name)}`;
                   const editing = editingAccess?.key === key;
@@ -3725,33 +3801,22 @@ function Golden() {
                   const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
                   const ownerDisplay = owner ? ownerDisplayLabel(owner, arr(ownerOptions.data?.items), s(r.access_provider)) : "";
-                  const beginEdit = () => setEditingAccess({
-                    key,
-                    access_id: r.access_id,
-                    access_provider: r.access_provider,
-                    access_name: r.access_name,
-                    application,
-                    business_permission: businessPermission,
-                    owner,
-                    access_comment: s(r.access_comment, ""),
-                    original_comment: s(r.access_comment, ""),
-                  });
                   const applicationCell = editing
                     ? <select value={s(editingAccess?.application, "")} onChange={(event) => {
                         if (event.target.value === "__new_application__") setNewApplication({ name: "", comment: "", similar: [] });
                         else setEditingAccess({ ...editingAccess, application: event.target.value });
-                      }}>
+                      }} disabled={saveAccessRow.isPending}>
                         <option value="">Select application</option>
                         {applicationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                         <option value="__new_application__">+ Add new application</option>
                       </select>
-                    : <button className="link-button" onClick={beginEdit}>{application || "—"}</button>;
+                    : <button className="link-button" onClick={() => requestAccessEdit(r)}>{application || "—"}</button>;
                   const selectCell = (field: string, value: string, options: string[], placeholder: string) => editing
-                    ? <select value={s(editingAccess?.[field], "")} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })}>
+                    ? <select value={s(editingAccess?.[field], "")} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })} disabled={saveAccessRow.isPending}>
                         <option value="">{placeholder}</option>
                         {options.map((option) => <option key={option} value={option}>{option}</option>)}
                       </select>
-                    : <button className="link-button" onClick={beginEdit}>{value || "—"}</button>;
+                    : <button className="link-button" onClick={() => requestAccessEdit(r)}>{value || "—"}</button>;
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.access_display_name, s(r.access_name))}
@@ -3766,7 +3831,7 @@ function Golden() {
                     applicationCell,
                     selectCell("business_permission", businessPermission || "Not provided", permissionOptions, "Select permission"),
                     editing ? (
-                      <select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })}>
+                      <select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} disabled={saveAccessRow.isPending}>
                         <option value="">Select owner</option>
                         {arr(ownerOptions.data?.items).map((identity) => {
                           const identifier = s(identity.identifier, s(identity.id));
@@ -3774,7 +3839,7 @@ function Golden() {
                           return <option key={value} value={value}>{s(identity.provider)}/{s(identity.display_name, identifier)}</option>;
                         })}
                       </select>
-                    ) : <button className="link-button" onClick={beginEdit}>{ownerDisplay || "—"}</button>,
+                    ) : <button className="link-button" onClick={() => requestAccessEdit(r)}>{ownerDisplay || "—"}</button>,
                     s(r.access_provider),
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.expected_identities, "0")} people
@@ -3782,9 +3847,18 @@ function Golden() {
                     <button className="link-button" onClick={() => { setAccessCommenting(r); setAccessComment(s(r.access_comment, "")); }}>
                       {s(r.access_comment, "Add comment")}
                     </button>,
-                    <button
-                      className="link-button"
-                      onClick={() => setRemoving({
+                    <div className="row-actions golden-access-actions">
+                      {editing ? <>
+                        {accessEditIsDirty(editingAccess) ? <span className="unsaved-indicator">Unsaved changes</span> : null}
+                        <button className="button primary" disabled={saveAccessRow.isPending} onClick={() => saveEditedAccess()}>
+                          {saveAccessRow.isPending ? "Saving…" : "Save changes"}
+                        </button>
+                        <button className="button subtle" disabled={saveAccessRow.isPending} onClick={() => setEditingAccess(null)}>Cancel</button>
+                      </> : <button className="link-button" disabled={saveAccessRow.isPending} onClick={() => requestAccessEdit(r)}>Edit</button>}
+                      <button
+                        className="link-button"
+                        disabled={saveAccessRow.isPending}
+                        onClick={() => setRemoving({
                         access_display_name: r.access_display_name,
                         access_name: r.access_name,
                         access_provider: r.access_provider,
@@ -3795,8 +3869,9 @@ function Golden() {
                           identity_provider: identity.identity_provider,
                           identity_identifier: identity.identity_identifier,
                         })),
-                      })}
-                    >Remove</button>,
+                        })}
+                      >Remove</button>
+                    </div>,
                   ];
                 })}
               />
@@ -4073,6 +4148,32 @@ function Golden() {
           <h4>DESCRIPTION</h4>
           <p>{s(holders.access_description, "No description was provided for this access.")}</p>
         </Drawer>
+      )}
+      {(pendingAccessEdit || pendingAccessTab) && (
+        <div className="modal-backdrop" onClick={() => { if (!saveAccessRow.isPending) { setPendingAccessEdit(null); setPendingAccessTab(null); } }}>
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <h2>Unsaved changes</h2>
+            <p>
+              You have unsaved changes for {s(editingAccess?.access_name, "this access")}. Choose how to continue.
+            </p>
+            {saveAccessRow.isError ? <p className="form-error">{s(saveAccessRow.error, "Unable to save access information")}</p> : null}
+            <div className="modal-actions golden-edit-confirm-actions">
+              <button className="button subtle" disabled={saveAccessRow.isPending} onClick={() => { setPendingAccessEdit(null); setPendingAccessTab(null); }}>Continue editing</button>
+              <button className="button danger" disabled={saveAccessRow.isPending} onClick={() => {
+                const nextRow = pendingAccessEdit;
+                const nextTab = pendingAccessTab;
+                setEditingAccess(null);
+                setPendingAccessEdit(null);
+                setPendingAccessTab(null);
+                if (nextRow) beginAccessEdit(nextRow);
+                if (nextTab) setTab(nextTab);
+              }}>Discard changes</button>
+              <button className="button primary" disabled={saveAccessRow.isPending} onClick={() => saveEditedAccess({ row: pendingAccessEdit ?? undefined, tab: pendingAccessTab ?? undefined })}>
+                {saveAccessRow.isPending ? "Saving…" : "Save and continue"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {newApplication && (
         <Drawer title="Add new application" close={() => setNewApplication(null)}>
