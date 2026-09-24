@@ -6,10 +6,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from access_review_engine.domain import Campaign, DecisionValue, OwnerRef, ReviewItem
+from access_review_engine.domain import Access, Campaign, DecisionValue, Identity, IdentityStatus, IdentityType, OwnerRef, Provider, ReviewItem
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif
-from access_review_engine.reporting import build_report_rows, render_access_matrix, render_html_report, render_pdf_report, write_reports
+from access_review_engine.reporting import access_names_from_snapshot, build_report_rows, render_access_matrix, render_html_report, render_pdf_report, write_reports
 from access_review_engine.services import create_decision, create_snapshot, open_campaign
 
 
@@ -21,6 +21,33 @@ def test_ad_zip_imports_users_groups_memberships_and_descriptions(tmp_path: Path
     assert result.accesses[0].description == "CRM access"
     assert result.assignments[0].identity_identifier == "jean.dupont"
     assert result.assignments[0].origin.source == "GG_CRM"
+
+
+def test_report_uses_group_name_instead_of_technical_group_id() -> None:
+    group = Identity("crm", "group:e20d683e-4871-1041-8771-538f525f828d", IdentityType.GROUP, IdentityStatus.ACTIVE, native_id="e20d683e-4871-1041-8771-538f525f828d", display_name="CRM-Sales")
+    access = Access("group:e20d683e-4871-1041-8771-538f525f828d:member", "crm")
+    snapshot = create_snapshot([Provider("crm", "generic")], [group], [], [access], [], [])
+
+    names = access_names_from_snapshot(snapshot)
+
+    assert names[("crm", access.name)] == "CRM-Sales"
+
+
+def test_report_resolves_entry_and_group_prefix_variants() -> None:
+    group = Identity("crm", "entry:e20d392c-4871-1041-8770-538f525f828d", IdentityType.GROUP, IdentityStatus.ACTIVE, native_id="e20d392c-4871-1041-8770-538f525f828d", display_name="CRM-Sales")
+    access = Access("group:e20d392c-4871-1041-8770-538f525f828d:member", "crm")
+    snapshot = create_snapshot([Provider("crm", "generic")], [group], [], [access], [], [])
+
+    assert access_names_from_snapshot(snapshot)[("crm", access.name)] == "CRM-Sales"
+
+
+def test_report_replaces_technical_access_display_name_with_group_name() -> None:
+    group_id = "e20d392c-4871-1041-8770-538f525f828d"
+    group = Identity("crm", f"entry:{group_id}", IdentityType.GROUP, IdentityStatus.ACTIVE, native_id=group_id, display_name="CRM-Compta")
+    access = Access(f"group:{group_id}:member", "crm", display_name=f"group:{group_id}:member")
+    snapshot = create_snapshot([Provider("crm", "generic")], [group], [], [access], [], [])
+
+    assert access_names_from_snapshot(snapshot)[("crm", access.name)] == "CRM-Compta"
 
 
 def test_ad_zip_rejects_missing_manifest_and_zip_slip(tmp_path: Path) -> None:

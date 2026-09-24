@@ -18,7 +18,7 @@ from access_review_engine.cli.output import build_export_filename, export_timest
 from access_review_engine.domain import Campaign, Finding, GoldenSourceAssignment
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif, import_openldap_zip
-from access_review_engine.reporting import write_reports
+from access_review_engine.reporting import access_names_from_snapshot, identity_names_from_snapshot, write_reports
 from access_review_engine.services import calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, open_campaign, promote_snapshot, remediation_from_decisions
 from access_review_engine.storage import (
     Repository, hydrate_access, hydrate_access_relation, hydrate_assignment,
@@ -708,11 +708,15 @@ def _campaign_items_and_decisions(repo: Repository, campaign: Campaign) -> tuple
 
 def export_campaign_report(repo: Repository, campaign: Campaign, output: Path, explicit: bool = False) -> list[Path]:
     items, decisions = _campaign_items_and_decisions(repo, campaign)
+    snapshot_payload = repo.get_payload("snapshots", campaign.snapshot_id)
+    snapshot = hydrate_snapshot(snapshot_payload) if snapshot_payload else None
+    identity_names = identity_names_from_snapshot(snapshot)
+    access_names = access_names_from_snapshot(snapshot)
     timestamp = export_timestamp()
     if explicit and output.suffix:
         output.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory() as d:
-            write_reports(d, campaign, items, decisions)
+            write_reports(d, campaign, items, decisions, identity_names=identity_names, access_names=access_names)
             report = Path(d) / "campaign-report.html"
             shutil.copyfile(report, output)
         return [output]
@@ -720,7 +724,7 @@ def export_campaign_report(repo: Repository, campaign: Campaign, output: Path, e
     directory.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as d:
         temp = Path(d)
-        write_reports(temp, campaign, items, decisions)
+        write_reports(temp, campaign, items, decisions, identity_names=identity_names, access_names=access_names)
         targets = [
             ("campaign-report.html", build_export_filename("campaign-report", "html", timestamp)),
             ("campaign-results.csv", build_export_filename("campaign-results", "csv", timestamp)),

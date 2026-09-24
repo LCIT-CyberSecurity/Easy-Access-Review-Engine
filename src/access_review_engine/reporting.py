@@ -29,10 +29,43 @@ def access_names_from_snapshot(snapshot: Snapshot | None) -> dict[tuple[str, str
     """Resolve technical Access references to their business/group names."""
     if snapshot is None:
         return {}
+
+    def normalize_reference(value: object) -> str:
+        reference = str(value or "").strip().casefold()
+        for prefix in ("group:", "entry:"):
+            if reference.startswith(prefix):
+                reference = reference[len(prefix):]
+        return reference
+
+    group_names: dict[tuple[str, str], str] = {}
+    for identity in snapshot.identities:
+        if str(identity.type).casefold() != "group":
+            continue
+        metadata_name = identity.metadata.get("name") if isinstance(identity.metadata, dict) else None
+        label = identity.display_name or metadata_name or identity.email or identity.identifier
+        references = (identity.identifier, identity.native_id, identity.id)
+        for reference in references:
+            if reference:
+                group_names[(identity.provider, normalize_reference(reference))] = label
+
+    def group_label(provider: str, access_name: str, control_object: object) -> str | None:
+        parts = access_name.split(":")
+        if len(parts) >= 2 and parts[0].casefold() == "group":
+            label = group_names.get((provider, normalize_reference(parts[1])))
+            if label:
+                return label
+        if isinstance(control_object, dict):
+            for value in (control_object.get("display_name"), control_object.get("identifier"), control_object.get("native_id")):
+                label = group_names.get((provider, normalize_reference(value)))
+                if label:
+                    return label
+        return None
+
     names: dict[tuple[str, str], str] = {}
     for access in snapshot.accesses:
         control_object = access.control_object
         label = access.display_name or (control_object.display_name if control_object else None) or access.name
+        label = group_label(access.provider, access.name, asdict(control_object) if control_object else None) or label
         for reference in (access.name, control_object.native_id if control_object else None, access.id):
             if reference:
                 names[(access.provider, reference)] = label
@@ -72,7 +105,7 @@ def build_report_rows(
                 "control_object": item.control_object.get("display_name")
                 or item.control_object.get("identifier", ""),
                 "permission": item.permission.get("display_name") or item.permission.get("identifier", ""),
-                "access": access_names.get((item.access_provider, item.access_name)) or item.control_object.get("display_name") or item.control_object.get("identifier") or item.access_name,
+                "access": access_names.get((item.access_provider, item.access_name)) or item.access_name,
                 "access_identifier": item.access_name,
                 "description": item.description or "",
                 "identity": identity_names.get((item.identity_provider, item.identity_identifier), item.identity_identifier),

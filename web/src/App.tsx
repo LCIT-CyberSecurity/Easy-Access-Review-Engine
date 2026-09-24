@@ -4779,13 +4779,21 @@ function Reports() {
     }),
     campaigns = arr(campaignsQuery.data?.items),
     [chosen, setChosen] = useState(() => new URLSearchParams(window.location.search).get("campaign") ?? ""),
-    // Reports are read after a campaign is closed: offer that one first.
-    selected =
-      campaigns.find((r) => s(r.id) === chosen) ??
-      campaigns.find((r) => s(r.status) === "closed") ??
-      campaigns[0],
+    selected = campaigns.find((r) => s(r.id) === chosen) ?? campaigns.find((r) => s(r.status) === "closed") ?? campaigns[0],
     id = s(selected?.id, ""),
-    campaign = selected ?? {};
+    [compareId, setCompareId] = useState(""),
+    comparison = campaigns.find((r) => s(r.id) === compareId),
+    campaign = selected ?? {},
+    results = useQuery({
+      queryKey: ["report-results", id],
+      queryFn: () => getJson(`reports/${encodeURIComponent(id)}/results`, { limit: 500 }),
+      enabled: Boolean(id),
+    }),
+    compareResults = useQuery({
+      queryKey: ["report-results", compareId],
+      queryFn: () => getJson(`reports/${encodeURIComponent(compareId)}/results`, { limit: 500 }),
+      enabled: Boolean(compareId),
+    });
   if (!campaigns.length)
     return (
       <>
@@ -4819,38 +4827,86 @@ function Reports() {
           </a>
         </div>
       </Head>
-      <div className="filterbar">
-        <select className="filter-button" value={id} onChange={(e) => setChosen(e.target.value)}>
-          {campaigns.map((r) => (
-            <option key={s(r.id)} value={s(r.id)}>
-              {s(r.name)} — {s(r.status)}
-            </option>
-          ))}
-        </select>
-        <Status v={campaign.status ?? selected?.status} />
-        <span className="muted">
-          {campaign.closed_at
-            ? `closed ${when(campaign.closed_at)}`
-            : campaign.opened_at
-              ? `opened ${when(campaign.opened_at)}`
-              : "not opened yet"}
-        </span>
-      </div>
-      <section className="report-workspace">
-        <div className="report-workspace-head">
-          <div>
-            <span className="eyebrow">{uiLabel("Governance evidence")}</span>
-            <h2>{uiLabel("Final campaign report")}</h2>
-            <p className="muted">{ui("ui.reportDisplayed", { defaultValue: "The report is displayed here as a complete document. Use the downloads above to distribute it." })}</p>
-          </div>
-          <a className="button subtle" href={`/api/reports/${id}/html?inline=true`} target="_blank" rel="noreferrer">
-            {uiLabel("Open full report")}
-          </a>
+      <section className="report-controls panel">
+        <div>
+          <span className="eyebrow">Campaign period</span>
+          <label>
+            Campaign
+            <select className="filter-button" value={id} onChange={(e) => { setChosen(e.target.value); setCompareId(""); }}>
+              {campaigns.map((r) => (
+                <option key={s(r.id)} value={s(r.id)}>
+                  {s(r.name, s(r.id))} · {reportPeriod(r)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="muted">{reportPeriod(campaign)}</p>
         </div>
-        <iframe className="report-document" title={`Final report for ${s(campaign.name)}`} src={`/api/reports/${id}/html?inline=true`} loading="lazy" />
+        <div>
+          <span className="eyebrow">Compare evolution</span>
+          <label>
+            Previous campaign
+            <select className="filter-button" value={compareId} onChange={(e) => setCompareId(e.target.value)}>
+              <option value="">No comparison</option>
+              {campaigns.filter((r) => s(r.id) !== id).map((r) => (
+                <option key={s(r.id)} value={s(r.id)}>
+                  {s(r.name, s(r.id))} · {reportPeriod(r)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="muted">Compare decisions, classifications and reviewed population across two campaign dates.</p>
+        </div>
+      </section>
+      <div className="report-context-bar">
+        <Status v={campaign.status ?? selected?.status} />
+        <span>{reportPeriod(campaign)}</span>
+        <span>{comparison ? `Compared with ${s(comparison.name, s(comparison.id))} · ${reportPeriod(comparison)}` : "No comparison selected"}</span>
+      </div>
+      <section className="report-summary-grid">
+        <ReportMetric label="Reviewed" value={reportCount(results.data?.summary, "identities")} detail={comparison ? reportDelta(results.data?.summary, compareResults.data?.summary, "identities") : "Current campaign"} />
+        <ReportMetric label="Observed" value={reportCount(results.data?.summary, "observed")} detail={comparison ? reportDelta(results.data?.summary, compareResults.data?.summary, "observed") : "Current campaign"} />
+        <ReportMetric label="Unexpected" value={reportCount(results.data?.summary, "unexpected")} detail={comparison ? reportDelta(results.data?.summary, compareResults.data?.summary, "unexpected") : "Current campaign"} tone="bad" />
+        <ReportMetric label="Pending decisions" value={reportCount(results.data?.summary, "pending")} detail={comparison ? reportDelta(results.data?.summary, compareResults.data?.summary, "pending") : "Current campaign"} tone="warn" />
+      </section>
+      {comparison && compareResults.data ? <ReportComparison current={results.data?.summary} previous={compareResults.data?.summary} /> : null}
+      <section className="report-results panel">
+        <div className="report-section-head">
+          <div><span className="eyebrow">Review evidence</span><h2>Campaign results</h2></div>
+          <span className="muted">{reportCount(results.data, "total")} rows · {reportPeriod(campaign)}</span>
+        </div>
+        <ReportResultsTable query={results} />
       </section>
     </>
   );
+}
+
+function reportPeriod(campaign: Row): string {
+  const start = campaign.opened_at ? when(campaign.opened_at) : "Start not set";
+  const end = campaign.closed_at ? when(campaign.closed_at) : "Ongoing";
+  return `${start} → ${end}`;
+}
+function reportCount(value: unknown, key: string): number {
+  return Number((value as Row | undefined)?.[key] ?? 0);
+}
+function reportDelta(current: unknown, previous: unknown, key: string): string {
+  const delta = reportCount(current, key) - reportCount(previous, key);
+  return `${delta > 0 ? "+" : ""}${delta} vs previous`;
+}
+function ReportMetric({ label, value, detail, tone = "" }: { label: string; value: number; detail: string; tone?: string }) {
+  return <article className={`report-metric ${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>;
+}
+function ReportComparison({ current, previous }: { current: unknown; previous: unknown }) {
+  const values = [
+    ["Expected", "expected"], ["Observed", "observed"], ["Unexpected", "unexpected"], ["Missing", "missing"], ["Approved", "approve"], ["Revoked", "revoke"],
+  ];
+  return <section className="report-comparison panel"><div className="report-section-head"><div><span className="eyebrow">Evolution</span><h2>Campaign comparison</h2></div><span className="muted">Current versus selected previous campaign</span></div><div className="comparison-grid">{values.map(([label, key]) => <div key={key}><span>{label}</span><strong>{reportCount(current, key)}</strong><small>{reportDelta(current, previous, key)}</small></div>)}</div></section>;
+}
+function ReportResultsTable({ query }: { query: { data?: Row; isLoading: boolean; isError: boolean; error?: unknown; refetch: () => void } }) {
+  if (query.isLoading) return <div className="empty">Loading campaign results…</div>;
+  if (query.isError) return <div className="empty"><strong>{s(query.error, "Unable to load report")}</strong><button className="button subtle" onClick={() => query.refetch()}>Retry</button></div>;
+  const rows = arr(query.data?.items);
+  return rows.length ? <div className="report-results-table"><table><thead><tr><th>Identity</th><th>Access</th><th>Source</th><th>Classification</th><th>Decision</th><th>Action</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${s(row.identity_identifier)}-${s(row.access_identifier)}-${index}`}><td><strong>{s(row.identity)}</strong><Sub>{s(row.identity_provider)}</Sub></td><td><strong>{s(row.access)}</strong><Sub>{s(row.permission)}</Sub></td><td>{s(row.provider)}</td><td><Status v={row.classification} /></td><td><Status v={row.decision} /></td><td>{s(row.action)}</td></tr>)}</tbody></table></div> : <div className="empty">No results for this campaign.</div>;
 }
 const LOCAL_SOURCE = "local";
 const blankUser = (source = LOCAL_SOURCE): Row => ({
