@@ -424,3 +424,11 @@ Golden Source versions can record what an Access is expected to grant as well as
 ## Language selection
 
 The WebUI language is selected from the current-user menu. Available languages are English, Français, Español, Português, Italiano and العربية. English is used by default and whenever a translation is unavailable. The choice applies immediately and is persisted as a browser UI preference only; business data, technical values and user-entered comments are never translated. Arabic switches the interface to right-to-left layout.
+
+# EARE Guide
+
+EARE Guide is an optional, deterministic helper available from the authenticated header. It explains what is ready, what is missing, and the next authorized EARE screen for the current role and scope. It is guidance, not authorization: it cannot grant permissions or execute governance actions.
+
+The Guide is role-aware. Administrators are guided toward environment configuration and handing campaign governance to an Operator; Operators are guided through collection, Golden Source preparation, and campaigns; Group owners see their assigned reviews; Business Administrators and Remediation Managers see only authorized operational actions. Source and campaign scope filtering is enforced by the backend.
+
+The first introduction can be skipped, and the Guide can be disabled from its drawer. EARE derives progress from current data rather than storing a wizard step. It never modifies a source system or performs a business decision automatically.
