@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Navigate, NavLink, Route, Routes, useParams, useSearchParams } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowDown,
@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Database,
   FileDown,
+  HelpCircle,
   KeyRound,
   Languages,
   LayoutDashboard,
@@ -30,6 +31,7 @@ import {
   changePassword,
   deleteJson,
   getJson,
+  getGuidance,
   getPage,
   getSession,
   login,
@@ -487,7 +489,17 @@ const navSections = [
   },
 ];
 function Shell({ principal }: { principal: Principal }) {
-  const [c, setC] = useState(false);
+  const [c, setC] = useState(false),
+    [guideOpen, setGuideOpen] = useState(false),
+    [guideEnabled, setGuideEnabled] = useState(() => readGuidePreference(principal, "enabled", true)),
+    [onboardingSeen, setOnboardingSeen] = useState(() => readGuidePreference(principal, "seen", false)),
+    location = useLocation(),
+    guidance = useQuery({
+      queryKey: ["guidance", location.pathname],
+      queryFn: () => getGuidance(location.pathname),
+      enabled: guideEnabled,
+      staleTime: 30000,
+    });
   return (
     <div className="app-shell">
       <aside className={c ? "sidebar open" : "sidebar"}>
@@ -533,6 +545,9 @@ function Shell({ principal }: { principal: Principal }) {
             {ui("nav.workspace")} <ChevronRight size={14} /> {ui("nav.accessGovernance")}
           </span>
           <div className="top-actions">
+            <button className="guide-trigger" type="button" onClick={() => setGuideOpen(true)} aria-label={ui("guide.open")}>
+              <HelpCircle size={16} /> <span>{ui("guide.title")}</span>
+            </button>
             <UserMenu
               principal={principal}
               onSignOut={async () => {
@@ -574,6 +589,8 @@ function Shell({ principal }: { principal: Principal }) {
           </Routes>
         </main>
       </div>
+      {guideOpen ? <GuideDrawer data={guidance.data} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} /> : null}
+      {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
     </div>
   );
 }
@@ -944,6 +961,104 @@ function ApiTokenPanel({ menuOpen }: { menuOpen: boolean }) {
   );
 }
 
+function guideStorageKey(principal: Principal, suffix: string): string {
+  return `eare.guide.${suffix}.${principal.subject}`;
+}
+function readGuidePreference(principal: Principal, suffix: string, fallback: boolean): boolean {
+  try {
+    const value = window.localStorage.getItem(guideStorageKey(principal, suffix));
+    return value === null ? fallback : value === "1";
+  } catch {
+    return fallback;
+  }
+}
+function writeGuidePreference(principal: Principal, suffix: string, value: boolean): void {
+  try {
+    window.localStorage.setItem(guideStorageKey(principal, suffix), value ? "1" : "0");
+  } catch {
+    // Guidance remains available for this session when storage is unavailable.
+  }
+}
+function GuideDrawer({ data, principal, enabled, close, setEnabled }: { data?: Row; principal: Principal; enabled: boolean; close: () => void; setEnabled: (value: boolean) => void }) {
+  const recommendations = arr(data?.recommendations), state = (data?.state ?? {}) as Row, pageHelp = (data?.page_help ?? {}) as Row;
+  const text = (key: unknown) => ui(s(key, "common.unknown"));
+  const openRecommendation = recommendations.find((item) => item.priority === "primary") ?? recommendations[0];
+  return (
+    <Drawer title={text("guide.title")} close={close} size="wide">
+      <div className="guide-drawer">
+        <div className="guide-role"><span className="eyebrow">{text("guide.role")}</span><strong>{ui(`status.${principal.role}`)}</strong></div>
+        {!enabled ? (
+          <section className="guide-disabled">
+            <p>{text("guide.disabled")}</p>
+            <button className="button primary" onClick={() => { writeGuidePreference(principal, "enabled", true); setEnabled(true); }}>{text("guide.enable")}</button>
+          </section>
+        ) : (
+          <>
+            <section className="guide-situation">
+              <h3>{text("guide.currentSituation")}</h3>
+              <div className="guide-facts">
+                <span>{Number(state.sources) ? `✓ ${state.sources} ${text("guide.page.sources.title")}` : `○ ${text("guide.page.sources.title")}`}</span>
+                <span>{state.latest_snapshot ? `✓ ${text("labels.observedSnapshot")}` : `○ ${text("labels.observedSnapshot")}`}</span>
+                <span>{state.golden_available ? `✓ ${text("labels.expectedState")}` : `○ ${text("labels.expectedState")}`}</span>
+                {Number(state.pending_reviews) ? <span>! {state.pending_reviews} {text("labels.pendingReviews")}</span> : null}
+                {Number(state.pending_actions) ? <span>! {state.pending_actions} {text("labels.actions")}</span> : null}
+              </div>
+            </section>
+            {openRecommendation ? (
+              <section className="guide-primary">
+                <span className="eyebrow">{text("guide.next")}</span>
+                <h3>{text(openRecommendation.title)}</h3>
+                <p>{text(openRecommendation.description)}</p>
+                <p className="guide-why"><strong>{text("guide.why")}</strong> {text(openRecommendation.reason)}</p>
+                {openRecommendation.action_url ? <NavLink className="button primary" to={s(openRecommendation.action_url)} onClick={close}>{text(openRecommendation.action_label)}</NavLink> : null}
+              </section>
+            ) : null}
+            {recommendations.length > 1 ? (
+              <section className="guide-suggestions">
+                <h3>{text("guide.otherSuggestions")}</h3>
+                {recommendations.filter((item) => item !== openRecommendation).slice(0, 4).map((item) => (
+                  <div className="guide-suggestion" key={s(item.id)}>
+                    <strong>{text(item.title)}</strong>
+                    <p>{text(item.description)}</p>
+                    {item.action_url ? <NavLink className="text-button" to={s(item.action_url)} onClick={close}>{text(item.action_label)}</NavLink> : null}
+                  </div>
+                ))}
+              </section>
+            ) : null}
+            <section className="guide-page-help">
+              <h3>{text("guide.pageHelp")}: {text(pageHelp.title)}</h3>
+              <p>{text(pageHelp.description)}</p>
+              <div className="guide-questions">{vals(pageHelp.questions).map((question) => <span key={question}>{text(question)}</span>)}</div>
+            </section>
+            <p className="guide-read-only">{text("guide.readOnly")}</p>
+            <button className="text-button" onClick={() => { writeGuidePreference(principal, "enabled", false); setEnabled(false); }}>{text("guide.disable")}</button>
+          </>
+        )}
+      </div>
+    </Drawer>
+  );
+}
+function GuideOnboarding({ data, principal, close, onSeen }: { data: Row; principal: Principal; close: () => void; onSeen: () => void }) {
+  const recommendations = arr(data.recommendations), primary = recommendations.find((item) => item.priority === "primary") ?? recommendations[0];
+  const text = (key: unknown) => ui(s(key, "common.unknown"));
+  const finish = () => { writeGuidePreference(principal, "seen", true); onSeen(); };
+  return (
+    <div className="modal-backdrop">
+      <div className="modal guide-onboarding" role="dialog" aria-modal="true" aria-labelledby="guide-onboarding-title">
+        <span className="eyebrow">{text("guide.title")}</span>
+        <h2 id="guide-onboarding-title">{text("guide.onboardingTitle")}</h2>
+        <p>{text("guide.onboardingIntro")}</p>
+        <div className="guide-role"><span>{text("guide.role")}</span><strong>{ui(`status.${principal.role}`)}</strong></div>
+        {primary ? <div className="guide-primary"><span className="eyebrow">{text("guide.next")}</span><h3>{text(primary.title)}</h3><p>{text(primary.description)}</p></div> : null}
+        <div className="modal-actions">
+          <button className="button subtle" onClick={finish}>{text("guide.explore")}</button>
+          <button className="button primary" onClick={() => { finish(); close(); }}>{text("guide.startSetup")}</button>
+        </div>
+        <button className="text-button" onClick={finish}>{text("guide.skip")}</button>
+      </div>
+    </div>
+  );
+}
 function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: () => void }) {
   const menu = useRef<HTMLDetailsElement>(null);
   const [theme, setTheme] = useState<ThemeId>(readTheme);
@@ -1279,6 +1394,7 @@ const when = (value: unknown): string => {
 };
 function Home() {
   const q = useQuery({ queryKey: ["dashboard"], queryFn: () => getJson("dashboard") }),
+    guide = useQuery({ queryKey: ["guidance", "/"], queryFn: () => getGuidance("/"), staleTime: 30000 }),
     m = (q.data?.metrics ?? {}) as Row,
     attention = arr(q.data?.attention),
     campaigns = arr(q.data?.campaigns),
@@ -1320,6 +1436,19 @@ function Home() {
           ? ` · Expected state: ${s(expected.name)} v${s(expected.version)} (${s(expected.assignments, "0")} accesses)`
           : " · No expected state yet"}
       </p>
+      {(() => {
+        const primary = arr(guide.data?.recommendations).find((item) => item.priority === "primary") ?? arr(guide.data?.recommendations)[0];
+        return primary ? (
+          <section className="guide-dashboard-card">
+            <div>
+              <span className="eyebrow">{ui("guide.next")}</span>
+              <h2>{ui(s(primary.title, "common.unknown"))}</h2>
+              <p>{ui(s(primary.description, "common.unknown"))}</p>
+            </div>
+            {primary.action_url ? <NavLink className="button primary" to={s(primary.action_url)}>{ui(s(primary.action_label, "common.unknown"))}</NavLink> : null}
+          </section>
+        ) : null;
+      })()}
       <div className="metrics">
         {tiles.map(([label, value, link, hint]) => (
           <NavLink className="metric" to={link} key={label}>
