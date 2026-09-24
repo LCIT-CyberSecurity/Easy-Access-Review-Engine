@@ -101,10 +101,18 @@ if TestClient is not None:
         client = _client()
         _login(client, "owner", "owner-password")
         assert client.get("/api/dashboard").status_code == 403
+        guidance = client.get("/api/guidance?route=/campaigns")
+        assert guidance.status_code == 200
+        assert guidance.json()["role"] == "GROUP_OWNER"
+        assert guidance.json()["read_only"] is True
         assert client.get("/api/campaigns/campaign-1").status_code == 403
         client.cookies.clear()
         _login(client, "business", "business-password")
         assert client.get("/api/dashboard").status_code == 403
+        guidance = client.get("/api/guidance?route=/actions")
+        assert guidance.status_code == 200
+        assert guidance.json()["role"] == "BUSINESS_ADMIN"
+        assert guidance.json()["state"]["pending_actions"] == 1
         assert client.get("/api/campaigns/campaign-1").status_code == 403
 
 

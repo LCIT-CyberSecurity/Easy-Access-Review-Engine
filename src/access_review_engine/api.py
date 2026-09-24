@@ -56,6 +56,7 @@ from access_review_engine.domain import (
     target_path,
 )
 from access_review_engine.golden_annotations import annotation_for_assignment, copy_assignment_annotations, normalize_assignment_comment, set_assignment_annotation
+from access_review_engine.guidance import GuidanceContext, build_guidance
 from access_review_engine.reporting import access_names_from_snapshot, build_report_rows, identity_names_from_snapshot, render_pdf_report, report_summary, write_reports
 from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, compare_snapshot, create_decision, create_golden_source, create_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
 from access_review_engine.source_inspector import SourceInspectorError, browse_source_tree, discover_source_attributes, get_source_object, search_source_objects, source_object_kinds
@@ -1665,6 +1666,116 @@ def create_app(db_path: str | None = None):
             "sources": [{"name": row.get("name"), "health": row.get("health"), "last_sync": row.get("last_sync"), "identity_count": row.get("identity_count"), "access_count": row.get("access_count")} for row in providers],
             "attention": attention[:8],
         }
+
+    @app.get("/api/guidance")
+    def guidance(request: Request, route: str = "/"):
+        """Return read-only, scope-filtered facts and deterministic next actions."""
+        principal = _require(current_user(request))
+        route = route if route.startswith("/") and len(route) <= 160 else "/"
+        allowed_domains = None if principal.role == "ADMIN" or "*" in principal.scopes else set(principal.scopes)
+        allowed_campaigns: set[str] = set()
+        if principal.role in {"ADMIN", "OPERATOR"}:
+            with Repository(db_path) as repo:
+                allowed_campaigns = _authorized_campaign_ids(principal, repo)
+
+        if principal.role == "ADMIN":
+            allowed_routes = frozenset({"/sources", "/golden", "/campaigns", "/campaigns/new", "/findings", "/reports", "/system/users"})
+        elif principal.role == "OPERATOR":
+            allowed_routes = frozenset({"/sources", "/golden", "/campaigns", "/campaigns/new", "/findings", "/reports"})
+        elif principal.role == "GROUP_OWNER":
+            allowed_routes = frozenset({"/reviews"})
+        else:
+            allowed_routes = frozenset({"/actions"})
+
+        with Repository(db_path) as repo:
+            raw_providers = projected_rows(db_path, "providers", limit=500, offset=0, allowed_providers=allowed_domains)["items"]
+            providers = [dict(row) for row in raw_providers]
+            snapshots = repo.list_payloads("snapshots")
+            if allowed_domains is not None:
+                snapshots = [
+                    snapshot for snapshot in snapshots
+                    if any(str(provider.get("name") or "") in allowed_domains for provider in snapshot.get("providers", []))
+                ]
+            snapshot_ids = {str(snapshot.get("id")) for snapshot in snapshots}
+            sources = repo.list_payloads("golden_sources")
+            versions = repo.list_payloads("golden_source_versions")
+            golden_available = any(
+                str(source.get("active_version_id") or "") in {
+                    str(version.get("id")) for version in versions
+                    if allowed_domains is None
+                    or str(version.get("source_snapshot_id") or "") in snapshot_ids
+                    or str(version.get("source_type") or "") == "from_scratch"
+                }
+                for source in sources
+            )
+            operator_count = sum(1 for user in list_users(system_conn) if user.get("enabled") and user.get("role") == "OPERATOR") if principal.role == "ADMIN" else 0
+
+        campaigns: list[dict[str, Any]] = []
+        review_items: list[dict[str, Any]] = []
+        if principal.role in {"ADMIN", "OPERATOR"}:
+            campaigns = [
+                dict(row) for row in projected_rows(
+                    db_path, "campaigns", limit=500, offset=0, allowed_campaign_ids=allowed_campaigns,
+                )["items"]
+            ]
+            review_items = [
+                dict(row) for row in projected_rows(
+                    db_path, "review_items", limit=500, offset=0,
+                    allowed_campaign_ids=allowed_campaigns,
+                )["items"]
+            ]
+        elif principal.role == "GROUP_OWNER":
+            review_items = [
+                dict(row) for row in projected_rows(
+                    db_path, "review_items", limit=500, offset=0,
+                    reviewer_username=principal.username,
+                )["items"]
+            ]
+
+        actions: list[dict[str, Any]] = []
+        if principal.role in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
+            actions = [
+                dict(row) for row in projected_rows(
+                    db_path, "remediation_actions", limit=500, offset=0,
+                    allowed_providers=allowed_domains,
+                    allowed_campaign_ids=allowed_campaigns if principal.role in {"ADMIN", "OPERATOR"} else None,
+                )["items"]
+            ]
+
+        open_campaigns = tuple(
+            {
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "pending": int(row.get("pending") or 0),
+                "unresolved_reviewers": int((row.get("reviewer_resolution") or {}).get("unresolved") or 0),
+            }
+            for row in campaigns if row.get("status") == "open"
+        )
+        pending_reviews = sum(1 for row in review_items if not row.get("latest_decision"))
+        assigned_pending_reviews = pending_reviews if principal.role == "GROUP_OWNER" else 0
+        pending_actions = sum(1 for row in actions if str(row.get("status") or "").casefold() not in {"completed", "exported"})
+        findings_count = sum(len(row.get("findings") or []) for row in review_items)
+        unresolved_reviewers = sum(int(row.get("unresolved_reviewers") or 0) for row in open_campaigns)
+        context = GuidanceContext(
+            role=principal.role,
+            route=route,
+            source_count=len(providers) if principal.role in {"ADMIN", "OPERATOR"} else 0,
+            synchronized_source_count=sum(1 for row in providers if row.get("health") == "healthy") if principal.role in {"ADMIN", "OPERATOR"} else 0,
+            latest_snapshot=bool(snapshots) if principal.role in {"ADMIN", "OPERATOR"} else False,
+            golden_available=golden_available if principal.role in {"ADMIN", "OPERATOR"} else False,
+            open_campaigns=open_campaigns,
+            pending_reviews=pending_reviews if principal.role in {"ADMIN", "OPERATOR"} else 0,
+            assigned_pending_reviews=assigned_pending_reviews,
+            pending_actions=pending_actions,
+            operator_count=operator_count,
+            unresolved_reviewers=unresolved_reviewers,
+            findings_count=findings_count,
+            allowed_routes=allowed_routes | frozenset(
+                f"/campaigns/{campaign['id']}" for campaign in open_campaigns
+                if principal.role in {"ADMIN", "OPERATOR"}
+            ),
+        )
+        return build_guidance(context)
 
 
     def _snapshot(repo: Repository, snapshot_id: str | None = None):
