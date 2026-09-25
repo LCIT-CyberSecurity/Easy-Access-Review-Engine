@@ -8,26 +8,26 @@
     "add": "إضافة",
     "remove": "إزالة",
     "search": "بحث",
-    "filter": "Filter",
-    "apply": "Apply",
-    "reset": "Reset",
-    "back": "Back",
+    "filter": "تصفية",
+    "apply": "تطبيق",
+    "reset": "إعادة تعيين",
+    "back": "رجوع",
     "next": "التالي",
     "previous": "السابق",
     "retry": "إعادة المحاولة",
     "loading": "جار التحميل…",
-    "noResults": "No results",
-    "success": "Success",
-    "error": "Error",
-    "yes": "Yes",
-    "no": "No",
-    "show": "Show",
-    "hide": "Hide",
-    "dismiss": "Dismiss",
+    "noResults": "لا توجد نتائج",
+    "success": "نجاح",
+    "error": "خطأ",
+    "yes": "نعم",
+    "no": "لا",
+    "show": "إظهار",
+    "hide": "إخفاء",
+    "dismiss": "تجاهل",
     "language": "اللغة",
-    "page": "Page",
-    "of": "of",
-    "unknown": "Unknown",
+    "page": "صفحة",
+    "of": "من",
+    "unknown": "غير معروف",
     "signOut": "تسجيل الخروج"
   },
   "nav": {
@@ -54,10 +54,10 @@
     "seeAll": "See all"
   },
   "auth": {
-    "accessGovernance": "ACCESS GOVERNANCE, MADE CLEAR",
-    "everyAccess": "Every access.",
-    "accountedFor": "Accounted for.",
-    "intro": "See what people have, compare it with what they should have, and turn every review into a clear decision.",
+    "accessGovernance": "حوكمة الوصول بوضوح",
+    "everyAccess": "كل صلاحية وصول.",
+    "accountedFor": "موثقة بالكامل.",
+    "intro": "اطّلع على صلاحيات الوصول الحالية، وقارنها بالصلاحيات المتوقعة، وحوّل كل مراجعة إلى قرار واضح.",
     "collect": "Collect",
     "knowCurrentState": "Know the current state",
     "compare": "Compare",
@@ -73,17 +73,26 @@
     "password": "كلمة المرور",
     "signIn": "تسجيل الدخول",
     "signingIn": "جار تسجيل الدخول…",
-    "signedOut": "You have been signed out. Sign in again to continue.",
-    "unableToSignIn": "Unable to sign in",
-    "accountSecurity": "ACCOUNT SECURITY",
+    "signedOut": "تم تسجيل خروجك. سجّل الدخول مرة أخرى للمتابعة.",
+    "unableToSignIn": "تعذر تسجيل الدخول",
+    "accountSecurity": "أمان الحساب",
     "changePassword": "تغيير كلمة المرور",
-    "newPasswordContinue": "Set a new password to continue to your workspace.",
+    "newPasswordContinue": "عيّن كلمة مرور جديدة للمتابعة إلى مساحة عملك.",
     "newPassword": "كلمة المرور الجديدة",
     "confirmPassword": "تأكيد كلمة المرور",
     "passwordMismatch": "كلمتا المرور غير متطابقتين",
     "change": "تغيير كلمة المرور",
     "changing": "جار التغيير…",
-    "unableToChange": "Unable to change password"
+    "unableToChange": "تعذر تغيير كلمة المرور"
+  },
+  "roles": {
+    "help": {
+      "admin": "يهيئ EARE ويدير المستخدمين ويمكنه تنفيذ جميع عمليات الحوكمة.",
+      "operator": "يدير الحملات فقط عندما يكون كل موفر ونطاق تعرضه الحملة مصرحاً به.",
+      "groupOwner": "يرى ويقرر فقط المراجعات المسندة إليه.",
+      "businessAdmin": "يراجع إجراءات المعالجة ضمن النطاقات المصرح بها. لا يمكن لهذا الدور تسجيل الإنجاز التشغيلي.",
+      "remediationManager": "يراجع إجراءات المعالجة ضمن النطاقات المصرح بها ويمكنه تسجيل المتابعة التشغيلية وأدلة الإنجاز."
+    }
   },
   "status": {
     "expected_and_observed": "متوافق مع المتوقع",
@@ -149,7 +158,8 @@
     "application": "التطبيق",
     "permission": "الصلاحية",
     "resource": "المورد",
-    "description": "الوصف"
+    "description": "الوصف",
+    "manualValueHint": "تقترح القوائم قيماً معروفة مسبقاً لدى EARE. ويمكن استخدام قيمة يدوية بعد اعتمادها من جهة الأعمال."
   },
   "campaign": {
     "reviewer": "المراجع",
@@ -163,7 +173,16 @@
     "notApplicable": "لا ينطبق",
     "newCampaign": "حملة جديدة",
     "campaign": "Campaign",
-    "selectCampaign": "Select campaign"
+    "selectCampaign": "اختيار حملة",
+    "unresolvedReviewers": {
+      "title_one": "مجموعة/دور أو هوية واحدة بلا مسؤول ({{count}})",
+      "title_other": "مجموعات/أدوار أو هويات بلا مسؤول ({{count}})",
+      "description": "لا يحدد المصدر الذهبي مسؤولاً. أضف مسؤولاً للتعيين التلقائي؛ ومع التجاوز سيتلقى الطيار هذه المراجعات للمعالجة اليدوية.",
+      "applicationMissing": "التطبيق غير محدد",
+      "descriptionMissing": "وصف الوصول غير محدد",
+      "allowAnyway": "السماح على أي حال",
+      "bypassHelp": "تجاوز: إسناد هذه المراجعات إلى الطيار للمعالجة اليدوية"
+    }
   },
   "source": {
     "add": "إضافة مصدر",

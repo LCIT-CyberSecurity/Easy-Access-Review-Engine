@@ -1844,8 +1844,8 @@ def create_app(db_path: str | None = None):
             "ADMIN": {"can_configure_sources", "can_preview_sources", "can_sync_sources", "can_manage_users", "can_edit_golden", "can_prepare_campaign", "can_open_campaign", "can_decide_review", "can_view_remediation", "can_update_remediation", "can_view_reports", "can_view_findings"},
             "OPERATOR": {"can_preview_sources", "can_sync_sources", "can_edit_golden", "can_prepare_campaign", "can_open_campaign", "can_decide_review", "can_view_reports", "can_view_findings"},
             "GROUP_OWNER": {"can_decide_review"},
-            "BUSINESS_ADMIN": {"can_view_remediation", "can_view_reports"},
-            "REMEDIATION_MANAGER": {"can_view_remediation", "can_update_remediation", "can_view_reports"},
+            "BUSINESS_ADMIN": {"can_view_remediation"},
+            "REMEDIATION_MANAGER": {"can_view_remediation", "can_update_remediation"},
         }
         campaign_readiness = None
         route_parts = [part for part in route.split("/") if part]

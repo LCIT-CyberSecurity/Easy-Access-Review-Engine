@@ -275,6 +275,11 @@ def review_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def remediation_status(row: dict[str, Any]) -> str:
+    """Read legacy remediation rows with the domain's pending default."""
+    return str(row.get("status") or "pending")
+
+
 def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, allowed_campaign_ids: set[str] | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, filters: dict[str, str] | None = None) -> dict[str, object]:
     with Repository(db_path) as repo:
         raw = repo.list_payloads(table)
@@ -334,6 +339,9 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
         latest_decisions = _latest_decisions(repo.list_payloads("decisions"))
         names = _display_names(repo) if table in {"review_items", "remediation_actions"} else None
         rows = [review_item_view(repo, item, latest_decisions=latest_decisions, names=names) for item in raw] if table == "review_items" else [dict(item) for item in raw]
+        if table == "remediation_actions":
+            for row in rows:
+                row["status"] = remediation_status(row)
         if table == "remediation_actions":
             review_items = {str(item.get("id")): item for item in repo.list_payloads("review_items")}
             campaign_names = {
@@ -479,10 +487,10 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
         if table == "remediation_actions":
             summary = {
                 "total": len(rows),
-                "pending": sum(row.get("status") == "pending" for row in rows),
-                "exported": sum(row.get("status") == "exported" for row in rows),
-                "not_completed": sum(row.get("status") == "not_completed" for row in rows),
-                "completed": sum(row.get("status") == "completed" for row in rows),
+                "pending": sum(remediation_status(row) == "pending" for row in rows),
+                "exported": sum(remediation_status(row) == "exported" for row in rows),
+                "not_completed": sum(remediation_status(row) == "not_completed" for row in rows),
+                "completed": sum(remediation_status(row) == "completed" for row in rows),
             }
         if table in {"findings", "remediation_actions"} and not sort:
             rows = sorted_rows(rows, "source_group", "asc")

@@ -32,6 +32,23 @@ describe("WebUI locale contract", () => {
     }
   });
 
+  it("translates representative workflow, authentication and role-help copy", () => {
+    const representative = [
+      "common.filter",
+      "common.apply",
+      "common.back",
+      "auth.intro",
+      "campaign.unresolvedReviewers.description",
+      "golden.manualValueHint",
+      "roles.help.businessAdmin",
+      "roles.help.remediationManager",
+    ];
+    const read = (catalogue: typeof en, path: string) => path.split(".").reduce<unknown>((value, part) => (value as Record<string, unknown>)[part], catalogue);
+    for (const catalogue of [fr, es, pt, ar, itLocale]) {
+      for (const path of representative) expect(read(catalogue, path)).not.toBe(read(en, path));
+    }
+  });
+
   it("normalizes invalid locale input to English without touching data values", async () => {
     await setLocale("invalid");
     expect(document.documentElement.lang).toBe("en");

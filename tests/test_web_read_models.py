@@ -178,6 +178,23 @@ def test_remediation_actions_include_review_context_and_campaign_filter(tmp_path
     assert result["items"][0]["campaign_id"] == "campaign-a"
 
 
+def test_remediation_status_defaults_to_pending_for_filter_and_summary(tmp_path):
+    db = tmp_path / "remediation-status.db"
+    with Repository(db) as repo:
+        repo.insert_append_only("remediation_actions", {"id": "missing", "action": "revoke"})
+        repo.insert_append_only("remediation_actions", {"id": "exported", "action": "revoke", "status": "exported"})
+        repo.insert_append_only("remediation_actions", {"id": "not-done", "action": "revoke", "status": "not_completed"})
+        repo.insert_append_only("remediation_actions", {"id": "done", "action": "revoke", "status": "completed"})
+
+    pending = projected_rows(str(db), "remediation_actions", limit=10, offset=0, status="pending")
+    all_rows = projected_rows(str(db), "remediation_actions", limit=10, offset=0)
+
+    assert pending["total"] == 1
+    assert pending["items"][0]["status"] == "pending"
+    assert all_rows["summary"] == {"total": 4, "pending": 1, "exported": 1, "not_completed": 1, "completed": 1}
+    assert all_rows["items"][[row["id"] for row in all_rows["items"]].index("exported")]["status"] != "completed"
+
+
 def test_remediation_action_includes_latest_decision_comment_and_author(tmp_path):
     db = tmp_path / "remediation.db"
     with Repository(db) as repo:

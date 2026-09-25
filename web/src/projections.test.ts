@@ -7,6 +7,7 @@ import {
   pageLabel,
   pendingFirst,
   roleHome,
+  roleNavigationContract,
   validProviderScope,
 } from "./projections";
 
@@ -41,6 +42,15 @@ describe("role landing", () => {
     expect(roleHome("OPERATOR")).toBe("/");
     expect(roleHome("GROUP_OWNER")).toBe("/reviews");
     expect(roleHome("BUSINESS_ADMIN")).toBe("/actions");
+    expect(roleHome("REMEDIATION_MANAGER")).toBe("/actions");
+  });
+
+  it("keeps the role workspace contract aligned with available routes", () => {
+    expect(roleNavigationContract.ADMIN).toMatchObject({ home: "/", visible: expect.arrayContaining(["reports", "actions", "system"]) });
+    expect(roleNavigationContract.OPERATOR).toMatchObject({ home: "/", visible: expect.arrayContaining(["campaigns", "reports", "actions"]) });
+    expect(roleNavigationContract.GROUP_OWNER).toMatchObject({ home: "/reviews", visible: ["myReviews"] });
+    expect(roleNavigationContract.BUSINESS_ADMIN).toMatchObject({ home: "/actions", visible: ["actions"], remediationReadOnly: true });
+    expect(roleNavigationContract.REMEDIATION_MANAGER).toMatchObject({ home: "/actions", visible: ["actions"], remediationUpdate: true });
   });
 });
 describe("review ordering", () => {

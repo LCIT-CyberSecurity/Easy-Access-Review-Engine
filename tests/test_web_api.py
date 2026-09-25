@@ -61,6 +61,7 @@ def _client() -> TestClient:
     upsert_user(conn, {"username": "operator", "role": "OPERATOR", "scopes": ["*"], "password": "operator-password"})
     upsert_user(conn, {"username": "owner", "role": "GROUP_OWNER", "password": "owner-password"})
     upsert_user(conn, {"username": "business", "role": "BUSINESS_ADMIN", "scopes": ["finance"], "password": "business-password"})
+    upsert_user(conn, {"username": "remediation", "role": "REMEDIATION_MANAGER", "scopes": ["finance"], "password": "remediation-password"})
     conn.close()
     _seed(db)
     return TestClient(app)
@@ -133,6 +134,24 @@ if TestClient is not None:
         response = client.get("/api/remediation-actions")
         assert response.status_code == 200
         assert [item["id"] for item in response.json()["items"]] == ["action-finance"]
+
+
+    def test_remediation_roles_do_not_claim_report_access():
+        client = _client()
+        _login(client, "business", "business-password")
+        business_guidance = client.get("/api/guidance", params={"route": "/actions"})
+        assert business_guidance.status_code == 200
+        business_capabilities = business_guidance.json()["state"]["capabilities"]
+        assert "can_view_remediation" in business_capabilities
+        assert "can_view_reports" not in business_capabilities
+        assert client.get("/api/reports/campaign-1/results").status_code == 403
+        client.cookies.clear()
+        _login(client, "remediation", "remediation-password")
+        manager_guidance = client.get("/api/guidance", params={"route": "/actions"})
+        assert manager_guidance.status_code == 200
+        manager_capabilities = manager_guidance.json()["state"]["capabilities"]
+        assert manager_capabilities == ["can_update_remediation", "can_view_remediation"]
+        assert client.get("/api/reports/campaign-1/results").status_code == 403
 
 
     def test_decision_comment_validation():

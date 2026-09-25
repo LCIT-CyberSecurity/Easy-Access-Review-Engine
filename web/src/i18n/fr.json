@@ -8,26 +8,26 @@
     "add": "Ajouter",
     "remove": "Retirer",
     "search": "Rechercher",
-    "filter": "Filter",
-    "apply": "Apply",
-    "reset": "Reset",
-    "back": "Back",
+    "filter": "Filtrer",
+    "apply": "Appliquer",
+    "reset": "Réinitialiser",
+    "back": "Retour",
     "next": "Suivant",
     "previous": "Précédent",
     "retry": "Réessayer",
     "loading": "Chargement…",
-    "noResults": "No results",
-    "success": "Success",
-    "error": "Error",
-    "yes": "Yes",
-    "no": "No",
-    "show": "Show",
-    "hide": "Hide",
-    "dismiss": "Dismiss",
+    "noResults": "Aucun résultat",
+    "success": "Réussite",
+    "error": "Erreur",
+    "yes": "Oui",
+    "no": "Non",
+    "show": "Afficher",
+    "hide": "Masquer",
+    "dismiss": "Ignorer",
     "language": "Langue",
     "page": "Page",
-    "of": "of",
-    "unknown": "Unknown",
+    "of": "sur",
+    "unknown": "Inconnu",
     "signOut": "Se déconnecter"
   },
   "nav": {
@@ -54,10 +54,10 @@
     "seeAll": "See all"
   },
   "auth": {
-    "accessGovernance": "ACCESS GOVERNANCE, MADE CLEAR",
-    "everyAccess": "Every access.",
-    "accountedFor": "Accounted for.",
-    "intro": "See what people have, compare it with what they should have, and turn every review into a clear decision.",
+    "accessGovernance": "LA GOUVERNANCE DES ACCÈS, EN TOUTE CLARTÉ",
+    "everyAccess": "Chaque accès.",
+    "accountedFor": "Pris en compte.",
+    "intro": "Consultez les accès détenus, comparez-les aux accès attendus et transformez chaque revue en décision claire.",
     "collect": "Collect",
     "knowCurrentState": "Know the current state",
     "compare": "Compare",
@@ -73,17 +73,26 @@
     "password": "Mot de passe",
     "signIn": "Se connecter",
     "signingIn": "Connexion…",
-    "signedOut": "You have been signed out. Sign in again to continue.",
-    "unableToSignIn": "Unable to sign in",
-    "accountSecurity": "ACCOUNT SECURITY",
+    "signedOut": "Vous avez été déconnecté. Reconnectez-vous pour continuer.",
+    "unableToSignIn": "Connexion impossible",
+    "accountSecurity": "SÉCURITÉ DU COMPTE",
     "changePassword": "Modifier votre mot de passe",
-    "newPasswordContinue": "Set a new password to continue to your workspace.",
+    "newPasswordContinue": "Définissez un nouveau mot de passe pour continuer vers votre espace de travail.",
     "newPassword": "Nouveau mot de passe",
     "confirmPassword": "Confirmer le mot de passe",
     "passwordMismatch": "Les mots de passe ne correspondent pas",
     "change": "Modifier le mot de passe",
     "changing": "Modification…",
-    "unableToChange": "Unable to change password"
+    "unableToChange": "Impossible de modifier le mot de passe"
+  },
+  "roles": {
+    "help": {
+      "admin": "Configure EARE, gère les utilisateurs et peut exécuter toutes les opérations de gouvernance.",
+      "operator": "Gère les campagnes uniquement lorsque chaque fournisseur et périmètre exposé par la campagne est autorisé.",
+      "groupOwner": "Ne voit et ne décide que les revues qui lui sont attribuées.",
+      "businessAdmin": "Examine les actions de remédiation des périmètres autorisés. Ce rôle ne peut pas enregistrer la réalisation opérationnelle.",
+      "remediationManager": "Examine les actions de remédiation des périmètres autorisés et peut enregistrer le suivi opérationnel ainsi que les preuves de réalisation."
+    }
   },
   "status": {
     "expected_and_observed": "Conforme",
@@ -151,7 +160,8 @@
     "application": "Application",
     "permission": "Permission",
     "resource": "Ressource",
-    "description": "Description"
+    "description": "Description",
+    "manualValueHint": "Les listes proposent les valeurs déjà connues par EARE. Une valeur manuelle reste possible si elle est validée par le métier."
   },
   "campaign": {
     "reviewer": "Réviseur",
@@ -165,7 +175,16 @@
     "notApplicable": "Non applicable",
     "newCampaign": "Nouvelle campagne",
     "campaign": "Campaign",
-    "selectCampaign": "Select campaign"
+    "selectCampaign": "Sélectionner une campagne",
+    "unresolvedReviewers": {
+      "title_one": "{{count}} groupe/rôle ou identité sans responsable",
+      "title_other": "{{count}} groupes/rôles ou identités sans responsable",
+      "description": "La Source de référence ne fournit pas de responsable. Ajoutez-en un pour l’attribution automatique ; avec le contournement, le pilote reçoit ces revues pour traitement manuel.",
+      "applicationMissing": "Application non renseignée",
+      "descriptionMissing": "Description de l’accès non renseignée",
+      "allowAnyway": "Autoriser malgré tout",
+      "bypassHelp": "Contournement : attribuer ces revues au pilote pour traitement manuel"
+    }
   },
   "source": {
     "add": "Ajouter une source",

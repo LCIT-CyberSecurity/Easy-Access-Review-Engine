@@ -454,12 +454,6 @@ const navSections = [
     items: [
       { to: "/", label: "Overview", icon: LayoutDashboard, roles: ["ADMIN", "OPERATOR"] },
       { to: "/reviews", label: "My Reviews", icon: Check, roles: ["ADMIN", "OPERATOR", "GROUP_OWNER"] },
-      {
-        to: "/actions?view=my",
-        label: "My Actions",
-        icon: Check,
-        roles: ["ADMIN", "OPERATOR", "BUSINESS_ADMIN"],
-      },
     ],
   },
   {
@@ -543,7 +537,7 @@ function Shell({ principal }: { principal: Principal }) {
             <Menu />
           </button>
           <span className="crumb">
-            {ui("nav.workspace")} <ChevronRight size={14} /> {ui("nav.accessGovernance")}
+            {ui("nav.workspace")} <ChevronRight className="directional-icon" size={14} /> {ui("nav.accessGovernance")}
           </span>
           <div className="top-actions">
             <button className="guide-trigger" type="button" onClick={() => setGuideOpen(true)} aria-label={ui("guide.open")}>
@@ -1547,14 +1541,14 @@ function Home() {
                   ) : s(row.tone) === "amber" ? (
                     <AlertTriangle size={17} />
                   ) : (
-                    <ChevronRight size={17} />
+                    <ChevronRight className="directional-icon" size={17} />
                   )}
                 </div>
                 <div>
                   <strong>{s(row.title)}</strong>
                   <p>{s(row.detail)}</p>
                 </div>
-                <ChevronRight size={16} />
+                <ChevronRight className="directional-icon" size={16} />
               </NavLink>
             ))
           ) : (
@@ -1743,11 +1737,11 @@ function IdentityDrawer({ identity, close }: { identity: Row; close: () => void 
       {access ? (
         <>
           <button className="drawer-back" onClick={() => setAccess(null)}>
-            <ArrowLeft size={15} /> {s(identity.display_name, s(identity.identifier))}
+            <ArrowLeft className="directional-icon" size={15} /> {s(identity.display_name, s(identity.identifier))}
           </button>
           <div className="drawer-breadcrumb">
             <span>{s(identity.display_name, s(identity.identifier))}</span>
-            <ChevronRight size={14} />
+            <ChevronRight className="directional-icon" size={14} />
             <strong>{s(access.display_name, s(access.name))}</strong>
           </div>
           <AccessDetail access={access} />
@@ -2851,21 +2845,21 @@ function CampaignNew({ principal }: { principal: Principal }) {
           {Number(preview.unresolved_reviewers) > 0 && (
             <div className="campaign-unresolved-warning">
               <div>
-                <strong>{s(preview.unresolved_reviewers)} groupe(s)/rôle(s) ou identité(s) sans responsable</strong>
-                <p>Le propriétaire n&apos;est pas renseigné dans la Golden Source. Renseigne-le pour attribuer automatiquement la revue ; avec le bypass, le pilote recevra ces revues dans « Mes revues ».</p>
+                <strong>{ui("campaign.unresolvedReviewers.title", { count: Number(preview.unresolved_reviewers) })}</strong>
+                <p>{ui("campaign.unresolvedReviewers.description")}</p>
               </div>
               <div className="campaign-unresolved-list">
                 {arr(preview.unresolved).map((item) => (
                   <div key={`${s(item.identity_provider)}:${s(item.identity)}:${s(item.access_provider)}:${s(item.access)}`}>
                     <strong>{s(item.identity_display_name, s(item.identity))}</strong>
                     <span>{s(item.identity_type, "identity")} · {s(item.identity_provider)} · accès {s(item.access)} ({s(item.access_provider)})</span>
-                    <small>{s(item.application, "Application non renseignée")} · {s(item.what_it_allows, "Description de l’accès non renseignée")}</small>
+                    <small>{s(item.application, ui("campaign.unresolvedReviewers.applicationMissing"))} · {s(item.what_it_allows, ui("campaign.unresolvedReviewers.descriptionMissing"))}</small>
                   </div>
                 ))}
               </div>
               <label className="campaign-bypass">
                 <input type="checkbox" checked={allow} onChange={(e) => setAllow(e.target.checked)} />
-                <span><strong>Autoriser malgré tout</strong><small>Bypass : attribuer ces revues au pilote pour traitement manuel</small></span>
+                <span><strong>{ui("campaign.unresolvedReviewers.allowAnyway")}</strong><small>{ui("campaign.unresolvedReviewers.bypassHelp")}</small></span>
               </label>
             </div>
           )}
@@ -4458,7 +4452,7 @@ function Golden() {
               return permission ? <option key={`${s(row.name, s(row.access_name))}:${permission}`} value={permission} /> : null;
             })}
           </datalist>
-          <p className="field-note">Les listes proposent les valeurs déjà connues. Une valeur manuelle reste possible si elle est validée métier.</p>
+          <p className="field-note">{ui("golden.manualValueHint")}</p>
           <form
             className="drawer-form"
             onSubmit={(e) => {
@@ -4589,7 +4583,7 @@ function SourceBrowser() {
   return (
     <>
       <Head title={`Browse source · ${provider}`}>
-        <NavLink className="button subtle" to="/sources"><ArrowLeft size={15} /> Sources</NavLink>
+        <NavLink className="button subtle" to="/sources"><ArrowLeft className="directional-icon" size={15} /> Sources</NavLink>
       </Head>
       <p className="muted">Read-only, bounded inspection. EARE cannot create, edit, rename or delete directory objects here.</p>
       {treeEnabled ? (
@@ -4611,7 +4605,7 @@ function SourceBrowser() {
                     if (item.expandable) setParents([...parents, s(item.technical_identifier)]);
                     else if (item.selectable) setSelected(item);
                   }}>
-                    <ChevronRight size={15} style={{ opacity: item.expandable ? 1 : 0.25 }} />
+                    <ChevronRight className="directional-icon" size={15} style={{ opacity: item.expandable ? 1 : 0.25 }} />
                     <span><strong>{s(item.display_name, s(item.technical_identifier))}</strong><small>{s(item.kind)} · {s(item.technical_identifier)}</small></span>
                   </button>
                 ))}
@@ -5599,7 +5593,7 @@ function UsersPage() {
                 <option>REMEDIATION_MANAGER</option>
               </select>
             </label>
-            <p className="field-note">{roleHelp(s(form.role))}</p>
+            <p className="field-note">{ui(roleHelp(s(form.role)))}</p>
             {s(form.role) === "ADMIN" ? (
               <p className="field-note">Administrators have global access to all domains.</p>
             ) : s(form.role) === "GROUP_OWNER" ? (
@@ -5691,12 +5685,11 @@ function UsersPage() {
   );
 }
 function roleHelp(role: string) {
-  if (role === "ADMIN") return "Configures EARE, manages users, and can run every governance operation.";
-  if (role === "OPERATOR")
-    return "Manages campaigns only when every provider/domain exposed by the campaign is authorized.";
-  if (role === "GROUP_OWNER") return "Only sees and decides the reviews assigned to this person.";
-  if (role === "REMEDIATION_MANAGER") return "Tracks remediation work for the authorized source domains and records completion evidence.";
-  return "Only sees the remediation actions of the authorized domains selected for this account.";
+  if (role === "ADMIN") return "roles.help.admin";
+  if (role === "OPERATOR") return "roles.help.operator";
+  if (role === "GROUP_OWNER") return "roles.help.groupOwner";
+  if (role === "REMEDIATION_MANAGER") return "roles.help.remediationManager";
+  return "roles.help.businessAdmin";
 }
 function DirectoryPicker({
   directory,

@@ -8,26 +8,26 @@
     "add": "Adicionar",
     "remove": "Remover",
     "search": "Pesquisar",
-    "filter": "Filter",
-    "apply": "Apply",
-    "reset": "Reset",
-    "back": "Back",
+    "filter": "Filtrar",
+    "apply": "Aplicar",
+    "reset": "Repor",
+    "back": "Voltar",
     "next": "Seguinte",
     "previous": "Anterior",
     "retry": "Tentar novamente",
     "loading": "A carregar…",
-    "noResults": "No results",
-    "success": "Success",
-    "error": "Error",
-    "yes": "Yes",
-    "no": "No",
-    "show": "Show",
-    "hide": "Hide",
-    "dismiss": "Dismiss",
+    "noResults": "Sem resultados",
+    "success": "Sucesso",
+    "error": "Erro",
+    "yes": "Sim",
+    "no": "Não",
+    "show": "Mostrar",
+    "hide": "Ocultar",
+    "dismiss": "Dispensar",
     "language": "Idioma",
-    "page": "Page",
-    "of": "of",
-    "unknown": "Unknown",
+    "page": "Página",
+    "of": "de",
+    "unknown": "Desconhecido",
     "signOut": "Terminar sessão"
   },
   "nav": {
@@ -54,10 +54,10 @@
     "seeAll": "See all"
   },
   "auth": {
-    "accessGovernance": "ACCESS GOVERNANCE, MADE CLEAR",
-    "everyAccess": "Every access.",
-    "accountedFor": "Accounted for.",
-    "intro": "See what people have, compare it with what they should have, and turn every review into a clear decision.",
+    "accessGovernance": "GOVERNAÇÃO DE ACESSOS, COM CLAREZA",
+    "everyAccess": "Cada acesso.",
+    "accountedFor": "Contabilizado.",
+    "intro": "Consulte os acessos existentes, compare-os com os esperados e transforme cada revisão numa decisão clara.",
     "collect": "Collect",
     "knowCurrentState": "Know the current state",
     "compare": "Compare",
@@ -73,17 +73,26 @@
     "password": "Palavra-passe",
     "signIn": "Iniciar sessão",
     "signingIn": "A iniciar sessão…",
-    "signedOut": "You have been signed out. Sign in again to continue.",
-    "unableToSignIn": "Unable to sign in",
-    "accountSecurity": "ACCOUNT SECURITY",
+    "signedOut": "A sua sessão foi terminada. Inicie sessão novamente para continuar.",
+    "unableToSignIn": "Não foi possível iniciar sessão",
+    "accountSecurity": "SEGURANÇA DA CONTA",
     "changePassword": "Alterar a sua palavra-passe",
-    "newPasswordContinue": "Set a new password to continue to your workspace.",
+    "newPasswordContinue": "Defina uma nova palavra-passe para continuar para o seu espaço de trabalho.",
     "newPassword": "Nova palavra-passe",
     "confirmPassword": "Confirmar palavra-passe",
     "passwordMismatch": "As palavras-passe não coincidem",
     "change": "Alterar palavra-passe",
     "changing": "A alterar…",
-    "unableToChange": "Unable to change password"
+    "unableToChange": "Não foi possível alterar a palavra-passe"
+  },
+  "roles": {
+    "help": {
+      "admin": "Configura o EARE, gere utilizadores e pode executar todas as operações de governação.",
+      "operator": "Gere campanhas apenas quando todos os fornecedores e domínios expostos pela campanha estão autorizados.",
+      "groupOwner": "Vê e decide apenas as revisões atribuídas a esta pessoa.",
+      "businessAdmin": "Analisa as ações de remediação dos domínios autorizados. Esta função não pode registar a conclusão operacional.",
+      "remediationManager": "Analisa as ações de remediação dos domínios autorizados e pode registar o acompanhamento operacional e as provas de conclusão."
+    }
   },
   "status": {
     "expected_and_observed": "Conforme esperado",
@@ -149,7 +158,8 @@
     "application": "Aplicação",
     "permission": "Permissão",
     "resource": "Recurso",
-    "description": "Descrição"
+    "description": "Descrição",
+    "manualValueHint": "As listas sugerem valores já conhecidos pelo EARE. É possível usar um valor manual quando validado pelo negócio."
   },
   "campaign": {
     "reviewer": "Revisor",
@@ -163,7 +173,16 @@
     "notApplicable": "Não aplicável",
     "newCampaign": "Nova campanha",
     "campaign": "Campaign",
-    "selectCampaign": "Select campaign"
+    "selectCampaign": "Selecionar campanha",
+    "unresolvedReviewers": {
+      "title_one": "{{count}} grupo/função ou identidade sem responsável",
+      "title_other": "{{count}} grupos/funções ou identidades sem responsável",
+      "description": "A Fonte dourada não fornece um responsável. Adicione um para a atribuição automática; com o bypass, o piloto recebe estas revisões para tratamento manual.",
+      "applicationMissing": "Aplicação não indicada",
+      "descriptionMissing": "Descrição do acesso não indicada",
+      "allowAnyway": "Permitir mesmo assim",
+      "bypassHelp": "Bypass: atribuir estas revisões ao piloto para tratamento manual"
+    }
   },
   "source": {
     "add": "Adicionar fonte",

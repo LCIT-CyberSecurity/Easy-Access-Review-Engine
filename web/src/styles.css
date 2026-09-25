@@ -1,7 +1,7 @@
 :root {
   --background: #f7f8fa; --surface: #fff; --surface-secondary: #f1f3f6;
   --border: #e3e6eb; --border-strong: #c7ccd6; --text-primary: #101828;
-  --text-secondary: #475467; --text-muted: #8a94a6; --primary: #2545d3;
+  --text-secondary: #475467; --text-muted: #526071; --primary: #2545d3;
   --primary-hover: #1b36ae; --primary-soft: #eaeefc; --success: #12805c;
   --success-soft: #e4f5ee; --warning: #b5720a; --warning-soft: #fbf0dd;
   --danger: #c1352b; --danger-soft: #fbeae8; --info: #2e6fbe;
@@ -180,7 +180,7 @@ tr.empty-row td { border-bottom:0; }
 .menu-row .text-button { font-size:12px; }
 
 /* Final product polish: readable secondary information and restrained interaction states. */
-:root { --text-muted:#667085; }
+:root { --text-muted:#586579; }
 button, input, select, textarea, summary { font:inherit; }
 button:disabled { cursor:not-allowed; opacity:.55; }
 select:focus-visible, textarea:focus-visible, summary:focus-visible { outline:2px solid var(--primary); outline-offset:2px; }
@@ -522,7 +522,7 @@ tbody tr { transition:background-color .12s ease; }
 :root[data-theme="violet"] {
   --background:#eef1f8; --surface:#fff; --surface-secondary:#f1f3f9;
   --border:#dce2ec; --border-strong:#c5cfdd; --text-primary:#152339;
-  --text-secondary:#4d5c73; --text-muted:#68768b; --primary:#65449c;
+  --text-secondary:#4d5c73; --text-muted:#58677e; --primary:#65449c;
   --primary-hover:#553888; --primary-soft:#efe9f8; --info:#4a6fa5;
   --hairline:rgba(21,35,57,.07);
   --shadow-sm:0 1px 2px rgba(16,35,64,.04);
@@ -593,6 +593,8 @@ tbody tr { transition:background-color .12s ease; }
 .form-notice { display:flex; align-items:center; gap:8px; margin:0; padding:11px 13px; border:1px solid #cfe7dc; border-radius:9px; background:#f0f9f5; color:#12805c; font-size:13px; font-weight:600; }
 .form-notice svg { flex:none; }
 
+[dir="rtl"] .directional-icon { transform:scaleX(-1); }
+
 /* Violet style, second pass: the treatment reaches every screen, not only the rail. */
 :root[data-theme="violet"] { --background:#e9edf8; }
 :root[data-theme="violet"] .page-header { padding-bottom:18px; border-bottom:1px solid #dfe3f0; }
@@ -625,7 +627,7 @@ tbody tr { transition:background-color .12s ease; }
 :root[data-theme="azure"] {
   --background:#e9f0fa; --surface:#fff; --surface-secondary:#eff4fc;
   --border:#d5e1f2; --border-strong:#b4c6e2; --text-primary:#13243c;
-  --text-secondary:#465873; --text-muted:#6d7f9a; --primary:#2f5fbb;
+  --text-secondary:#465873; --text-muted:#536682; --primary:#2f5fbb;
   --primary-hover:#254c9b; --primary-soft:#e2ecfb; --info:#2f6fb5;
   --hairline:rgba(19,36,60,.07);
   --shadow-sm:0 1px 2px rgba(19,36,60,.04);
@@ -660,7 +662,7 @@ tbody tr { transition:background-color .12s ease; }
 :root[data-theme="studio"] {
   --background:#fbfbfd; --surface:#fff; --surface-secondary:#f4f4f7;
   --border:rgba(17,17,26,.09); --border-strong:rgba(17,17,26,.18);
-  --text-primary:#0f0f14; --text-secondary:#5b5b68; --text-muted:#8a8a99;
+  --text-primary:#0f0f14; --text-secondary:#5b5b68; --text-muted:#626274;
   --primary:#5548c8; --primary-hover:#463ba9; --primary-soft:#eeedfa;
   --info:#3f6fd1; --success:#0f8a5f; --success-soft:#e7f5ef;
   --warning:#9a6a08; --warning-soft:#fbf1de; --danger:#c0392f; --danger-soft:#fbece9;

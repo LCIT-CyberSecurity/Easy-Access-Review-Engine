@@ -85,6 +85,15 @@
     "changing": "Changing password…",
     "unableToChange": "Unable to change password"
   },
+  "roles": {
+    "help": {
+      "admin": "Configures EARE, manages users, and can run every governance operation.",
+      "operator": "Manages campaigns only when every provider and domain exposed by the campaign is authorized.",
+      "groupOwner": "Only sees and decides the reviews assigned to this person.",
+      "businessAdmin": "Reviews remediation actions for the authorized domains. This role cannot record operational completion.",
+      "remediationManager": "Reviews remediation actions for the authorized domains and can record operational follow-up and completion evidence."
+    }
+  },
   "status": {
     "expected_and_observed": "As expected",
     "unexpected": "Not expected",
@@ -151,7 +160,8 @@
     "application": "Application",
     "permission": "Permission",
     "resource": "Resource",
-    "description": "Description"
+    "description": "Description",
+    "manualValueHint": "The lists suggest values already known to EARE. A manual value remains possible when it is validated by the business."
   },
   "campaign": {
     "reviewer": "Reviewer",
@@ -165,7 +175,16 @@
     "notApplicable": "Not applicable",
     "newCampaign": "New campaign",
     "campaign": "Campaign",
-    "selectCampaign": "Select campaign"
+    "selectCampaign": "Select campaign",
+    "unresolvedReviewers": {
+      "title_one": "{{count}} unresolved group/role or identity",
+      "title_other": "{{count}} unresolved groups/roles or identities",
+      "description": "The Golden Source does not provide an owner. Add one for automatic assignment; with bypass, the pilot receives these reviews for manual handling.",
+      "applicationMissing": "Application not provided",
+      "descriptionMissing": "Access description not provided",
+      "allowAnyway": "Allow anyway",
+      "bypassHelp": "Bypass: assign these reviews to the pilot for manual handling"
+    }
   },
   "source": {
     "add": "Add source",
