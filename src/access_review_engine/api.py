@@ -1733,12 +1733,16 @@ def create_app(db_path: str | None = None):
             ]
 
         actions: list[dict[str, Any]] = []
+        action_query: dict[str, Any] = {}
         if principal.role in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
+            action_query = {
+                "allowed_providers": allowed_domains,
+                "allowed_campaign_ids": allowed_campaigns if principal.role in {"ADMIN", "OPERATOR"} else None,
+            }
             actions = [
                 dict(row) for row in projected_rows(
                     db_path, "remediation_actions", limit=500, offset=0,
-                    allowed_providers=allowed_domains,
-                    allowed_campaign_ids=allowed_campaigns if principal.role in {"ADMIN", "OPERATOR"} else None,
+                    **action_query,
                 )["items"]
             ]
 
@@ -1751,11 +1755,38 @@ def create_app(db_path: str | None = None):
             }
             for row in campaigns if row.get("status") == "open"
         )
-        pending_reviews = sum(1 for row in review_items if not row.get("latest_decision"))
+        review_scope = {
+            "reviewer_username": principal.username if principal.role == "GROUP_OWNER" else None,
+            "allowed_campaign_ids": allowed_campaigns if principal.role in {"ADMIN", "OPERATOR"} else None,
+        }
+        pending_reviews = int(projected_rows(db_path, "review_items", limit=0, offset=0, status="pending", **review_scope)["total"])
         assigned_pending_reviews = pending_reviews if principal.role == "GROUP_OWNER" else 0
-        pending_actions = sum(1 for row in actions if str(row.get("status") or "").casefold() not in {"completed", "exported"})
+        action_counts = {
+            status: int(projected_rows(db_path, "remediation_actions", limit=0, offset=0, status=status, **action_query)["total"])
+            for status in ("pending", "exported", "not_completed", "completed")
+        }
+        pending_actions = action_counts["pending"]
+        open_actions = pending_actions + action_counts["exported"] + action_counts["not_completed"]
         findings_count = sum(len(row.get("findings") or []) for row in review_items)
         unresolved_reviewers = sum(int(row.get("unresolved_reviewers") or 0) for row in open_campaigns)
+        enabled_operators = [
+            user for user in list_users(system_conn)
+            if user.get("enabled") and user.get("role") == "OPERATOR"
+        ]
+        configured_domains = {str(row.get("name")) for row in providers}
+        covered_domains = {
+            domain for user in enabled_operators for domain in user.get("scopes", [])
+            if domain != "*"
+        }
+        operator_coverage_complete = any("*" in user.get("scopes", []) for user in enabled_operators) or configured_domains.issubset(covered_domains)
+        uncovered_operator_domains = tuple(sorted(configured_domains - covered_domains)) if enabled_operators and not operator_coverage_complete else ()
+        capabilities_by_role = {
+            "ADMIN": {"can_configure_sources", "can_preview_sources", "can_sync_sources", "can_manage_users", "can_edit_golden", "can_prepare_campaign", "can_open_campaign", "can_decide_review", "can_follow_remediation", "can_view_reports", "can_view_findings"},
+            "OPERATOR": {"can_preview_sources", "can_sync_sources", "can_edit_golden", "can_prepare_campaign", "can_open_campaign", "can_decide_review", "can_view_reports", "can_view_findings"},
+            "GROUP_OWNER": {"can_decide_review"},
+            "BUSINESS_ADMIN": {"can_follow_remediation", "can_view_reports"},
+            "REMEDIATION_MANAGER": {"can_follow_remediation", "can_view_reports"},
+        }
         context = GuidanceContext(
             role=principal.role,
             route=route,
@@ -1767,7 +1798,15 @@ def create_app(db_path: str | None = None):
             pending_reviews=pending_reviews if principal.role in {"ADMIN", "OPERATOR"} else 0,
             assigned_pending_reviews=assigned_pending_reviews,
             pending_actions=pending_actions,
+            exported_actions=action_counts["exported"],
+            not_completed_actions=action_counts["not_completed"],
+            completed_actions=action_counts["completed"],
+            open_actions=open_actions,
             operator_count=operator_count,
+            operator_coverage_complete=operator_coverage_complete,
+            uncovered_operator_domains=uncovered_operator_domains,
+            username=principal.username,
+            capabilities=frozenset(capabilities_by_role.get(principal.role, set())),
             unresolved_reviewers=unresolved_reviewers,
             findings_count=findings_count,
             allowed_routes=allowed_routes | frozenset(

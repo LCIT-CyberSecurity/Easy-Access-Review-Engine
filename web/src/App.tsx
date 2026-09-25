@@ -589,7 +589,7 @@ function Shell({ principal }: { principal: Principal }) {
           </Routes>
         </main>
       </div>
-      {guideOpen ? <GuideDrawer data={guidance.data} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} /> : null}
+      {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} /> : null}
       {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
     </div>
   );
@@ -979,7 +979,7 @@ function writeGuidePreference(principal: Principal, suffix: string, value: boole
     // Guidance remains available for this session when storage is unavailable.
   }
 }
-function GuideDrawer({ data, principal, enabled, close, setEnabled }: { data?: Row; principal: Principal; enabled: boolean; close: () => void; setEnabled: (value: boolean) => void }) {
+function GuideDrawer({ data, loading, error, retry, principal, enabled, close, setEnabled }: { data?: Row; loading: boolean; error: boolean; retry: () => void; principal: Principal; enabled: boolean; close: () => void; setEnabled: (value: boolean) => void }) {
   const recommendations = arr(data?.recommendations), state = (data?.state ?? {}) as Row, pageHelp = (data?.page_help ?? {}) as Row;
   const text = (key: unknown) => ui(s(key, "common.unknown"));
   const openRecommendation = recommendations.find((item) => item.priority === "primary") ?? recommendations[0];
@@ -987,7 +987,9 @@ function GuideDrawer({ data, principal, enabled, close, setEnabled }: { data?: R
     <Drawer title={text("guide.title")} close={close} size="wide">
       <div className="guide-drawer">
         <div className="guide-role"><span className="eyebrow">{text("guide.role")}</span><strong>{ui(`status.${principal.role}`)}</strong></div>
-        {!enabled ? (
+        {loading ? <div className="empty">{text("guide.loading")}</div> : error ? (
+          <div className="empty"><p>{text("guide.loadError")}</p><button className="button subtle" onClick={retry}>{text("common.tryAgain")}</button></div>
+        ) : !enabled ? (
           <section className="guide-disabled">
             <p>{text("guide.disabled")}</p>
             <button className="button primary" onClick={() => { writeGuidePreference(principal, "enabled", true); setEnabled(true); }}>{text("guide.enable")}</button>
@@ -997,11 +999,8 @@ function GuideDrawer({ data, principal, enabled, close, setEnabled }: { data?: R
             <section className="guide-situation">
               <h3>{text("guide.currentSituation")}</h3>
               <div className="guide-facts">
-                <span>{Number(state.sources) ? `✓ ${state.sources} ${text("guide.page.sources.title")}` : `○ ${text("guide.page.sources.title")}`}</span>
-                <span>{state.latest_snapshot ? `✓ ${text("labels.observedSnapshot")}` : `○ ${text("labels.observedSnapshot")}`}</span>
-                <span>{state.golden_available ? `✓ ${text("labels.expectedState")}` : `○ ${text("labels.expectedState")}`}</span>
-                {Number(state.pending_reviews) ? <span>! {state.pending_reviews} {text("labels.pendingReviews")}</span> : null}
-                {Number(state.pending_actions) ? <span>! {state.pending_actions} {text("labels.actions")}</span> : null}
+                {principal.role === "GROUP_OWNER" ? <><span>✓ {Number(state.assigned_pending_reviews ?? 0)} {text("labels.pendingReviews")}</span><span>✓ {Number(state.open_campaigns ?? 0)} {text("labels.campaign")}</span></> : principal.role === "BUSINESS_ADMIN" || principal.role === "REMEDIATION_MANAGER" ? <><span>! {Number(state.open_actions ?? state.pending_actions ?? 0)} {text("labels.actions")}</span><span>✓ {Number(state.completed_actions ?? 0)} {text("labels.completed")}</span></> : <><span>{Number(state.sources) ? `✓ ${state.sources} ${text("guide.page.sources.title")}` : `○ ${text("guide.page.sources.title")}`}</span><span>{state.latest_snapshot ? `✓ ${text("labels.observedSnapshot")}` : `○ ${text("labels.observedSnapshot")}`}</span><span>{state.golden_available ? `✓ ${text("labels.expectedState")}` : `○ ${text("labels.expectedState")}`}</span><span>{Number(state.pending_reviews) ? `! ${state.pending_reviews} ${text("labels.pendingReviews")}` : null}</span></>}
+                {principal.role === "REMEDIATION_MANAGER" && Number(state.exported_actions) ? <span>! {s(state.exported_actions)} {text("labels.exported")}</span> : null}
               </div>
             </section>
             {openRecommendation ? (
@@ -1028,7 +1027,7 @@ function GuideDrawer({ data, principal, enabled, close, setEnabled }: { data?: R
             <section className="guide-page-help">
               <h3>{text("guide.pageHelp")}: {text(pageHelp.title)}</h3>
               <p>{text(pageHelp.description)}</p>
-              <div className="guide-questions">{vals(pageHelp.questions).map((question) => <span key={question}>{text(question)}</span>)}</div>
+              <div className="guide-questions">{arr(pageHelp.topics).map((topic) => <GuideTopic key={s(topic.id)} topic={topic} text={text} />)}</div>
             </section>
             <p className="guide-read-only">{text("guide.readOnly")}</p>
             <button className="text-button" onClick={() => { writeGuidePreference(principal, "enabled", false); setEnabled(false); }}>{text("guide.disable")}</button>
@@ -1037,6 +1036,10 @@ function GuideDrawer({ data, principal, enabled, close, setEnabled }: { data?: R
       </div>
     </Drawer>
   );
+}
+function GuideTopic({ topic, text }: { topic: Row; text: (key: unknown) => string }) {
+  const [open, setOpen] = useState(false);
+  return <div className="guide-topic"><button type="button" className="guide-question" onClick={() => setOpen((value) => !value)} aria-expanded={open}>{text(topic.question)}</button>{open ? <p>{text(topic.answer)}</p> : null}</div>;
 }
 function GuideOnboarding({ data, principal, close, onSeen }: { data: Row; principal: Principal; close: () => void; onSeen: () => void }) {
   const recommendations = arr(data.recommendations), primary = recommendations.find((item) => item.priority === "primary") ?? recommendations[0];
@@ -2247,11 +2250,12 @@ function ReviewDrawer({
         </section>
       ) : null}
       {pending && (
-        <div className="reason-form">
-          <label>
-            Review comment {pending === "approve" ? "(optional)" : "*"}<textarea autoFocus value={reason} onChange={(e) => setReason(e.target.value)} />
+        <div className="drawer-form reason-form">
+          <label className="drawer-field">
+            Review comment {pending === "approve" ? "(optional)" : "*"}<textarea className="drawer-comment" autoFocus value={reason} onChange={(e) => setReason(e.target.value)} />
           </label>
-          <button
+          <div className="drawer-actions">
+          <button className="button subtle"
             onClick={() => {
               setPending(null);
               setReason("");
@@ -2259,9 +2263,10 @@ function ReviewDrawer({
           >
             Cancel
           </button>
-          <button disabled={(pending !== "approve" && !reason.trim()) || m.isPending} onClick={() => m.mutate(pending)}>
+          <button className="button primary" disabled={(pending !== "approve" && !reason.trim()) || m.isPending} onClick={() => m.mutate(pending)}>
             Confirm {pending === "revoke" ? "revoke" : pending === "approve" ? "approve" : "N/A"}
           </button>
+          </div>
         </div>
       )}
       {!pending && (
@@ -2398,20 +2403,20 @@ function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
     });
   return (
     <Drawer title="Finding" close={close}>
-      <h4>WHAT HAPPENED</h4>
+      <section className="drawer-section"><h4>WHAT HAPPENED</h4>
       <p>{s(vals(row.findings).join(", "), s(row.classification, "No classification"))}</p>
-      <h4>CURRENT STATE</h4>
+      </section><section className="drawer-section"><h4>CURRENT STATE</h4>
       <p>Observed: {readableDetails(row.observed)} · Expected: {readableDetails(row.expected)}</p>
-      <h4>CONTEXT</h4>
+      </section><section className="drawer-section"><h4>CONTEXT</h4>
       <p>Identity: {s((row.identity as Row | undefined)?.display_name, s(row.identity_identifier))}</p>
       <p>Access: {s((row.access as Row | undefined)?.display_name, s(row.access_name))}</p>
       <p className="muted">{describeAccess((row.access as Row) ?? row)}</p>
       <p>Source: {s(row.access_provider)}</p>
       {row.campaign_id != null || row.campaign_name ? <p>Campaign: {s(row.campaign_name, s(row.campaign_id))}</p> : null}
-      <h4>OPTIONAL TICKET</h4>
-      <label>Ticket reference<input value={ticket} onChange={(event) => setTicket(event.target.value)} placeholder="INC-1234 or Jira key" /></label>
-      <label>Follow-up comment<textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Business or operational follow-up" /></label>
-      <button className="button primary" disabled={save.isPending} onClick={() => save.mutate()}>Save ticket and comment</button>
+      </section><section className="drawer-section"><h4>FOLLOW-UP</h4><div className="drawer-form">
+      <label className="drawer-field">Ticket reference<input value={ticket} onChange={(event) => setTicket(event.target.value)} placeholder="INC-1234 or Jira key" /></label>
+      <label className="drawer-field">Follow-up comment<textarea className="drawer-comment" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Business or operational follow-up" /></label>
+      <div className="drawer-actions"><button className="button primary" disabled={save.isPending} onClick={() => save.mutate()}>Save follow-up</button></div></div></section>
     </Drawer>
   );
 }
@@ -2431,30 +2436,27 @@ function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
     });
   return (
     <Drawer title={`${s(row.action, s(row.decision))} · ${s(row.access_display_name, s(row.access_name))}`} close={close}>
-      <h4>WHAT TO DO</h4>
+      <section className="drawer-section"><h4>WHAT TO DO</h4>
       <p>Identity: {s(row.identity_display_name, s(row.identity_identifier))}</p>
       <p>Access: {s(row.access_display_name, s(row.access_name))}</p>
       <p>{describeAccess(row) || "No description provided by the source."}</p>
       <p>Application / target: {targetText(row.target) || s(row.access_display_name, s(row.access_name))}</p>
-      <h4>WHY</h4>
+      </section><section className="drawer-section"><h4>WHY</h4>
       <p>Campaign: {s(row.campaign_name, s(row.campaign_id))}</p>
       <p>Decision: {s(row.decision)}</p>
-      <p>Comment: {s(row.comment)}</p>
-      <h4>STATUS</h4>
+      <p>Reviewer comment: {s(row.comment)}</p>
+      </section><section className="drawer-section"><h4>CURRENT FOLLOW-UP</h4>
       <Status v={row.status} />
-      {s((row.details as Row | undefined)?.status_comment, "") ? <p className="muted">{s((row.details as Row | undefined)?.status_comment)}</p> : null}
-      <label>
-        <input type="checkbox" checked={mitigated} onChange={(event) => setMitigated(event.target.checked)} />
-        Action mitigated / corrected
-      </label>
-      <p className="field-note">{mitigated ? "The administrator confirms the change was applied outside EARE." : "If the action is not mitigated, explain why in the comment below."}</p>
-      <label>
+      {s((row.details as Row | undefined)?.status_comment, "") ? <p className="muted"><strong>Administrator follow-up:</strong> {s((row.details as Row | undefined)?.status_comment)}</p> : null}
+      </section><section className="drawer-section"><h4>UPDATE FOLLOW-UP</h4>
+      <label className="drawer-check"><input type="checkbox" checked={mitigated} onChange={(event) => setMitigated(event.target.checked)} /><span>Action mitigated / corrected</span><small>{mitigated ? "The administrator confirms the change was applied outside EARE." : "If the action is not mitigated, explain why in the comment below."}</small></label>
+      <label className="drawer-field">
         Administrator follow-up comment
-        <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Describe what was changed, or why the action was not completed." />
+        <textarea className="drawer-comment" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Describe what was changed, or why the action was not completed." />
       </label>
-      <div className="button-row">
+      <div className="drawer-actions">
         <button className="button primary" disabled={update.isPending || (!mitigated && !comment.trim())} onClick={() => update.mutate()}>Save remediation follow-up</button>
-      </div>
+      </div></section>
     </Drawer>
   );
 }
@@ -4235,7 +4237,7 @@ function Golden() {
                 cols={["Application", "Comment", "Status", "Golden usage"]}
                 rows={arr(applicationCatalog.data?.applications).map((application) => [
                   <strong>{s(application.name)}</strong>,
-                  s(application.comment, ""),
+                  s(application.comment, "—"),
                   application.active === false ? <Status v="inactive" /> : <Status v="active" />,
                   s(application.usage_count, "0"),
                 ])}
@@ -4307,8 +4309,8 @@ function Golden() {
       {newApplication && (
         <Drawer title="Add new application" close={() => setNewApplication(null)}>
           <p className="muted">Create a catalogue entry. The comment explains the business scope of this application.</p>
-          <label>Application name<input autoFocus value={s(newApplication.name, "")} onChange={(event) => setNewApplication({ ...newApplication, name: event.target.value })} /></label>
-          <label>Comment<textarea value={s(newApplication.comment, "")} onChange={(event) => setNewApplication({ ...newApplication, comment: event.target.value })} /></label>
+          <div className="drawer-form"><label className="drawer-field">Application name<input autoFocus value={s(newApplication.name, "")} onChange={(event) => setNewApplication({ ...newApplication, name: event.target.value })} /></label>
+          <label className="drawer-field">Business comment<textarea className="drawer-comment" value={s(newApplication.comment, "")} onChange={(event) => setNewApplication({ ...newApplication, comment: event.target.value })} placeholder="Business scope / purpose" /></label>
           {arr(newApplication.similar).length ? (
             <div className="attention">
               <strong>Similar applications found</strong>
@@ -4316,13 +4318,13 @@ function Golden() {
               <p className="muted">Saving again will create this application explicitly.</p>
             </div>
           ) : null}
-          <button
+          <div className="drawer-actions"><button
             className="button primary"
             disabled={createApplication.isPending || !s(newApplication.name).trim()}
             onClick={() => createApplication.mutate({ name: s(newApplication.name).trim(), comment: s(newApplication.comment).trim(), confirm: arr(newApplication.similar).length > 0 })}
           >
             {createApplication.isPending ? "Saving…" : arr(newApplication.similar).length ? "Create anyway" : "Create application"}
-          </button>
+          </button></div></div>
         </Drawer>
       )}
       {functionalEditing && (
@@ -4337,8 +4339,8 @@ function Golden() {
           </select></label>
           <label>Target service<input value={s(functionalEditing.service_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, service_identifier: event.target.value })} /></label>
           <label>Target resource<input value={s(functionalEditing.resource_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, resource_identifier: event.target.value })} /></label>
-          <label>Version comment<textarea value={s(functionalEditing.version_comment, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, version_comment: event.target.value })} /></label>
-          <button
+          <div className="drawer-form"><label className="drawer-field">Version comment<textarea className="drawer-comment" value={s(functionalEditing.version_comment, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, version_comment: event.target.value })} /></label>
+          <div className="drawer-actions"><button
             className="button primary"
             disabled={saveFunctional.isPending || !s(functionalEditing.capability_id, "") || (!s(functionalEditing.service_identifier, "") && !s(functionalEditing.resource_identifier, ""))}
             onClick={() => saveFunctional.mutate({
@@ -4358,25 +4360,23 @@ function Golden() {
             })}
           >
             {saveFunctional.isPending ? "Saving…" : "Validate and save Golden V2"}
-          </button>
+          </button></div></div>
         </Drawer>
       )}
       {editingVersionComment && (
         <Drawer title="Golden version comment" close={() => setEditingVersionComment(false)}>
           <p className="muted">Explain this expected version. Saving creates a new immutable version and keeps its assignments and assignment comments.</p>
-          <label>Version comment<textarea value={versionComment} onChange={(event) => setVersionComment(event.target.value)} /></label>
-          <button className="button primary" disabled={updateVersionComment.isPending} onClick={() => updateVersionComment.mutate()}>Save in new version</button>
+          <div className="drawer-form"><label className="drawer-field">Version comment<textarea className="drawer-comment" value={versionComment} onChange={(event) => setVersionComment(event.target.value)} /></label><div className="drawer-actions"><button className="button primary" disabled={updateVersionComment.isPending} onClick={() => updateVersionComment.mutate()}>Save in new version</button></div></div>
         </Drawer>
       )}
       {commenting && (
         <Drawer title="Expected-assignment comment" close={() => setCommenting(null)}>
           <p><strong>{s(commenting.identity_display_name, s(commenting.identity_identifier))}</strong> → {s(commenting.access_display_name, s(commenting.access_name))}</p>
           <p className="muted">Explain why this identity should have this access. Saving creates a new immutable Golden version.</p>
-          <label>
+          <div className="drawer-form"><label className="drawer-field">
             Golden comment
-            <textarea value={assignmentComment} onChange={(event) => setAssignmentComment(event.target.value)} />
-          </label>
-          <button className="button primary" disabled={commentAssignment.isPending} onClick={() => commentAssignment.mutate()}>Save in new version</button>
+            <textarea className="drawer-comment" value={assignmentComment} onChange={(event) => setAssignmentComment(event.target.value)} />
+          </label><div className="drawer-actions"><button className="button primary" disabled={commentAssignment.isPending} onClick={() => commentAssignment.mutate()}>Save in new version</button></div></div>
         </Drawer>
       )}
       {accessCommenting && (
@@ -4727,15 +4727,13 @@ function Sources({ principal }: { principal: Principal }) {
   return (
     <>
       <Head title="Sources & IdPs">
-        <button className="button primary" onClick={() => edit()}>
-          + Add source
-        </button>
+        {principal.role === "ADMIN" ? <button className="button primary" onClick={() => edit()}>+ Add source</button> : null}
       </Head>
       <p>
         Connect and monitor the identity and access systems EARE audits. Secrets remain referenced through
         environment variables and are never stored in the WebUI.
       </p>
-      {!cfg.isLoading && !configs.length && (
+      {!cfg.isLoading && !configs.length && principal.role === "ADMIN" && (
         <section className="panel">
           <h2>No collection source is configured.</h2>
           <p>
@@ -4770,12 +4768,7 @@ function Sources({ principal }: { principal: Principal }) {
             </div>
             <div className="source-foot">
               {principal.role === "ADMIN" && Boolean((r.capabilities as Row | undefined)?.source_browser) ? <NavLink className="button subtle" to={`/sources/${encodeURIComponent(s(r.provider))}/browse`}>Browse source</NavLink> : null}
-              <button
-                className="button subtle"
-                onClick={() => edit(configs.find((c) => s(c.provider) === s(r.provider)))}
-              >
-                Configure
-              </button>
+              {principal.role === "ADMIN" ? <button className="button subtle" onClick={() => edit(configs.find((c) => s(c.provider) === s(r.provider)))}>Configure</button> : null}
               <button
                 className="button subtle"
                 onClick={() => {
@@ -4819,7 +4812,7 @@ function Sources({ principal }: { principal: Principal }) {
       {editing && (
         <Drawer title={editing.id ? "Configure source" : "Add source"} close={() => setEditing(null)}>
           <form
-            className="admin-form"
+            className="drawer-form"
             onSubmit={(e) => {
               e.preventDefault();
               save.mutate(editing);
@@ -5732,7 +5725,7 @@ function Auth() {
           close={() => setEditing(null)}
         >
           <form
-            className="admin-form"
+            className="drawer-form"
             onSubmit={(e) => {
               e.preventDefault();
               save.mutate(editing);

@@ -60,3 +60,47 @@ def test_guidance_is_read_only_and_route_help_is_deterministic() -> None:
     result = build_guidance(_context("OPERATOR", route="/golden", source_count=1))
     assert result["read_only"] is True
     assert result["page_help"]["title"] == "guide.page.golden.title"
+
+
+def test_exported_and_not_completed_remediation_remain_open() -> None:
+    result = build_guidance(_context(
+        "REMEDIATION_MANAGER",
+        pending_actions=1,
+        open_actions=3,
+        exported_actions=1,
+        not_completed_actions=1,
+        completed_actions=4,
+    ))
+    assert result["state"]["open_actions"] == 3
+    assert result["state"]["exported_actions"] == 1
+    assert result["recommendations"][0]["id"] == "process_remediation"
+
+
+def test_admin_handoff_requires_operator_domain_coverage() -> None:
+    result = build_guidance(_context(
+        "ADMIN",
+        source_count=2,
+        latest_snapshot=True,
+        golden_available=True,
+        operator_count=1,
+        operator_coverage_complete=False,
+        uncovered_operator_domains=("AWS-PROD",),
+    ))
+    assert result["recommendations"][0]["id"] == "complete_operator_coverage"
+
+
+def test_operator_campaign_priority_is_deterministic() -> None:
+    result = build_guidance(_context(
+        "OPERATOR",
+        username="alice",
+        source_count=1,
+        latest_snapshot=True,
+        golden_available=True,
+        pending_reviews=2,
+        open_campaigns=(
+            {"id": "new", "pilot": "bob", "due_at": "2026-10-01", "opened_at": "2026-09-24", "pending": 1},
+            {"id": "mine", "pilot": "alice", "due_at": "2026-12-01", "opened_at": "2026-09-01", "pending": 1},
+        ),
+        allowed_routes={"/campaigns/new", "/campaigns/mine"},
+    ))
+    assert result["recommendations"][0]["action_url"] == "/campaigns/mine"

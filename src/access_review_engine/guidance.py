@@ -22,7 +22,15 @@ class GuidanceContext:
     pending_reviews: int = 0
     assigned_pending_reviews: int = 0
     pending_actions: int = 0
+    exported_actions: int = 0
+    not_completed_actions: int = 0
+    completed_actions: int = 0
+    open_actions: int = 0
     operator_count: int = 0
+    operator_coverage_complete: bool = True
+    uncovered_operator_domains: tuple[str, ...] = ()
+    username: str = ""
+    capabilities: frozenset[str] = field(default_factory=frozenset)
     unresolved_reviewers: int = 0
     findings_count: int = 0
     allowed_routes: frozenset[str] = field(default_factory=frozenset)
@@ -62,37 +70,37 @@ def _page_help(route: str) -> dict[str, Any]:
         "/": {
             "title": "guide.page.overview.title",
             "description": "guide.page.overview.description",
-            "questions": ["guide.question.next", "guide.question.readiness"],
+            "topics": [{"id": "next", "question": "guide.question.next", "answer": "Review the primary recommendation and confirm the required facts before acting."}, {"id": "readiness", "question": "guide.question.readiness", "answer": "Readiness is based on the authorized sources, Snapshot, expected state, and work visible to your role."}],
         },
         "/sources": {
             "title": "guide.page.sources.title",
             "description": "guide.page.sources.description",
-            "questions": ["guide.question.sourceSync", "guide.question.next"],
+            "topics": [{"id": "snapshot", "question": "guide.question.sourceSync", "answer": "Preview inspects expected collection impact; Synchronize collects a new immutable Snapshot."}, {"id": "next", "question": "guide.question.next", "answer": "Review the primary recommendation and confirm the required facts before acting."}],
         },
         "/golden": {
             "title": "guide.page.golden.title",
             "description": "guide.page.golden.description",
-            "questions": ["guide.question.goldenMeaning", "guide.question.next"],
+            "topics": [{"id": "golden", "question": "guide.question.goldenMeaning", "answer": "The Golden Source represents expected access. Observed source data remains separate and is never overwritten."}, {"id": "next", "question": "guide.question.next", "answer": "Review the primary recommendation and confirm the required facts before acting."}],
         },
         "/campaigns": {
             "title": "guide.page.campaigns.title",
             "description": "guide.page.campaigns.description",
-            "questions": ["guide.question.campaignReadiness", "guide.question.next"],
+            "topics": [{"id": "readiness", "question": "guide.question.campaignReadiness", "answer": "A campaign is blocked only when its existing readiness rules report an unresolved requirement."}, {"id": "next", "question": "guide.question.next", "answer": "Review the primary recommendation and confirm the required facts before acting."}],
         },
         "/reviews": {
             "title": "guide.page.reviews.title",
             "description": "guide.page.reviews.description",
-            "questions": ["guide.question.reviewDecision", "guide.question.next"],
+            "topics": [{"id": "review", "question": "guide.question.reviewDecision", "answer": "Review the human-readable identity, access, evidence, and business context before deciding."}, {"id": "next", "question": "guide.question.next", "answer": "Review the primary recommendation and confirm the required facts before acting."}],
         },
         "/actions": {
             "title": "guide.page.actions.title",
             "description": "guide.page.actions.description",
-            "questions": ["guide.question.remediation", "guide.question.next"],
+            "topics": [{"id": "remediation", "question": "guide.question.remediation", "answer": "Exported means sent for operational work; only Completed means the correction is confirmed."}, {"id": "next", "question": "guide.question.next", "answer": "Review the primary recommendation and confirm the required facts before acting."}],
         },
         "/reports": {
             "title": "guide.page.reports.title",
             "description": "guide.page.reports.description",
-            "questions": ["guide.question.reportMeaning", "guide.question.next"],
+            "topics": [{"id": "report", "question": "guide.question.reportMeaning", "answer": "Reports summarize decisions and evidence; remediation plans describe requested operational follow-up."}, {"id": "next", "question": "guide.question.next", "answer": "Review the primary recommendation and confirm the required facts before acting."}],
         },
     }
     selected = pages.get(route)
@@ -130,7 +138,7 @@ def build_guidance(context: GuidanceContext) -> dict[str, Any]:
                 status="completed",
             ))
     elif role in {"BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
-        if context.pending_actions:
+        if context.open_actions or context.pending_actions:
             add(
                 "process_remediation", "remediation", "guide.rec.remediation.title",
                 "guide.rec.remediation.description", "guide.rec.remediation.reason", "primary",
@@ -161,10 +169,21 @@ def build_guidance(context: GuidanceContext) -> dict[str, Any]:
                 "guide.rec.defineExpected.description", "guide.rec.defineExpected.reason", "primary",
                 "guide.action.openGolden", action_url="/golden",
             )
-        elif context.operator_count:
+        elif context.operator_count and context.operator_coverage_complete:
             add(
                 "handoff_to_operator", "governance", "guide.rec.handoff.title",
                 "guide.rec.handoff.description", "guide.rec.handoff.reason", "primary",
+                "guide.action.viewUsers", action_url="/system/users",
+            )
+            add(
+                "admin_prepare_campaign", "governance", "guide.rec.adminCampaign.title",
+                "guide.rec.adminCampaign.description", "guide.rec.adminCampaign.reason", "secondary",
+                "guide.action.prepareCampaign", action_url="/campaigns/new",
+            )
+        elif context.operator_count:
+            add(
+                "complete_operator_coverage", "governance", "guide.rec.operatorCoverage.title",
+                "guide.rec.operatorCoverage.description", "guide.rec.operatorCoverage.reason", "primary",
                 "guide.action.viewUsers", action_url="/system/users",
             )
             add(
@@ -188,7 +207,7 @@ def build_guidance(context: GuidanceContext) -> dict[str, Any]:
             add(
                 "operator_missing_source", "governance", "guide.rec.operatorSource.title",
                 "guide.rec.operatorSource.description", "guide.rec.operatorSource.reason", "primary",
-                "guide.action.openSources", action_url="/sources",
+                action_url=None,
             )
         elif not context.latest_snapshot:
             add(
@@ -203,7 +222,16 @@ def build_guidance(context: GuidanceContext) -> dict[str, Any]:
                 "guide.action.openGolden", action_url="/golden",
             )
         elif context.open_campaigns and (context.pending_reviews or route.startswith("/campaigns")):
-            campaign = context.open_campaigns[0]
+            campaign = sorted(
+                context.open_campaigns,
+                key=lambda item: (
+                    str(item.get("pilot", "")).casefold() != context.username.casefold(),
+                    not bool(item.get("overdue")),
+                    str(item.get("due_at") or "9999-12-31"),
+                    not bool(item.get("pending") or item.get("unresolved_reviewers")),
+                    str(item.get("opened_at") or ""),
+                ),
+            )[0]
             action_url = f"/campaigns/{campaign['id']}"
             if action_url in context.allowed_routes:
                 recommendations.append(_recommendation(
@@ -249,9 +277,17 @@ def build_guidance(context: GuidanceContext) -> dict[str, Any]:
             "pending_reviews": context.pending_reviews,
             "assigned_pending_reviews": context.assigned_pending_reviews,
             "pending_actions": context.pending_actions,
+            "pending_actions_count": context.pending_actions,
+            "exported_actions": context.exported_actions,
+            "not_completed_actions": context.not_completed_actions,
+            "completed_actions": context.completed_actions,
+            "open_actions": context.open_actions,
             "operator_count": context.operator_count,
+            "operator_coverage_complete": context.operator_coverage_complete,
+            "uncovered_operator_domains": list(context.uncovered_operator_domains),
             "unresolved_reviewers": context.unresolved_reviewers,
             "findings": context.findings_count,
+            "capabilities": sorted(context.capabilities),
         },
         "recommendations": recommendations,
         "page_help": _page_help(route),
