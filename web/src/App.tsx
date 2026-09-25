@@ -1,12 +1,13 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Navigate, NavLink, Route, Routes, useLocation, useParams, useSearchParams } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowDown,
   ArrowLeft,
   Check,
   ChevronRight,
+  CornerDownLeft,
   Database,
   FileDown,
   HelpCircle,
@@ -16,15 +17,30 @@ import {
   LogOut,
   Menu,
   ChevronDown,
+  Monitor,
+  Moon,
   MoreHorizontal,
   Palette,
   Search,
   Settings,
   ShieldCheck,
+  Sun,
   Users,
   X,
 } from "lucide-react";
-import { applyTheme, readTheme, storeTheme, THEMES, type ThemeId } from "./theme";
+import {
+  APPEARANCES,
+  applyAppearance,
+  applyTheme,
+  readAppearance,
+  readTheme,
+  storeAppearance,
+  storeTheme,
+  THEMES,
+  watchSystemAppearance,
+  type Appearance,
+  type ThemeId,
+} from "./theme";
 import { LOCALE_LABELS, SUPPORTED_LOCALES, i18n, setLocale, type Locale } from "./i18n";
 import { useTranslation } from "react-i18next";
 import {
@@ -355,7 +371,6 @@ function Login() {
           m.mutate();
         }}
       >
-        <span className="auth-eyebrow">{ui("auth.welcomeBack").toUpperCase()}</span>
         <h1>{ui("auth.welcomeBack")}</h1>
         <p>{ui("auth.signInContinue")}</p>
         <label>
@@ -483,9 +498,160 @@ const navSections = [
     ],
   },
 ];
+/** Apple keyboards print the command key; everything else prints Ctrl. */
+export function paletteShortcutLabel(platform = typeof navigator === "undefined" ? "" : navigator.platform): string {
+  return /mac|iphone|ipad|ipod/i.test(platform) ? "\u2318K" : "Ctrl K";
+}
+type NavEntry = { to: string; label: string; icon: typeof Check; section: string | null };
+/** The rail flattened once: the palette and the breadcrumb read the same index. */
+const navEntries = (role: string): NavEntry[] =>
+  navSections.flatMap((section) =>
+    section.items
+      .filter((item) => item.roles.includes(role))
+      .map((item) => ({ to: item.to, label: item.label, icon: item.icon, section: section.heading })),
+  );
+/** Routes the rail does not list, so a detail page still says where it sits. */
+const NESTED_ROUTES: { match: RegExp; parent: string; labelKey: string }[] = [
+  { match: /^\/campaigns\/new$/, parent: "/campaigns", labelKey: "ui.createCampaign" },
+  { match: /^\/campaigns\/[^/]+\/edit$/, parent: "/campaigns", labelKey: "common.edit" },
+  { match: /^\/campaigns\/[^/]+$/, parent: "/campaigns", labelKey: "labels.campaign" },
+  { match: /^\/sources\/[^/]+\/browse$/, parent: "/sources", labelKey: "nav.sources" },
+];
+export function breadcrumbTrail(pathname: string, role: string): { section: string | null; page: string | null; leaf: string | null } {
+  const entries = navEntries(role);
+  const nested = NESTED_ROUTES.find((route) => route.match.test(pathname));
+  const target = nested ? nested.parent : pathname;
+  const entry = entries.find((item) => item.to === target);
+  return {
+    section: entry?.section ?? null,
+    page: entry ? entry.label : null,
+    leaf: nested ? nested.labelKey : null,
+  };
+}
+function Breadcrumb({ role }: { role: string }) {
+  const { pathname } = useLocation(),
+    trail = breadcrumbTrail(pathname, role),
+    section = trail.section ? ui(NAV_KEYS[trail.section] ?? trail.section) : ui("nav.workspace"),
+    page = trail.page ? uiLabel(trail.page) : null;
+  return (
+    <span className="crumb">
+      {section}
+      {page ? (
+        <>
+          <ChevronRight className="directional-icon" size={14} aria-hidden="true" />
+          {trail.leaf ? page : <strong>{page}</strong>}
+        </>
+      ) : null}
+      {trail.leaf ? (
+        <>
+          <ChevronRight className="directional-icon" size={14} aria-hidden="true" />
+          <strong>{ui(trail.leaf)}</strong>
+        </>
+      ) : null}
+    </span>
+  );
+}
+/**
+ * Jump to any page the account may open, from the keyboard. It navigates only:
+ * nothing here mutates data, so a mistyped query can never change the product.
+ */
+function CommandPalette({ role, close }: { role: string; close: () => void }) {
+  const entries = navEntries(role),
+    navigate = useNavigate(),
+    [query, setQuery] = useState(""),
+    [cursor, setCursor] = useState(0),
+    field = useRef<HTMLInputElement>(null),
+    needle = query.trim().toLowerCase(),
+    matches = entries
+      .map((entry) => ({
+        entry,
+        text: `${uiLabel(entry.label)} ${entry.section ? ui(NAV_KEYS[entry.section] ?? entry.section) : ""}`.toLowerCase(),
+      }))
+      .filter(({ text }) => !needle || text.includes(needle))
+      .map(({ entry }) => entry),
+    active = matches[Math.min(cursor, Math.max(0, matches.length - 1))];
+  useEffect(() => field.current?.focus(), []);
+  return (
+    <div className="palette-backdrop" onClick={close} role="presentation">
+      <div
+        aria-label={ui("palette.title")}
+        aria-modal="true"
+        className="palette"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="palette-field">
+          <Search aria-hidden="true" size={17} />
+          <input
+            aria-label={ui("palette.placeholder")}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setCursor(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") return close();
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setCursor((value) => (matches.length ? (value + 1) % matches.length : 0));
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setCursor((value) => (matches.length ? (value - 1 + matches.length) % matches.length : 0));
+              } else if (event.key === "Enter" && active) {
+                event.preventDefault();
+                close();
+                navigate(active.to);
+              }
+            }}
+            placeholder={ui("palette.placeholder")}
+            value={query}
+          />
+        </div>
+        {matches.length ? (
+          <div className="palette-list">
+            {matches.map((entry, index) => {
+              const Icon = entry.icon;
+              return (
+                <NavLink
+                  className={index === Math.min(cursor, matches.length - 1) ? "palette-item active" : "palette-item"}
+                  key={entry.to}
+                  onClick={close}
+                  onMouseEnter={() => setCursor(index)}
+                  to={entry.to}
+                >
+                  <Icon aria-hidden="true" size={16} />
+                  <span>
+                    <strong>{uiLabel(entry.label)}</strong>
+                    {entry.section ? <small>{ui(NAV_KEYS[entry.section] ?? entry.section)}</small> : null}
+                  </span>
+                </NavLink>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="palette-empty">{ui("palette.empty")}</p>
+        )}
+        <div className="palette-foot">
+          <span>
+            <kbd>↑</kbd> <kbd>↓</kbd> {ui("palette.navigate")}
+          </span>
+          <span>
+            <kbd>
+              <CornerDownLeft size={10} />
+            </kbd>{" "}
+            {ui("palette.select")}
+          </span>
+          <span>
+            <kbd>Esc</kbd> {ui("common.close")}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
 function Shell({ principal }: { principal: Principal }) {
   const [c, setC] = useState(false),
     [guideOpen, setGuideOpen] = useState(false),
+    [paletteOpen, setPaletteOpen] = useState(false),
     [guideEnabled, setGuideEnabled] = useState(() => readGuidePreference(principal, "enabled", true)),
     [onboardingSeen, setOnboardingSeen] = useState(() => readGuidePreference(principal, "seen", false)),
     location = useLocation(),
@@ -495,6 +661,18 @@ function Shell({ principal }: { principal: Principal }) {
       enabled: guideEnabled,
       staleTime: 30000,
     });
+  // Ctrl/Cmd+K is the one global shortcut. It is bound on the document because
+  // the palette must open from anywhere, including from inside a drawer.
+  useEffect(() => {
+    const open = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((value) => !value);
+      }
+    };
+    document.addEventListener("keydown", open);
+    return () => document.removeEventListener("keydown", open);
+  }, []);
   return (
     <div className="app-shell">
       <aside className={c ? "sidebar open" : "sidebar"}>
@@ -536,10 +714,13 @@ function Shell({ principal }: { principal: Principal }) {
           <button className="icon-button mobile-menu" onClick={() => setC(!c)}>
             <Menu />
           </button>
-          <span className="crumb">
-            {ui("nav.workspace")} <ChevronRight className="directional-icon" size={14} /> {ui("nav.accessGovernance")}
-          </span>
+          <Breadcrumb role={principal.role} />
           <div className="top-actions">
+            <button className="palette-hint" type="button" onClick={() => setPaletteOpen(true)} aria-label={ui("palette.title")}>
+              <Search aria-hidden="true" size={14} />
+              <span>{ui("palette.title")}</span>
+              <kbd>{paletteShortcutLabel()}</kbd>
+            </button>
             <button className="guide-trigger" type="button" onClick={() => setGuideOpen(true)} aria-label={ui("guide.open")}>
               <HelpCircle size={16} /> <span>{ui("guide.title")}</span>
             </button>
@@ -586,6 +767,7 @@ function Shell({ principal }: { principal: Principal }) {
       </div>
       {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} /> : null}
       {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
+      {paletteOpen ? <CommandPalette role={principal.role} close={() => setPaletteOpen(false)} /> : null}
     </div>
   );
 }
@@ -1090,6 +1272,7 @@ function GuideOnboarding({ data, principal, close, onSeen }: { data: Row; princi
 function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: () => void }) {
   const menu = useRef<HTMLDetailsElement>(null);
   const [theme, setTheme] = useState<ThemeId>(readTheme);
+  const [appearance, setAppearance] = useState<Appearance>(readAppearance);
   const [menuOpen, setMenuOpen] = useState(false);
   const close = () => menu.current?.removeAttribute("open");
   const pick = (next: ThemeId) => {
@@ -1097,6 +1280,15 @@ function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: (
     applyTheme(next);
     storeTheme(next);
   };
+  const pickAppearance = (next: Appearance) => {
+    setAppearance(next);
+    applyAppearance(next);
+    storeAppearance(next);
+  };
+  // While the viewer follows the system, the page follows it too, live.
+  const appearanceRef = useRef(appearance);
+  appearanceRef.current = appearance;
+  useEffect(() => watchSystemAppearance(() => appearanceRef.current), []);
   return (
     <details className="user-menu" ref={menu} onToggle={(event) => setMenuOpen(event.currentTarget.open)}>
       <summary aria-label="Account and settings">
@@ -1134,6 +1326,22 @@ function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: (
               {SUPPORTED_LOCALES.map((locale: Locale) => <option key={locale} value={locale}>{LOCALE_LABELS[locale]}</option>)}
             </select>
           </label>
+          <div className="appearance-row" role="group" aria-label={ui("settings.appearance")}>
+            {APPEARANCES.map((option) => {
+              const Icon = option.id === "light" ? Sun : option.id === "dark" ? Moon : Monitor;
+              return (
+                <button
+                  aria-pressed={appearance === option.id}
+                  className={"appearance-option" + (appearance === option.id ? " active" : "")}
+                  key={option.id}
+                  onClick={() => pickAppearance(option.id)}
+                  type="button"
+                >
+                  <Icon aria-hidden="true" size={14} /> {ui(option.labelKey)}
+                </button>
+              );
+            })}
+          </div>
           {THEMES.map((option) => (
             <button
               className={"style-option" + (theme === option.id ? " active" : "")}
@@ -1222,10 +1430,28 @@ function Table({
   className?: string;
   rowClassName?: (index: number) => string;
 }) {
+  // Loading is shaped like the table it replaces, so the page never jumps when
+  // the rows arrive.
   if (q?.isLoading)
     return (
-      <div className={`table-wrap ${className}`}>
-        <div className="empty">{ui("common.loading")}</div>
+      <div className={`table-wrap ${className}`} aria-busy="true">
+        <table>
+          <thead>
+            <tr>{cols.map((x) => <th key={x}>{uiLabel(x)}</th>)}</tr>
+          </thead>
+          <tbody>
+            {Array.from({ length: 6 }, (_, row) => (
+              <tr key={row}>
+                {cols.map((x, column) => (
+                  <td key={x}>
+                    <span className="skeleton" style={{ width: column ? `${52 + ((row + column) % 3) * 14}%` : "78%" }} />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <span className="skeleton-label">{ui("common.loading")}</span>
       </div>
     );
   if (q?.isError)
