@@ -1,7 +1,7 @@
 # EARE Current Implementation Specification
 
-**Status:** current implementation and integration-test specification  
-**Date:** 2026-09-25  
+**Status:** current implementation and integration-test specification
+**Date:** 2026-09-25
 **Branch:** `feat/eare-guided-assistant`
 
 This document records the behavior that must remain true for the current EARE
