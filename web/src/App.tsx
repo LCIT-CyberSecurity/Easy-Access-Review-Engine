@@ -132,13 +132,13 @@ const contextValue = (context: unknown, field: string, origin: "source" | "manua
   const value = contextField(context, field)[origin] as Row | undefined;
   return value ? s(value.value, "") : "";
 };
-function BusinessContext({ context, manualStatus }: { context: unknown; manualStatus?: string }) {
+function BusinessContext({ context, manualStatus, includeOwner = true }: { context: unknown; manualStatus?: string; includeOwner?: boolean }) {
   const rows = [
-    ["Application", "application"],
-    ["Permission", "business_permission"],
-    ["Resource", "resource"],
-    ["Description", "description"],
-    ["Owner", "owner"],
+    [ui("labels.application"), "application"],
+    [ui("labels.businessPermission"), "business_permission"],
+    [ui("labels.resource"), "resource"],
+    [ui("labels.description"), "description"],
+    ...(includeOwner ? [[ui("labels.owner"), "owner"]] : []),
   ] as const;
   const visible = rows.filter(([, field]) => contextValue(context, field, "source") || contextValue(context, field, "manual"));
   if (!visible.length && manualStatus !== "not_captured") return <p className="muted">Business context not provided.</p>;
@@ -959,6 +959,32 @@ function ApiTokenPanel({ menuOpen }: { menuOpen: boolean }) {
 function guideStorageKey(principal: Principal, suffix: string): string {
   return `eare.guide.${suffix}.${principal.subject}`;
 }
+export const guideChecklistLabelKey = (item: Row): string => `guide.setupShort.${s(item.id, "").replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())}`;
+export const guideTranslation = (key: unknown): string => {
+  const path = s(key, "common.unknown"),
+    english = String(i18n.getFixedT("en")(path, { defaultValue: "" } as never) || ""),
+    translated = String(i18n.t(path, { defaultValue: english } as never) || english);
+  return translated && translated !== path ? translated : english || ui("common.unknown");
+};
+export const accessDrawerTitle = (access: Row): string => s(access.display_name, s(access.name ?? access.access_name));
+export const accessDrawerTechnicalIdentifier = (access: Row): string => s(access.name ?? access.access_name, "");
+export const accessDrawerBusinessContextOrder = ["application", "business_permission", "owner", "description"] as const;
+export function GuideChecklist({ items, text }: { items: Row[]; text: (key: unknown) => string }) {
+  if (!items.length) return null;
+  return (
+    <section className="guide-section">
+      <h3>{text("guide.setupTitle")}</h3>
+      <div className="guide-checklist">
+        {items.map((item) => (
+          <div className="guide-checklist-item" key={s(item.id)}>
+            <span aria-hidden="true">{s(item.status) === "complete" ? "✓" : s(item.status) === "attention" ? "!" : "○"}</span>
+            <strong>{text(guideChecklistLabelKey(item))}</strong>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 function readGuidePreference(principal: Principal, suffix: string, fallback: boolean): boolean {
   try {
     const value = window.localStorage.getItem(guideStorageKey(principal, suffix));
@@ -977,7 +1003,7 @@ function writeGuidePreference(principal: Principal, suffix: string, value: boole
 function GuideDrawer({ data, loading, error, retry, principal, enabled, close, setEnabled }: { data?: Row; loading: boolean; error: boolean; retry: () => void; principal: Principal; enabled: boolean; close: () => void; setEnabled: (value: boolean) => void }) {
   const recommendations = arr(data?.recommendations), state = (data?.state ?? {}) as Row, pageHelp = (data?.page_help ?? {}) as Row;
   const readiness = (data?.campaign_readiness ?? null) as Row | null;
-  const text = (key: unknown) => ui(s(key, "common.unknown"));
+  const text = guideTranslation;
   const openRecommendation = recommendations.find((item) => item.priority === "primary") ?? recommendations[0];
   return (
     <Drawer title={text("guide.title")} close={close} size="wide">
@@ -999,7 +1025,7 @@ function GuideDrawer({ data, loading, error, retry, principal, enabled, close, s
                 {principal.role === "REMEDIATION_MANAGER" && Number(state.exported_actions) ? <span>! {s(state.exported_actions)} {text("labels.exported")}</span> : null}
               </div>
             </section>
-            {principal.role === "ADMIN" && arr(state.setup_checklist).length ? <section className="guide-section"><h3>{text("guide.setupTitle")}</h3><div className="guide-checklist">{arr(state.setup_checklist).map((item) => <div className="guide-checklist-item" key={s(item.id)}><span aria-hidden="true">{s(item.status) === "complete" ? "✓" : s(item.status) === "attention" ? "!" : "○"}</span><span><strong>{text(item.label)}</strong>{item.description ? <small>{text(item.description)}</small> : null}</span></div>)}</div></section> : null}
+            {principal.role === "ADMIN" ? <GuideChecklist items={arr(state.setup_checklist)} text={text} /> : null}
             {openRecommendation ? (
               <section className="guide-primary">
                 <span className="eyebrow">{text("guide.next")}</span>
@@ -1041,7 +1067,7 @@ function GuideTopic({ topic, text }: { topic: Row; text: (key: unknown) => strin
 }
 function GuideOnboarding({ data, principal, close, onSeen }: { data: Row; principal: Principal; close: () => void; onSeen: () => void }) {
   const recommendations = arr(data.recommendations), primary = recommendations.find((item) => item.priority === "primary") ?? recommendations[0];
-  const text = (key: unknown) => ui(s(key, "common.unknown"));
+  const text = guideTranslation;
   const finish = () => { writeGuidePreference(principal, "seen", true); onSeen(); };
   return (
     <div className="modal-backdrop">
@@ -1050,8 +1076,8 @@ function GuideOnboarding({ data, principal, close, onSeen }: { data: Row; princi
         <h2 id="guide-onboarding-title">{text("guide.onboardingTitle")}</h2>
         <p>{text("guide.onboardingIntro")}</p>
         <div className="guide-role"><span>{text("guide.role")}</span><strong>{ui(`status.${principal.role}`)}</strong></div>
-        {principal.role === "ADMIN" && arr((data.state as Row | undefined)?.setup_checklist).length ? <section className="guide-section"><h3>{text("guide.setupTitle")}</h3><div className="guide-checklist">{arr((data.state as Row | undefined)?.setup_checklist).map((item) => <div className="guide-checklist-item" key={s(item.id)}><span aria-hidden="true">{s(item.status) === "complete" ? "✓" : s(item.status) === "attention" ? "!" : "○"}</span><span><strong>{text(item.label)}</strong>{item.description ? <small>{text(item.description)}</small> : null}</span></div>)}</div></section> : null}
-        {primary ? <div className="guide-primary"><span className="eyebrow">{text("guide.next")}</span><h3>{text(primary.title)}</h3><p>{text(primary.description)}</p></div> : null}
+        {principal.role === "ADMIN" ? <GuideChecklist items={arr((data.state as Row | undefined)?.setup_checklist)} text={text} /> : null}
+        {primary ? <section className="guide-primary"><span className="eyebrow">{text("guide.next")}</span><h3>{text(primary.title)}</h3><p>{text(primary.description)}</p>{primary.action_url ? <NavLink className="button subtle" to={s(primary.action_url)} onClick={finish}>{text(primary.action_label)}</NavLink> : null}</section> : null}
         <div className="modal-actions">
           <button className="button subtle" onClick={finish}>{text("guide.explore")}</button>
           <button className="button primary" onClick={() => { finish(); close(); }}>{text("guide.startSetup")}</button>
@@ -1880,7 +1906,8 @@ function AccessDetail({ access }: { access: Row }) {
     effective = arr(q.data?.effective_holders),
     holderLabel = (row: Row) => `${s(row.identity_provider, provider)} · ${s(row.identity_display_name, s(row.identity_identifier))}`,
     ownerReference = contextValue(currentAccess.business_context, "owner", "manual") || contextValue(currentAccess.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
-    ownerDisplay = ownerReference ? ownerDisplayLabel(ownerReference, arr(ownerIdentities.data?.items), s((access.access_owner as Row | undefined)?.provider, provider)) : "—";
+    ownerDisplay = ownerReference ? ownerDisplayLabel(ownerReference, arr(ownerIdentities.data?.items), s((access.access_owner as Row | undefined)?.provider, provider)).replace(/^[^/]+\//, "") : "—",
+    ownerTechnical = ownerReference || "";
   return (
     <>
       <div className="tabs">
@@ -1889,39 +1916,40 @@ function AccessDetail({ access }: { access: Row }) {
       </div>
       {tab === "overview" ? (
         <>
-          <h4>WHAT THIS ACCESS ALLOWS</h4>
-          <p>{describeAccess(access) || "The source provided no description for this access."}</p>
-          <h4>TECHNICAL ENTITLEMENT</h4>
-          <p>Source: {provider}</p>
-          <p>Granted via: {s(access.technical_grant, permissionText(access.permission) === "member" ? "Group membership" : "Direct assignment")}</p>
-          <p>Technical permission: {s(access.technical_permission, permissionText(access.permission) || "—")}</p>
-          <p>Target: {targetText(access.target) || "—"}</p>
-          <h4>BUSINESS CONTEXT</h4>
-          <BusinessContext context={currentAccess.business_context} />
-          {accessId ? <button className="button subtle" onClick={() => setEditingContext(!editingContext)}>Edit access information</button> : null}
+          <section className="access-drawer-section">
+            <div className="access-drawer-section-header"><h4>{ui("labels.businessContext")}</h4>{accessId ? <button className="text-button" onClick={() => setEditingContext(!editingContext)}>Edit access information</button> : null}</div>
+            <BusinessContext context={currentAccess.business_context} includeOwner={false} />
+            {ownerReference ? <div className="access-drawer-field"><strong>Owner</strong><span>{ownerDisplay}<small>{ownerTechnical}</small></span></div> : null}
+            {!contextValue(currentAccess.business_context, "description", "source") && !contextValue(currentAccess.business_context, "description", "manual") && describeAccess(access) ? <div className="access-drawer-field"><strong>Description</strong><span>{describeAccess(access)}</span></div> : null}
+          </section>
           {editingContext ? (
             <div className="drawer-form">
               {[
-                ["Application", "application"],
-                ["Permission", "business_permission"],
-                ["Resource", "resource"],
-                ["Description", "description"],
-                ["Owner", "owner"],
+                [ui("labels.application"), "application"],
+                [ui("labels.businessPermission"), "business_permission"],
+                [ui("labels.resource"), "resource"],
+                [ui("labels.description"), "description"],
+                [ui("labels.owner"), "owner"],
               ].map(([label, field]) => (
                 <label key={field}>{label}<input value={s(manual[field], "")} onChange={(event) => setManual((current) => ({ ...current, [field]: event.target.value }))} /></label>
               ))}
               <button className="button primary" disabled={saveContext.isPending} onClick={() => saveContext.mutate()}>Save manual reference</button>
             </div>
           ) : null}
-          <h4>DETAILS</h4>
-          <p>
-            Owner:{" "}
-            {ownerDisplay}
-          </p>
-          <h4>WHO HOLDS IT</h4>
-          <p>
-            {direct.length} direct · {effective.length} effective
-          </p>
+          <details className="access-drawer-technical">
+            <summary>{ui("labels.technicalEntitlement")}</summary>
+            <div className="access-drawer-technical-grid">
+              <div><strong>{ui("labels.source")}</strong><span>{provider}</span></div>
+              <div><strong>{ui("labels.nativePermission")}</strong><span>{s(access.technical_permission, permissionText(access.permission) || "—")}</span></div>
+              <div><strong>{ui("labels.grantMechanism")}</strong><span>{s(access.technical_grant, permissionText(access.permission) === "member" ? "Group membership" : "Direct assignment")}</span></div>
+              <div><strong>{ui("labels.target")}</strong><span>{targetText(access.target) || "—"}</span></div>
+              <div><strong>Technical identifier</strong><span>{name || "—"}</span></div>
+            </div>
+          </details>
+          <section className="access-drawer-holders-summary">
+            <div><h4>{ui("labels.holders")}</h4><p>{direct.length} direct · {effective.length} effective</p></div>
+            <button className="button subtle" onClick={() => setTab("holders")}>{ui("labels.viewHolders")}</button>
+          </section>
         </>
       ) : (
         <Table
@@ -1945,8 +1973,15 @@ function AccessDetail({ access }: { access: Row }) {
   );
 }
 function AccessDrawer({ access, close }: { access: Row; close: () => void }) {
+  const provider = s(access.provider ?? access.access_provider),
+    technicalName = accessDrawerTechnicalIdentifier(access),
+    businessPermission = contextValue(access.business_context, "business_permission", "manual") || contextValue(access.business_context, "business_permission", "source");
   return (
-    <Drawer title={s(access.display_name, s(access.name ?? access.access_name))} close={close} size="wide">
+    <Drawer title={accessDrawerTitle(access)} close={close} size="wide">
+      <div className="access-drawer-meta">
+        {businessPermission ? <strong>{provider} · {ui("labels.businessPermission")}: {businessPermission}</strong> : null}
+        {technicalName ? <small>{provider} · {technicalName}</small> : null}
+      </div>
       <AccessDetail access={access} />
     </Drawer>
   );
