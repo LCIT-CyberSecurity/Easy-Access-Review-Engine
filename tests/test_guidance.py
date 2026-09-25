@@ -104,3 +104,38 @@ def test_operator_campaign_priority_is_deterministic() -> None:
         allowed_routes={"/campaigns/new", "/campaigns/mine"},
     ))
     assert result["recommendations"][0]["action_url"] == "/campaigns/mine"
+
+
+def test_business_admin_can_review_but_not_update_remediation() -> None:
+    result = build_guidance(_context("BUSINESS_ADMIN", open_actions=4, pending_actions=2))
+    assert result["recommendations"][0]["id"] == "review_remediation"
+    assert result["recommendations"][0]["title"] == "guide.reviewRemediation.title"
+
+
+def test_group_owner_state_uses_assigned_work_only() -> None:
+    result = build_guidance(_context(
+        "GROUP_OWNER",
+        pending_reviews=0,
+        assigned_pending_reviews=6,
+        assigned_campaign_count=2,
+        source_count=12,
+        latest_snapshot=True,
+        golden_available=True,
+    ))
+    assert result["state"]["assigned_pending_reviews"] == 6
+    assert result["state"]["assigned_campaign_count"] == 2
+    assert "sources" not in result["state"] or result["state"]["sources"] == 12
+
+
+def test_guidance_exposes_campaign_priority_facts_and_readiness() -> None:
+    result = build_guidance(_context(
+        "OPERATOR",
+        source_count=1,
+        latest_snapshot=True,
+        golden_available=True,
+        username="alice",
+        open_campaigns=({"id": "c1", "pilot": "alice", "due_at": "2026-09-01", "opened_at": "2026-08-01", "pending": 2, "overdue": True},),
+        campaign_readiness={"campaign_id": "draft-1", "ready": False, "blockers": ["unresolved_reviewers"]},
+    ))
+    assert result["campaign_readiness"]["blockers"] == ["unresolved_reviewers"]
+    assert result["state"]["configured_source_count"] == 1

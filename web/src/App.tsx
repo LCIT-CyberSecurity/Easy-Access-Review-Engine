@@ -577,8 +577,8 @@ function Shell({ principal }: { principal: Principal }) {
             <Route path="/campaigns/new" element={<CampaignNew principal={principal} />} />
             <Route path="/campaigns/:id/edit" element={<CampaignNew principal={principal} />} />
             <Route path="/campaigns/:id" element={<CampaignDetail />} />
-            <Route path="/findings" element={<List path="findings" title="Findings" />} />
-            <Route path="/actions" element={<List path="remediation-actions" title="Actions" />} />
+            <Route path="/findings" element={<List path="findings" title="Findings" principal={principal} />} />
+            <Route path="/actions" element={<List path="remediation-actions" title="Actions" principal={principal} />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/sources" element={<Sources principal={principal} />} />
             <Route path="/sources/:provider/browse" element={<SourceBrowser />} />
@@ -981,6 +981,7 @@ function writeGuidePreference(principal: Principal, suffix: string, value: boole
 }
 function GuideDrawer({ data, loading, error, retry, principal, enabled, close, setEnabled }: { data?: Row; loading: boolean; error: boolean; retry: () => void; principal: Principal; enabled: boolean; close: () => void; setEnabled: (value: boolean) => void }) {
   const recommendations = arr(data?.recommendations), state = (data?.state ?? {}) as Row, pageHelp = (data?.page_help ?? {}) as Row;
+  const readiness = (data?.campaign_readiness ?? null) as Row | null;
   const text = (key: unknown) => ui(s(key, "common.unknown"));
   const openRecommendation = recommendations.find((item) => item.priority === "primary") ?? recommendations[0];
   return (
@@ -999,10 +1000,11 @@ function GuideDrawer({ data, loading, error, retry, principal, enabled, close, s
             <section className="guide-situation">
               <h3>{text("guide.currentSituation")}</h3>
               <div className="guide-facts">
-                {principal.role === "GROUP_OWNER" ? <><span>✓ {Number(state.assigned_pending_reviews ?? 0)} {text("labels.pendingReviews")}</span><span>✓ {Number(state.open_campaigns ?? 0)} {text("labels.campaign")}</span></> : principal.role === "BUSINESS_ADMIN" || principal.role === "REMEDIATION_MANAGER" ? <><span>! {Number(state.open_actions ?? state.pending_actions ?? 0)} {text("labels.actions")}</span><span>✓ {Number(state.completed_actions ?? 0)} {text("labels.completed")}</span></> : <><span>{Number(state.sources) ? `✓ ${state.sources} ${text("guide.page.sources.title")}` : `○ ${text("guide.page.sources.title")}`}</span><span>{state.latest_snapshot ? `✓ ${text("labels.observedSnapshot")}` : `○ ${text("labels.observedSnapshot")}`}</span><span>{state.golden_available ? `✓ ${text("labels.expectedState")}` : `○ ${text("labels.expectedState")}`}</span><span>{Number(state.pending_reviews) ? `! ${state.pending_reviews} ${text("labels.pendingReviews")}` : null}</span></>}
+                {principal.role === "GROUP_OWNER" ? <><span>✓ {Number(state.assigned_pending_reviews ?? 0)} {text("labels.pendingReviews")}</span><span>✓ {Number(state.assigned_campaign_count ?? 0)} {text("labels.campaign")}</span></> : principal.role === "BUSINESS_ADMIN" || principal.role === "REMEDIATION_MANAGER" ? <><span>! {Number(state.open_actions ?? state.pending_actions ?? 0)} {text("labels.actions")}</span><span>✓ {Number(state.completed_actions ?? 0)} {text("labels.completed")}</span></> : <><span>{Number(state.sources) ? `✓ ${state.sources} ${text("guide.page.sources.title")}` : `○ ${text("guide.page.sources.title")}`}</span><span>{state.latest_snapshot ? `✓ ${text("labels.observedSnapshot")}` : `○ ${text("labels.observedSnapshot")}`}</span><span>{state.golden_available ? `✓ ${text("labels.expectedState")}` : `○ ${text("labels.expectedState")}`}</span><span>{Number(state.pending_reviews) ? `! ${state.pending_reviews} ${text("labels.pendingReviews")}` : null}</span></>}
                 {principal.role === "REMEDIATION_MANAGER" && Number(state.exported_actions) ? <span>! {s(state.exported_actions)} {text("labels.exported")}</span> : null}
               </div>
             </section>
+            {principal.role === "ADMIN" && arr(state.setup_checklist).length ? <section className="guide-section"><h3>{text("guide.setupTitle")}</h3><div className="guide-checklist">{arr(state.setup_checklist).map((item) => <div className="guide-checklist-item" key={s(item.id)}><span aria-hidden="true">{s(item.status) === "complete" ? "✓" : s(item.status) === "attention" ? "!" : "○"}</span><span><strong>{text(item.label)}</strong>{item.description ? <small>{text(item.description)}</small> : null}</span></div>)}</div></section> : null}
             {openRecommendation ? (
               <section className="guide-primary">
                 <span className="eyebrow">{text("guide.next")}</span>
@@ -1012,6 +1014,7 @@ function GuideDrawer({ data, loading, error, retry, principal, enabled, close, s
                 {openRecommendation.action_url ? <NavLink className="button primary" to={s(openRecommendation.action_url)} onClick={close}>{text(openRecommendation.action_label)}</NavLink> : null}
               </section>
             ) : null}
+            {readiness ? <section className="guide-section"><h3>CAMPAIGN READINESS</h3><div className="guide-facts"><span>{readiness.scope ? "✓ Scope defined" : "○ Scope required"}</span><span>{(readiness.snapshot as Row | undefined)?.selected ? "✓ Snapshot selected" : "○ Snapshot required"}</span><span>{(readiness.expected_state as Row | undefined)?.selected ? "✓ Expected state selected" : "○ Expected state required"}</span><span>{(readiness.pilot as Row | undefined)?.selected ? `✓ Pilot ${s((readiness.pilot as Row).username)}` : "○ Pilot required"}</span><span>{Number((readiness.reviewers as Row | undefined)?.unresolved) ? `⚠ ${s((readiness.reviewers as Row).unresolved)} unresolved reviewers` : "✓ Reviewers resolved"}</span></div></section> : null}
             {recommendations.length > 1 ? (
               <section className="guide-suggestions">
                 <h3>{text("guide.otherSuggestions")}</h3>
@@ -1845,6 +1848,7 @@ function Accesses() {
 function AccessDetail({ access }: { access: Row }) {
   const client = useQueryClient(),
     toast = useToast(),
+    [currentAccess, setCurrentAccess] = useState(access),
     [tab, setTab] = useState("overview"),
     [editingContext, setEditingContext] = useState(false),
     [manual, setManual] = useState<Row>(() => {
@@ -1865,7 +1869,8 @@ function AccessDetail({ access }: { access: Row }) {
     }),
     saveContext = useMutation({
       mutationFn: () => putJson(`accesses/${encodeURIComponent(accessId)}/enrichment`, manual),
-      onSuccess: async () => {
+      onSuccess: async (data) => {
+        setCurrentAccess((value) => ({ ...value, business_context: data.business_context }));
         setEditingContext(false);
         toast("ok", "Access information saved");
         await client.invalidateQueries({ queryKey: ["accesses"] });
@@ -1878,7 +1883,7 @@ function AccessDetail({ access }: { access: Row }) {
   const direct = arr(q.data?.holders),
     effective = arr(q.data?.effective_holders),
     holderLabel = (row: Row) => `${s(row.identity_provider, provider)} · ${s(row.identity_display_name, s(row.identity_identifier))}`,
-    ownerReference = contextValue(access.business_context, "owner", "manual") || contextValue(access.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
+    ownerReference = contextValue(currentAccess.business_context, "owner", "manual") || contextValue(currentAccess.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
     ownerDisplay = ownerReference ? ownerDisplayLabel(ownerReference, arr(ownerIdentities.data?.items), s((access.access_owner as Row | undefined)?.provider, provider)) : "—";
   return (
     <>
@@ -1896,7 +1901,7 @@ function AccessDetail({ access }: { access: Row }) {
           <p>Technical permission: {s(access.technical_permission, permissionText(access.permission) || "—")}</p>
           <p>Target: {targetText(access.target) || "—"}</p>
           <h4>BUSINESS CONTEXT</h4>
-          <BusinessContext context={access.business_context} />
+          <BusinessContext context={currentAccess.business_context} />
           {accessId ? <button className="button subtle" onClick={() => setEditingContext(!editingContext)}>Edit access information</button> : null}
           {editingContext ? (
             <div className="drawer-form">
@@ -2281,7 +2286,7 @@ function ReviewDrawer({
     </Drawer>
   );
 }
-function List({ path, title }: { path: string; title: string }) {
+function List({ path, title, principal }: { path: string; title: string; principal: Principal }) {
   const campaigns = useQuery({
       queryKey: [path, "campaigns"],
       queryFn: () => getPage("campaigns", { limit: 100 }),
@@ -2378,13 +2383,14 @@ function List({ path, title }: { path: string; title: string }) {
         (findings ? (
           <FindingDrawer row={selected} close={() => setSelected(null)} />
         ) : (
-          <ActionDrawer row={selected} close={() => setSelected(null)} />
+          <ActionDrawer row={selected} principal={principal} close={() => setSelected(null)} />
         ))}
     </>
   );
 }
 function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
   const toast = useToast(),
+    queryClient = useQueryClient(),
     [ticket, setTicket] = useState(s((row.finding_tracking as Row | undefined)?.ticket, "")),
     [comment, setComment] = useState(s((row.finding_tracking as Row | undefined)?.comment, "")),
     save = useMutation({
@@ -2398,7 +2404,10 @@ function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
         ticket,
         comment,
       }),
-      onSuccess: () => toast("ok", "Finding tracking saved"),
+      onSuccess: async () => {
+        toast("ok", "Finding tracking saved");
+        await queryClient.invalidateQueries({ queryKey: ["findings"] });
+      },
       onError: (error) => toast("error", s(error, "Unable to save finding tracking")),
     });
   return (
@@ -2420,7 +2429,7 @@ function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
     </Drawer>
   );
 }
-function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
+function ActionDrawer({ row, principal, close }: { row: Row; principal: Principal; close: () => void }) {
   const queryClient = useQueryClient(),
     toast = useToast(),
     [comment, setComment] = useState(s((row.details as Row | undefined)?.status_comment, "")),
@@ -2448,7 +2457,8 @@ function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
       </section><section className="drawer-section"><h4>CURRENT FOLLOW-UP</h4>
       <Status v={row.status} />
       {s((row.details as Row | undefined)?.status_comment, "") ? <p className="muted"><strong>Administrator follow-up:</strong> {s((row.details as Row | undefined)?.status_comment)}</p> : null}
-      </section><section className="drawer-section"><h4>UPDATE FOLLOW-UP</h4>
+      </section>
+      {principal.role !== "BUSINESS_ADMIN" ? <section className="drawer-section"><h4>UPDATE FOLLOW-UP</h4>
       <label className="drawer-check"><input type="checkbox" checked={mitigated} onChange={(event) => setMitigated(event.target.checked)} /><span>Action mitigated / corrected</span><small>{mitigated ? "The administrator confirms the change was applied outside EARE." : "If the action is not mitigated, explain why in the comment below."}</small></label>
       <label className="drawer-field">
         Administrator follow-up comment
@@ -2456,11 +2466,11 @@ function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
       </label>
       <div className="drawer-actions">
         <button className="button primary" disabled={update.isPending || (!mitigated && !comment.trim())} onClick={() => update.mutate()}>Save remediation follow-up</button>
-      </div></section>
+      </div></section> : <p className="field-note">Operational correction is managed by an authorized remediation role.</p>}
     </Drawer>
   );
 }
-function RemediationManager() {
+function RemediationManager({ principal }: { principal: Principal }) {
   return (
     <>
       <Head title="Remediation follow-up" />
@@ -2468,7 +2478,7 @@ function RemediationManager() {
         <h3>Operational remediation queue</h3>
         <p className="muted">Administrators record what was done or not done. EARE only records the follow-up and never changes a source.</p>
       </div>
-      <List path="remediation-actions" title="Actions to follow up" />
+      <List path="remediation-actions" title="Actions to follow up" principal={principal} />
     </>
   );
 }
@@ -2622,7 +2632,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
         const d = draftId
           ? await putJson("campaigns/" + s(draftId), payload)
           : await postJson("campaigns", payload);
-        if (open && !draftId && d.id)
+        if (open && d.id)
           await postJson("campaigns/" + s(d.id) + "/open", { allow_unresolved_reviewers: allow });
         return { ...d, opened: open } as Row & { opened: boolean };
       },
@@ -3599,9 +3609,9 @@ function Golden() {
     accessEditIsDirty = goldenAccessEditIsDirty,
     beginAccessEdit = (row: Row) => {
       const key = `${s(row.access_provider)}:${s(row.access_name)}`;
-      const application = contextValue(row.business_context, "application", "manual") || contextValue(row.business_context, "application", "source") || "";
-      const businessPermission = contextValue(row.business_context, "business_permission", "manual") || contextValue(row.business_context, "business_permission", "source") || "";
-      const owner = contextValue(row.business_context, "owner", "manual") || contextValue(row.business_context, "owner", "source") || s(row.access_owner, "");
+      const application = contextValue(row.business_context, "application", "manual");
+      const businessPermission = contextValue(row.business_context, "business_permission", "manual");
+      const owner = contextValue(row.business_context, "owner", "manual");
       setEditingAccess({
         key,
         access_id: row.access_id,
@@ -4042,11 +4052,14 @@ function Golden() {
                   return [
                     editing ? (
                       <div className="inline-edit-stack">
-                        <select value={s(editingHolder?.identity_provider, "")} onChange={(event) => setEditingHolder({ ...editingHolder, identity_provider: event.target.value, identity_identifier: "" })}>
+                        <select value={s(editingHolder?.identity_provider, "")} onChange={(event) => setEditingHolder({ ...editingHolder, identity_provider: event.target.value, identity_identifier: "", identity_native_id: undefined })}>
                           <option value="">Select source</option>
                           {arr(providerOptions.data?.items).map((provider) => <option key={s(provider.name)} value={s(provider.name)}>{s(provider.display_name, s(provider.name))}</option>)}
                         </select>
-                        <select value={s(editingHolder?.identity_identifier, "")} onChange={(event) => setEditingHolder({ ...editingHolder, identity_identifier: event.target.value })}>
+                        <select value={s(editingHolder?.identity_identifier, "")} onChange={(event) => {
+                          const identity = arr(holderIdentityOptions.data?.items).find((item) => s(item.identifier, s(item.id)) === event.target.value);
+                          setEditingHolder({ ...editingHolder, identity_identifier: event.target.value, identity_native_id: identity ? (s(identity.native_id, "") || undefined) : undefined });
+                        }}>
                           <option value="">Select holder</option>
                           {arr(holderIdentityOptions.data?.items).map((identity) => {
                             const identifier = s(identity.identifier, s(identity.id));
@@ -4115,9 +4128,9 @@ function Golden() {
                       .filter((r) => r.status !== "unchanged")
                       .map((r) => [
                         <Status v={r.status === "added" ? "unexpected" : "missing"} />,
-                        s(r.identity_identifier),
-                        s(r.access_name),
-                        s(r.access_provider),
+                        s(r.identity_display_name, s(r.identity_identifier)),
+                        s(r.access_display_name, s(r.access_name)),
+                        s(r.access_provider_display_name, s(r.access_provider)),
                       ])}
                   />
                   <p className="muted">
@@ -4148,17 +4161,23 @@ function Golden() {
                   const service = (target.service ?? {}) as Row;
                   const resource = (target.resource ?? {}) as Row;
                   const mapped = vals(suggestion.mapped_capability_ids);
+                  const existingRights = arr(row.functional_rights).map((right) => ({
+                    capability_id: s(right.capability_id, ""),
+                    target: right.target,
+                  }));
                   setFunctionalEditing({
                     access_provider: row.access_provider,
                     access_name: row.access_name,
                     access_display_name: row.access_display_name,
                     completeness: row.completeness === "not_defined" ? "partial" : row.completeness,
-                    capability_id: mapped[0] ?? "",
+                    capability_id: mapped[0] ?? s(existingRights[0]?.capability_id, ""),
                     service_identifier: service.identifier ?? "",
                     resource_identifier: resource.identifier ?? "",
                     service_display_name: service.display_name ?? "",
                     resource_display_name: resource.display_name ?? "",
                     version_comment: "Validate source-informed functional model",
+                    rights: existingRights.length ? existingRights : [{ capability_id: mapped[0] ?? "", target: { service: service.identifier ? { identifier: service.identifier, display_name: service.display_name } : undefined, resource: resource.identifier ? { identifier: resource.identifier, display_name: resource.display_name } : undefined } }],
+                    grants: arr(row.expected_grants),
                   });
                 }}
               />
@@ -4329,7 +4348,7 @@ function Golden() {
       )}
       {functionalEditing && (
         <Drawer title={`Validate Golden V2 · ${s(functionalEditing.access_display_name, s(functionalEditing.access_name))}`} close={() => setFunctionalEditing(null)}>
-          <p className="muted">Observed and mapped values are prefilled for review. Saving creates a new immutable expected version; it does not rewrite the source observation.</p>
+          <p className="muted">Observed and mapped values are prefilled for review. Saving creates a new immutable expected version; it does not rewrite the source observation.</p><div className="drawer-form">
           <label>Completeness<select value={s(functionalEditing.completeness, "partial")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, completeness: event.target.value })}>
             <option value="not_defined">Not defined</option><option value="partial">Partial</option><option value="complete">Complete</option>
           </select></label>
@@ -4339,7 +4358,7 @@ function Golden() {
           </select></label>
           <label>Target service<input value={s(functionalEditing.service_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, service_identifier: event.target.value })} /></label>
           <label>Target resource<input value={s(functionalEditing.resource_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, resource_identifier: event.target.value })} /></label>
-          <div className="drawer-form"><label className="drawer-field">Version comment<textarea className="drawer-comment" value={s(functionalEditing.version_comment, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, version_comment: event.target.value })} /></label>
+          <label className="drawer-field">Version comment<textarea className="drawer-comment" value={s(functionalEditing.version_comment, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, version_comment: event.target.value })} /></label>
           <div className="drawer-actions"><button
             className="button primary"
             disabled={saveFunctional.isPending || !s(functionalEditing.capability_id, "") || (!s(functionalEditing.service_identifier, "") && !s(functionalEditing.resource_identifier, ""))}
@@ -4348,14 +4367,20 @@ function Golden() {
               access_name: functionalEditing.access_name,
               manual_access: false,
               completeness: functionalEditing.completeness,
-              rights: [{
+              rights: (arr(functionalEditing.rights).length ? arr(functionalEditing.rights).map((right, index) => index === 0 ? {
                 target: {
                   ...(s(functionalEditing.service_identifier, "") ? { service: { identifier: s(functionalEditing.service_identifier), display_name: s(functionalEditing.service_display_name, s(functionalEditing.service_identifier)), type: "application" } } : {}),
                   ...(s(functionalEditing.resource_identifier, "") ? { resource: { identifier: s(functionalEditing.resource_identifier), display_name: s(functionalEditing.resource_display_name, s(functionalEditing.resource_identifier)), type: "business_object" } } : {}),
                 },
                 capability_id: functionalEditing.capability_id,
-              }],
-              grants: [],
+              } : right) : [{
+                target: {
+                  ...(s(functionalEditing.service_identifier, "") ? { service: { identifier: s(functionalEditing.service_identifier), display_name: s(functionalEditing.service_display_name, s(functionalEditing.service_identifier)), type: "application" } } : {}),
+                  ...(s(functionalEditing.resource_identifier, "") ? { resource: { identifier: s(functionalEditing.resource_identifier), display_name: s(functionalEditing.resource_display_name, s(functionalEditing.resource_identifier)), type: "business_object" } } : {}),
+                },
+                capability_id: functionalEditing.capability_id,
+              }]),
+              grants: arr(functionalEditing.grants),
               version_comment: functionalEditing.version_comment,
             })}
           >
@@ -4383,13 +4408,15 @@ function Golden() {
         <Drawer title="Golden access comment" close={() => setAccessCommenting(null)}>
           <p><strong>{s(accessCommenting.access_display_name, s(accessCommenting.access_name))}</strong></p>
           <p className="muted">This comment explains the business meaning of the access right.</p>
-          <label className="drawer-field">
-            Comment
-            <textarea className="drawer-comment" autoFocus value={accessComment} onChange={(event) => setAccessComment(event.target.value)} />
-          </label>
-          <div className="drawer-actions">
-            <button className="button subtle" onClick={() => setAccessCommenting(null)}>Cancel</button>
-            <button className="button primary" disabled={commentAccess.isPending} onClick={() => commentAccess.mutate()}>Save</button>
+          <div className="drawer-form">
+            <label className="drawer-field">
+              Comment
+              <textarea className="drawer-comment" autoFocus value={accessComment} onChange={(event) => setAccessComment(event.target.value)} />
+            </label>
+            <div className="drawer-actions">
+              <button className="button subtle" onClick={() => setAccessCommenting(null)}>Cancel</button>
+              <button className="button primary" disabled={commentAccess.isPending} onClick={() => commentAccess.mutate()}>Save</button>
+            </div>
           </div>
         </Drawer>
       )}
@@ -4427,10 +4454,21 @@ function Golden() {
             className="drawer-form"
             onSubmit={(e) => {
               e.preventDefault();
+              if (s(adding.identity_identifier, "").trim() && !s(adding.identity_provider, "").trim()) return;
               if (s(adding.identity_identifier, "").trim()) edit.mutate({ add: [adding] });
               else addExpectedAccess.mutate();
             }}
           >
+            <label>
+              Holder source {s(adding.identity_identifier, "").trim() ? "*" : "(optional)"}
+              <input
+                required={Boolean(s(adding.identity_identifier, "").trim())}
+                list="golden-assignment-providers"
+                placeholder="corp-ad"
+                value={s(adding.identity_provider, "")}
+                onChange={(e) => setAdding({ ...adding, identity_provider: e.target.value, identity_native_id: undefined })}
+              />
+            </label>
             <label>
               Expected holder (optional)
               <input
@@ -4441,32 +4479,23 @@ function Golden() {
               />
             </label>
             <label>
-              Holder source (optional)
-              <input
-                list="golden-assignment-providers"
-                placeholder="corp-ad"
-                value={s(adding.identity_provider, "")}
-                onChange={(e) => setAdding({ ...adding, identity_provider: e.target.value })}
-              />
-            </label>
-            <label>
-              Access
-              <input
-                required
-                list="golden-assignment-accesses"
-                placeholder="GRP-Finance-RW"
-                value={s(adding.access_name, "")}
-                onChange={(e) => setAdding({ ...adding, access_name: e.target.value })}
-              />
-            </label>
-            <label>
-              Access source
+              Access source *
               <input
                 required
                 list="golden-assignment-providers"
                 placeholder="corp-ad"
                 value={s(adding.access_provider, "")}
                 onChange={(e) => setAdding({ ...adding, access_provider: e.target.value })}
+              />
+            </label>
+            <label>
+              Access *
+              <input
+                required
+                list="golden-assignment-accesses"
+                placeholder="GRP-Finance-RW"
+                value={s(adding.access_name, "")}
+                onChange={(e) => setAdding({ ...adding, access_name: e.target.value })}
               />
             </label>
             <label>

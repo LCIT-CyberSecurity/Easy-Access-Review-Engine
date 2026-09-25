@@ -638,12 +638,13 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/system/sources")
     def system_sources(request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         connector_directory.mkdir(parents=True, exist_ok=True)
         sources = []
         for path in sorted(connector_directory.glob("*.yaml")):
             try:
-                sources.append(_public_connector(load_connector(path.stem, path)))
+                if principal.role == "ADMIN" or principal.can_access(path.stem):
+                    sources.append(_public_connector(load_connector(path.stem, path)))
             except ValueError:
                 continue
         return {"sources": sources}
@@ -1229,24 +1230,37 @@ def create_app(db_path: str | None = None):
 
         _require(current_user(request), ("ADMIN", "OPERATOR"))
 
+        known_identities: dict[tuple[str, str], str | None] = {}
+        known_accesses: dict[tuple[str, str], str | None] = {}
+
         def entry(row: Any) -> GoldenSourceAssignment:
             if not isinstance(row, dict):
                 raise HTTPException(status_code=400, detail="Each expected access must be an object")
             missing = [key for key in ("access_provider", "access_name", "identity_provider", "identity_identifier") if not str(row.get(key, "")).strip()]
             if missing:
                 raise HTTPException(status_code=400, detail="Expected access requires " + ", ".join(missing))
+            identity_key = (str(row["identity_provider"]).strip(), str(row["identity_identifier"]).strip())
+            access_key = (str(row["access_provider"]).strip(), str(row["access_name"]).strip())
             return GoldenSourceAssignment(
                 access_provider=str(row["access_provider"]).strip(),
                 access_name=str(row["access_name"]).strip(),
                 identity_provider=str(row["identity_provider"]).strip(),
                 identity_identifier=str(row["identity_identifier"]).strip(),
-                access_native_id=str(row.get("access_native_id") or "") or None,
+                access_native_id=known_accesses.get(access_key) or None,
                 access_permission=str(row.get("access_permission") or "") or None,
-                identity_native_id=str(row.get("identity_native_id") or "") or None,
+                identity_native_id=known_identities.get(identity_key) or None,
             )
 
         with Repository(db_path) as repo:
             source, versions, active = _golden_context(repo, name)
+            known_identities = {
+                (str(item.get("provider") or ""), str(item.get("identifier") or "")): str(item.get("native_id") or "") or None
+                for item in repo.list_payloads("identities")
+            }
+            known_accesses = {
+                (str(item.get("provider") or ""), str(item.get("name") or "")): str((item.get("control_object") or {}).get("native_id") or "") or None
+                for item in repo.list_payloads("accesses")
+            }
             replace = payload.get("replace")
             if replace is not None:
                 assignments = {entry(row) for row in replace}
@@ -1688,7 +1702,9 @@ def create_app(db_path: str | None = None):
             allowed_routes = frozenset({"/actions"})
 
         with Repository(db_path) as repo:
-            raw_providers = projected_rows(db_path, "providers", limit=500, offset=0, allowed_providers=allowed_domains)["items"]
+            provider_projection = projected_rows(db_path, "providers", limit=1, offset=0, allowed_providers=allowed_domains)
+            raw_providers = provider_projection["items"]
+            configured_source_count = int(provider_projection.get("total", len(raw_providers)))
             providers = [dict(row) for row in raw_providers]
             snapshots = repo.list_payloads("snapshots")
             if allowed_domains is not None:
@@ -1750,8 +1766,12 @@ def create_app(db_path: str | None = None):
             {
                 "id": row.get("id"),
                 "name": row.get("name"),
+                "pilot": row.get("pilot"),
+                "due_at": row.get("due_at"),
+                "opened_at": row.get("opened_at"),
                 "pending": int(row.get("pending") or 0),
                 "unresolved_reviewers": int((row.get("reviewer_resolution") or {}).get("unresolved") or 0),
+                "overdue": bool(int(row.get("pending") or 0) > 0 and row.get("due_at") and str(row.get("due_at")) < time.strftime("%Y-%m-%d")),
             }
             for row in campaigns if row.get("status") == "open"
         )
@@ -1761,6 +1781,13 @@ def create_app(db_path: str | None = None):
         }
         pending_reviews = int(projected_rows(db_path, "review_items", limit=0, offset=0, status="pending", **review_scope)["total"])
         assigned_pending_reviews = pending_reviews if principal.role == "GROUP_OWNER" else 0
+        assigned_campaign_count = 0
+        if principal.role == "GROUP_OWNER":
+            with Repository(db_path) as repo:
+                assigned_campaign_count = len({
+                    str(row.get("campaign_id")) for row in repo.list_payloads("review_items")
+                    if str(row.get("reviewer_username") or "").casefold() == principal.username.casefold() and row.get("campaign_id")
+                })
         action_counts = {
             status: int(projected_rows(db_path, "remediation_actions", limit=0, offset=0, status=status, **action_query)["total"])
             for status in ("pending", "exported", "not_completed", "completed")
@@ -1780,23 +1807,61 @@ def create_app(db_path: str | None = None):
         }
         operator_coverage_complete = any("*" in user.get("scopes", []) for user in enabled_operators) or configured_domains.issubset(covered_domains)
         uncovered_operator_domains = tuple(sorted(configured_domains - covered_domains)) if enabled_operators and not operator_coverage_complete else ()
+        setup_checklist = ()
+        if principal.role == "ADMIN":
+            enabled_users = [user for user in list_users(system_conn) if user.get("enabled")]
+            setup_checklist = (
+                {"id": "sources", "label": "guide.setup.sources", "status": "complete" if providers else "not_started", "action_label": "guide.action.manageSources", "action_url": "/sources"},
+                {"id": "initial_collection", "label": "guide.setup.initialCollection", "status": "complete" if snapshots else "not_started", "action_label": "guide.action.openSources", "action_url": "/sources"},
+                {"id": "users", "label": "guide.setup.users", "status": "complete" if enabled_users else "not_started", "action_label": "guide.action.viewUsers", "action_url": "/system/users"},
+                {"id": "operator_coverage", "label": "guide.setup.operatorCoverage", "status": "complete" if enabled_operators and operator_coverage_complete else "attention" if enabled_operators else "not_started", "description": "guide.setup.operatorCoverageIncomplete" if enabled_operators and not operator_coverage_complete else None, "action_label": "guide.action.viewUsers", "action_url": "/system/users"},
+                {"id": "expected_state", "label": "guide.setup.expectedState", "status": "complete" if golden_available else "not_started", "action_label": "guide.action.openGolden", "action_url": "/golden"},
+            )
         capabilities_by_role = {
-            "ADMIN": {"can_configure_sources", "can_preview_sources", "can_sync_sources", "can_manage_users", "can_edit_golden", "can_prepare_campaign", "can_open_campaign", "can_decide_review", "can_follow_remediation", "can_view_reports", "can_view_findings"},
+            "ADMIN": {"can_configure_sources", "can_preview_sources", "can_sync_sources", "can_manage_users", "can_edit_golden", "can_prepare_campaign", "can_open_campaign", "can_decide_review", "can_view_remediation", "can_update_remediation", "can_view_reports", "can_view_findings"},
             "OPERATOR": {"can_preview_sources", "can_sync_sources", "can_edit_golden", "can_prepare_campaign", "can_open_campaign", "can_decide_review", "can_view_reports", "can_view_findings"},
             "GROUP_OWNER": {"can_decide_review"},
-            "BUSINESS_ADMIN": {"can_follow_remediation", "can_view_reports"},
-            "REMEDIATION_MANAGER": {"can_follow_remediation", "can_view_reports"},
+            "BUSINESS_ADMIN": {"can_view_remediation", "can_view_reports"},
+            "REMEDIATION_MANAGER": {"can_view_remediation", "can_update_remediation", "can_view_reports"},
         }
+        campaign_readiness = None
+        route_parts = [part for part in route.split("/") if part]
+        if principal.role in {"ADMIN", "OPERATOR"} and len(route_parts) >= 2 and route_parts[0] == "campaigns":
+            campaign_id = route_parts[1]
+            with Repository(db_path) as repo:
+                raw_campaign = repo.get_payload("campaigns", campaign_id)
+                if raw_campaign is not None and raw_campaign.get("status") == "draft" and campaign_id in allowed_campaigns:
+                    try:
+                        campaign = hydrate_campaign(raw_campaign)
+                        snapshot = _snapshot(repo, campaign.snapshot_id)
+                        golden = _golden_version(repo, campaign.golden_source_version_id)
+                        preparation = prepare_campaign_review(campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot))
+                        preview = preview_campaign_review(campaign, snapshot, golden, preparation=preparation)
+                        campaign_readiness = {
+                            "campaign_id": campaign_id,
+                            "status": campaign.status,
+                            "ready": not bool(preview.get("unresolved_reviewers")),
+                            "scope": campaign.scope,
+                            "snapshot": {"selected": bool(campaign.snapshot_id)},
+                            "expected_state": {"selected": bool(campaign.golden_source_version_id), "version_id": campaign.golden_source_version_id},
+                            "pilot": {"selected": bool(campaign.pilot), "username": campaign.pilot},
+                            "reviewers": {"resolved": preview.get("resolved_reviewers", 0), "unresolved": preview.get("unresolved_reviewers", 0)},
+                            "blockers": (["unresolved_reviewers"] if int(preview.get("unresolved_reviewers", 0)) and not campaign.allow_unresolved_reviewers else []),
+                            "allow_unresolved_reviewers": campaign.allow_unresolved_reviewers,
+                        }
+                    except (HTTPException, ValueError):
+                        campaign_readiness = {"campaign_id": campaign_id, "status": "draft", "ready": False, "blockers": ["readiness_unavailable"]}
         context = GuidanceContext(
             role=principal.role,
             route=route,
-            source_count=len(providers) if principal.role in {"ADMIN", "OPERATOR"} else 0,
+            source_count=configured_source_count if principal.role in {"ADMIN", "OPERATOR"} else 0,
             synchronized_source_count=sum(1 for row in providers if row.get("health") == "healthy") if principal.role in {"ADMIN", "OPERATOR"} else 0,
             latest_snapshot=bool(snapshots) if principal.role in {"ADMIN", "OPERATOR"} else False,
             golden_available=golden_available if principal.role in {"ADMIN", "OPERATOR"} else False,
             open_campaigns=open_campaigns,
             pending_reviews=pending_reviews if principal.role in {"ADMIN", "OPERATOR"} else 0,
             assigned_pending_reviews=assigned_pending_reviews,
+            assigned_campaign_count=assigned_campaign_count,
             pending_actions=pending_actions,
             exported_actions=action_counts["exported"],
             not_completed_actions=action_counts["not_completed"],
@@ -1805,8 +1870,10 @@ def create_app(db_path: str | None = None):
             operator_count=operator_count,
             operator_coverage_complete=operator_coverage_complete,
             uncovered_operator_domains=uncovered_operator_domains,
+            setup_checklist=setup_checklist,
             username=principal.username,
             capabilities=frozenset(capabilities_by_role.get(principal.role, set())),
+            campaign_readiness=campaign_readiness,
             unresolved_reviewers=unresolved_reviewers,
             findings_count=findings_count,
             allowed_routes=allowed_routes | frozenset(

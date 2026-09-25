@@ -239,6 +239,11 @@ def functional_access_rows(repo: Repository, active: Any) -> list[dict[str, Any]
                 "expected_identities": len(assignments.get(key, [])),
                 "access_comment": comments.get(key),
                 "relation_diagnostics": traversal.diagnostics,
+                "expected_grants": [
+                    {"access_provider": relation.child_provider, "access_name": relation.child_access_name}
+                    for relation in active.expected_access_relations
+                    if relation.parent_key() == key
+                ],
                 "observed_business_context": context["source_context"],
                 "manual_business_context": context["manual_context"],
                 "business_context_fields": context["fields"],
