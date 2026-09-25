@@ -1014,7 +1014,7 @@ function GuideDrawer({ data, loading, error, retry, principal, enabled, close, s
                 {openRecommendation.action_url ? <NavLink className="button primary" to={s(openRecommendation.action_url)} onClick={close}>{text(openRecommendation.action_label)}</NavLink> : null}
               </section>
             ) : null}
-            {readiness ? <section className="guide-section"><h3>CAMPAIGN READINESS</h3><div className="guide-facts"><span>{readiness.scope ? "✓ Scope defined" : "○ Scope required"}</span><span>{(readiness.snapshot as Row | undefined)?.selected ? "✓ Snapshot selected" : "○ Snapshot required"}</span><span>{(readiness.expected_state as Row | undefined)?.selected ? "✓ Expected state selected" : "○ Expected state required"}</span><span>{(readiness.pilot as Row | undefined)?.selected ? `✓ Pilot ${s((readiness.pilot as Row).username)}` : "○ Pilot required"}</span><span>{Number((readiness.reviewers as Row | undefined)?.unresolved) ? `⚠ ${s((readiness.reviewers as Row).unresolved)} unresolved reviewers` : "✓ Reviewers resolved"}</span></div></section> : null}
+            {readiness ? <section className="guide-section"><h3>{text("guide.readinessTitle")}</h3><div className="guide-facts"><span>{readiness.scope ? `✓ ${text("guide.scopeDefined")}` : `○ ${text("guide.scopeRequired")}`}</span><span>{(readiness.snapshot as Row | undefined)?.selected ? `✓ ${text("guide.snapshotSelected")}` : `○ ${text("guide.snapshotRequired")}`}</span><span>{(readiness.expected_state as Row | undefined)?.selected ? `✓ ${text("guide.expectedSelected")}` : `○ ${text("guide.expectedRequired")}`}</span><span>{(readiness.pilot as Row | undefined)?.selected ? `✓ ${text("guide.pilotSelected")} ${s((readiness.pilot as Row).username)}` : `○ ${text("guide.pilotRequired")}`}</span><span>{Number((readiness.reviewers as Row | undefined)?.unresolved) ? `⚠ ${s((readiness.reviewers as Row).unresolved)} ${text("guide.unresolvedReviewers")}` : `✓ ${text("guide.reviewersResolved")}`}</span></div>{vals(readiness.warnings).some((item) => item === "unresolved_reviewers_bypassed") ? <p className="field-note">{text("guide.unresolvedReviewersBypassed")}</p> : null}</section> : null}
             {recommendations.length > 1 ? (
               <section className="guide-suggestions">
                 <h3>{text("guide.otherSuggestions")}</h3>
@@ -1055,6 +1055,7 @@ function GuideOnboarding({ data, principal, close, onSeen }: { data: Row; princi
         <h2 id="guide-onboarding-title">{text("guide.onboardingTitle")}</h2>
         <p>{text("guide.onboardingIntro")}</p>
         <div className="guide-role"><span>{text("guide.role")}</span><strong>{ui(`status.${principal.role}`)}</strong></div>
+        {principal.role === "ADMIN" && arr((data.state as Row | undefined)?.setup_checklist).length ? <section className="guide-section"><h3>{text("guide.setupTitle")}</h3><div className="guide-checklist">{arr((data.state as Row | undefined)?.setup_checklist).map((item) => <div className="guide-checklist-item" key={s(item.id)}><span aria-hidden="true">{s(item.status) === "complete" ? "✓" : s(item.status) === "attention" ? "!" : "○"}</span><span><strong>{text(item.label)}</strong>{item.description ? <small>{text(item.description)}</small> : null}</span></div>)}</div></section> : null}
         {primary ? <div className="guide-primary"><span className="eyebrow">{text("guide.next")}</span><h3>{text(primary.title)}</h3><p>{text(primary.description)}</p></div> : null}
         <div className="modal-actions">
           <button className="button subtle" onClick={finish}>{text("guide.explore")}</button>
@@ -3278,6 +3279,8 @@ function GoldenFunctionalSuggestions({ rows, onEdit }: { rows: Row[]; onEdit: (r
             <strong>{s(row.access_display_name, s(row.access_name))}</strong>
             <small>{s(row.access_provider)} · {row.business_context_conflicts ? "Conflict requires review" : "No context conflict"}</small>
             <BusinessContext context={{ fields: row.business_context_fields }} />
+            {arr(row.direct_functional_rights).length ? <p className="muted">Direct expected rights: {arr(row.direct_functional_rights).map((right) => s(right.capability_id)).join(", ")}</p> : null}
+            {arr(row.effective_functional_rights).length > arr(row.direct_functional_rights).length ? <p className="muted">Inherited / effective rights: {arr(row.effective_functional_rights).map((right) => `${s(right.capability_id)} · ${s(right.granted_by)}`).join(", ")}</p> : null}
             <p className="muted">Canonical candidates (not expected truth):</p>
             <ul>
               {target.service ? <li>Target service: {refText(service)} · {s(service.provenance)}</li> : null}
@@ -3943,20 +3946,20 @@ function Golden() {
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
                   const ownerDisplay = owner ? ownerDisplayLabel(owner, arr(ownerOptions.data?.items), s(r.access_provider)) : "";
                   const applicationCell = editing
-                    ? <select value={s(editingAccess?.application, "")} onChange={(event) => {
+                    ? <div className="inline-edit-stack"><select value={s(editingAccess?.application, "")} onChange={(event) => {
                         if (event.target.value === "__new_application__") setNewApplication({ name: "", comment: "", similar: [] });
                         else setEditingAccess({ ...editingAccess, application: event.target.value });
                       }} disabled={saveAccessRow.isPending}>
                         <option value="">Select application</option>
                         {applicationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                         <option value="__new_application__">+ Add new application</option>
-                      </select>
+                      </select><small>Observed: {contextValue(r.business_context, "application", "source") || "—"}</small></div>
                     : <button className="link-button" onClick={() => requestAccessEdit(r)}>{application || "—"}</button>;
                   const selectCell = (field: string, value: string, options: string[], placeholder: string) => editing
-                    ? <select value={s(editingAccess?.[field], "")} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })} disabled={saveAccessRow.isPending}>
+                    ? <div className="inline-edit-stack"><select value={s(editingAccess?.[field], "")} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })} disabled={saveAccessRow.isPending}>
                         <option value="">{placeholder}</option>
                         {options.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
+                      </select><small>Observed: {contextValue(r.business_context, "business_permission", "source") || "—"}</small></div>
                     : <button className="link-button" onClick={() => requestAccessEdit(r)}>{value || "—"}</button>;
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
@@ -3972,14 +3975,14 @@ function Golden() {
                     applicationCell,
                     selectCell("business_permission", businessPermission || "Not provided", permissionOptions, "Select permission"),
                     editing ? (
-                      <select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} disabled={saveAccessRow.isPending}>
+                      <div className="inline-edit-stack"><select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} disabled={saveAccessRow.isPending}>
                         <option value="">Select owner</option>
                         {arr(ownerOptions.data?.items).map((identity) => {
                           const identifier = s(identity.identifier, s(identity.id));
                           const value = `${s(identity.provider)}/${identifier}`;
                           return <option key={value} value={value}>{s(identity.provider)}/{s(identity.display_name, identifier)}</option>;
                         })}
-                      </select>
+                      </select><small>Observed: {contextValue(r.business_context, "owner", "source") || "—"}</small></div>
                     ) : <button className="link-button" onClick={() => requestAccessEdit(r)}>{ownerDisplay || "—"}</button>,
                     s(r.access_provider),
                     <button className="link-button" onClick={() => setHolders(r)}>
@@ -4161,7 +4164,7 @@ function Golden() {
                   const service = (target.service ?? {}) as Row;
                   const resource = (target.resource ?? {}) as Row;
                   const mapped = vals(suggestion.mapped_capability_ids);
-                  const existingRights = arr(row.functional_rights).map((right) => ({
+                  const existingRights = arr(row.direct_functional_rights).map((right) => ({
                     capability_id: s(right.capability_id, ""),
                     target: right.target,
                   }));
@@ -4349,15 +4352,27 @@ function Golden() {
       {functionalEditing && (
         <Drawer title={`Validate Golden V2 · ${s(functionalEditing.access_display_name, s(functionalEditing.access_name))}`} close={() => setFunctionalEditing(null)}>
           <p className="muted">Observed and mapped values are prefilled for review. Saving creates a new immutable expected version; it does not rewrite the source observation.</p><div className="drawer-form">
-          <label>Completeness<select value={s(functionalEditing.completeness, "partial")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, completeness: event.target.value })}>
+          <div className="drawer-section"><h4>FUNCTIONAL RIGHTS</h4>
+          <label className="drawer-field">Completeness<select value={s(functionalEditing.completeness, "partial")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, completeness: event.target.value })}>
             <option value="not_defined">Not defined</option><option value="partial">Partial</option><option value="complete">Complete</option>
           </select></label>
-          <label>Capability<select required value={s(functionalEditing.capability_id, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, capability_id: event.target.value })}>
-            <option value="">Select a capability</option>
-            {(arr(functionalModelQuery.data?.capabilities).length ? arr(functionalModelQuery.data?.capabilities).map((capability) => ({ id: s(capability.id), label: s(capability.label, s(capability.id)) })) : DEFAULT_GOLDEN_CAPABILITIES.map((id) => ({ id, label: id }))).map((capability) => <option key={capability.id} value={capability.id}>{capability.label}</option>)}
-          </select></label>
-          <label>Target service<input value={s(functionalEditing.service_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, service_identifier: event.target.value })} /></label>
-          <label>Target resource<input value={s(functionalEditing.resource_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, resource_identifier: event.target.value })} /></label>
+          {arr(functionalEditing.rights).map((right, index) => {
+            const target = (right.target ?? {}) as Row;
+            const service = (target.service ?? {}) as Row;
+            const component = (target.component ?? {}) as Row;
+            const resource = (target.resource ?? {}) as Row;
+            const capabilities = arr(functionalModelQuery.data?.capabilities).length ? arr(functionalModelQuery.data?.capabilities).map((capability) => ({ id: s(capability.id), label: s(capability.label, s(capability.id)) })) : DEFAULT_GOLDEN_CAPABILITIES.map((id) => ({ id, label: id }));
+            const updateRight = (changes: Row) => setFunctionalEditing({ ...functionalEditing, rights: arr(functionalEditing.rights).map((item, itemIndex) => itemIndex === index ? { ...item, ...changes } : item) });
+            return <div className="drawer-section functional-right-editor" key={`right-${index}`}><div className="panel-title"><h4>Right {index + 1}</h4>{arr(functionalEditing.rights).length > 1 ? <button type="button" className="button subtle" onClick={() => setFunctionalEditing({ ...functionalEditing, rights: arr(functionalEditing.rights).filter((_, itemIndex) => itemIndex !== index) })}>Remove</button> : null}</div>
+              <label className="drawer-field">Capability<select required value={s(right.capability_id, "")} onChange={(event) => updateRight({ capability_id: event.target.value })}><option value="">Select a capability</option>{capabilities.map((capability) => <option key={capability.id} value={capability.id}>{capability.label}</option>)}</select></label>
+              <label className="drawer-field">Service<input value={s(service.identifier, "")} onChange={(event) => updateRight({ target: { ...target, service: event.target.value ? { identifier: event.target.value, display_name: event.target.value, type: "application" } : undefined } })} /></label>
+              <label className="drawer-field">Component<input value={s(component.identifier, "")} onChange={(event) => updateRight({ target: { ...target, component: event.target.value ? { identifier: event.target.value, display_name: event.target.value, type: "component" } : undefined } })} /></label>
+              <label className="drawer-field">Resource<input value={s(resource.identifier, "")} onChange={(event) => updateRight({ target: { ...target, resource: event.target.value ? { identifier: event.target.value, display_name: event.target.value, type: "business_object" } : undefined } })} /></label>
+            </div>;
+          })}
+          <button type="button" className="button subtle" onClick={() => setFunctionalEditing({ ...functionalEditing, rights: [...arr(functionalEditing.rights), { capability_id: "", target: {} }] })}>+ Add right</button>
+          </div>
+          <div className="drawer-section"><h4>EXPECTED RELATIONS</h4><p className="muted">{arr(functionalEditing.grants).length ? `${arr(functionalEditing.grants).length} existing relation(s) will be preserved.` : "No existing relations."}</p>{arr(functionalEditing.grants).map((grant, index) => <p key={`${s(grant.access_provider)}:${s(grant.access_name)}:${index}`} className="muted">{s(functionalEditing.access_display_name, s(functionalEditing.access_name))} → {s(grant.access_name)}</p>)}</div>
           <label className="drawer-field">Version comment<textarea className="drawer-comment" value={s(functionalEditing.version_comment, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, version_comment: event.target.value })} /></label>
           <div className="drawer-actions"><button
             className="button primary"
@@ -4367,19 +4382,7 @@ function Golden() {
               access_name: functionalEditing.access_name,
               manual_access: false,
               completeness: functionalEditing.completeness,
-              rights: (arr(functionalEditing.rights).length ? arr(functionalEditing.rights).map((right, index) => index === 0 ? {
-                target: {
-                  ...(s(functionalEditing.service_identifier, "") ? { service: { identifier: s(functionalEditing.service_identifier), display_name: s(functionalEditing.service_display_name, s(functionalEditing.service_identifier)), type: "application" } } : {}),
-                  ...(s(functionalEditing.resource_identifier, "") ? { resource: { identifier: s(functionalEditing.resource_identifier), display_name: s(functionalEditing.resource_display_name, s(functionalEditing.resource_identifier)), type: "business_object" } } : {}),
-                },
-                capability_id: functionalEditing.capability_id,
-              } : right) : [{
-                target: {
-                  ...(s(functionalEditing.service_identifier, "") ? { service: { identifier: s(functionalEditing.service_identifier), display_name: s(functionalEditing.service_display_name, s(functionalEditing.service_identifier)), type: "application" } } : {}),
-                  ...(s(functionalEditing.resource_identifier, "") ? { resource: { identifier: s(functionalEditing.resource_identifier), display_name: s(functionalEditing.resource_display_name, s(functionalEditing.resource_identifier)), type: "business_object" } } : {}),
-                },
-                capability_id: functionalEditing.capability_id,
-              }]),
+              rights: arr(functionalEditing.rights),
               grants: arr(functionalEditing.grants),
               version_comment: functionalEditing.version_comment,
             })}

@@ -235,6 +235,18 @@ def functional_access_rows(repo: Repository, active: Any) -> list[dict[str, Any]
                     else FunctionalModelCompleteness.NOT_DEFINED
                 ),
                 "functional_rights": list(rights_by_key.values()),
+                "direct_functional_rights": [
+                    {
+                        "target": asdict(right.target),
+                        "target_path": target_path(right.target),
+                        "capability_id": right.capability_id,
+                        "provenance": right.provenance,
+                        "native_permission": right.native_permission,
+                        "granted_by": display_names.get(key, key[1]),
+                    }
+                    for right in (model.rights if model else ())
+                ],
+                "effective_functional_rights": list(rights_by_key.values()),
                 "effective_right_count": len(rights_by_key),
                 "expected_identities": len(assignments.get(key, [])),
                 "access_comment": comments.get(key),
