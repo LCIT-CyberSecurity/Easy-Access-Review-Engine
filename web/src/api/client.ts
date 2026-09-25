@@ -39,6 +39,9 @@ function queryString(params: Params): string {
 export async function getSession(): Promise<Principal> {
   return request("/api/auth/session") as Promise<Principal>;
 }
+export async function getGuidance(route: string): Promise<Row> {
+  return getJson("guidance", { route });
+}
 export async function login(username: string, password: string): Promise<Principal> {
   return request("/api/auth/login", {
     method: "POST",

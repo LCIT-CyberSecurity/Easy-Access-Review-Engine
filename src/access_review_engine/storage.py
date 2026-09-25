@@ -68,7 +68,10 @@ class Repository:
 
     def __init__(self, path: str | Path = "access-review.db") -> None:
         self.path = str(path)
-        self.conn = sqlite3.connect(self.path)
+        # WebUI requests initialize/read the same SQLite database concurrently.
+        # Wait briefly for a competing schema or job transaction instead of
+        # turning normal request overlap into a 500 response.
+        self.conn = sqlite3.connect(self.path, timeout=30)
         self.conn.row_factory = sqlite3.Row
         self._transaction_depth = 0
         self.init_schema()

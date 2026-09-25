@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { getJson, getRows, postDecision } from "./client";
+import { getGuidance, getJson, getRows, postDecision } from "./client";
 
 describe("API client", () => {
   it("does not fabricate data when the API is unavailable", async () => {
@@ -42,4 +42,11 @@ it("reads structured endpoints without assuming an items array", async () => {
   await expect(getJson("identities/alice/accesses")).resolves.toMatchObject({
     identity: { identifier: "alice" },
   });
+});
+
+it("requests guidance with the current route context", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ read_only: true }) });
+  vi.stubGlobal("fetch", fetchMock);
+  await expect(getGuidance("/golden")).resolves.toEqual({ read_only: true });
+  expect(fetchMock).toHaveBeenCalledWith("/api/guidance?route=%2Fgolden", expect.anything());
 });

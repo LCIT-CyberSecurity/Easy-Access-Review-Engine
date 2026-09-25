@@ -25,6 +25,13 @@ describe("WebUI locale contract", () => {
     for (const catalogue of [fr, es, pt, itLocale, ar]) expect(keys(catalogue).sort()).toEqual(source);
   });
 
+  it("translates the core EARE Guide labels in every supported locale", () => {
+    const core = ["open", "currentSituation", "next", "onboardingTitle"];
+    for (const catalogue of [fr, es, pt, ar, itLocale]) {
+      for (const key of core) expect(catalogue.guide[key as keyof typeof catalogue.guide]).not.toBe(en.guide[key as keyof typeof en.guide]);
+    }
+  });
+
   it("normalizes invalid locale input to English without touching data values", async () => {
     await setLocale("invalid");
     expect(document.documentElement.lang).toBe("en");

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from access_review_engine.domain import (
     Access,
+    AccessRelation,
+    AccessRelationType,
     Campaign,
     ControlObject,
     DecisionValue,
@@ -14,8 +16,10 @@ from access_review_engine.domain import (
     GoldenSourceAssignment,
     ReviewItem,
     Target,
+    Origin,
 )
-from access_review_engine.services import create_decision, create_golden_version, promote_campaign
+from access_review_engine.golden_functional import functional_access_rows
+from access_review_engine.services import create_decision, create_golden_version, evolve_golden_version, promote_campaign
 from access_review_engine.storage import Repository, hydrate_golden_version
 
 
@@ -106,3 +110,49 @@ def test_campaign_promotion_preserves_golden_v2_context() -> None:
     assert promoted.expected_access_definitions == [expected_access]
     assert promoted.functional_access_models == [model]
     assert promoted.access_comments == [comment]
+
+
+def test_evolving_any_golden_v2_mutation_preserves_untouched_fields() -> None:
+    source = GoldenSource("evolution-v2")
+    definition = Access("parent", "crm", control_object=ControlObject("role", "parent"))
+    relation = AccessRelation("crm", "parent", "crm", "child", AccessRelationType.GRANTS, Origin("manual", True, False))
+    model = ExpectedAccessModel("crm", "parent", FunctionalModelCompleteness.PARTIAL, (FunctionalRight(Target(service={"identifier": "crm"}), "read"),))
+    access_comment = GoldenAccessComment("crm", "parent", "Business meaning")
+    active = create_golden_version(
+        source,
+        [GoldenSourceAssignment("ldap", "alice", "crm", "parent", identity_native_id="alice-native")],
+        "manual",
+        schema_version=2,
+        expected_access_definitions=[definition],
+        expected_access_relations=[relation],
+        functional_access_models=[model],
+        access_comments=[access_comment],
+    )
+    evolved = evolve_golden_version(
+        source,
+        active,
+        [active],
+        assignments=[GoldenSourceAssignment("ldap", "bob", "crm", "parent", identity_native_id="bob-native")],
+        comment="Holder changed",
+    )
+    assert evolved.schema_version == 2
+    assert evolved.parent_version_id == active.id
+    assert evolved.expected_access_definitions == active.expected_access_definitions
+    assert evolved.expected_access_relations == active.expected_access_relations
+    assert evolved.functional_access_models == active.functional_access_models
+    assert evolved.access_comments == active.access_comments
+
+
+def test_functional_read_model_separates_direct_and_effective_rights(tmp_path) -> None:
+    source = GoldenSource("direct-effective")
+    parent = Access("parent", "crm", control_object=ControlObject("role", "parent"))
+    child = Access("child", "crm", control_object=ControlObject("role", "child"))
+    relation = AccessRelation("crm", "parent", "crm", "child", AccessRelationType.GRANTS, Origin("manual", True, False))
+    parent_model = ExpectedAccessModel("crm", "parent", FunctionalModelCompleteness.COMPLETE, (FunctionalRight(Target(service={"identifier": "crm"}), "admin"),))
+    child_model = ExpectedAccessModel("crm", "child", FunctionalModelCompleteness.COMPLETE, (FunctionalRight(Target(service={"identifier": "crm"}), "read"),))
+    version = create_golden_version(source, [], "manual", schema_version=2, expected_access_definitions=[parent, child], expected_access_relations=[relation], functional_access_models=[parent_model, child_model])
+    with Repository(tmp_path / "direct-effective.db") as repo:
+        rows = {row["access_name"]: row for row in functional_access_rows(repo, version)}
+    assert [row["capability_id"] for row in rows["parent"]["direct_functional_rights"]] == ["admin"]
+    assert {row["capability_id"] for row in rows["parent"]["effective_functional_rights"]} == {"admin", "read"}
+    assert rows["parent"]["expected_grants"] == [{"access_provider": "crm", "access_name": "child"}]

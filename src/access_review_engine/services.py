@@ -745,6 +745,45 @@ def create_golden_version(
     )
 
 
+_UNSET = object()
+
+
+def evolve_golden_version(
+    golden_source: GoldenSource,
+    active: GoldenSourceVersion,
+    previous_versions: Iterable[GoldenSourceVersion],
+    *,
+    assignments: Iterable[GoldenSourceAssignment] | object = _UNSET,
+    source_type: str = "manual",
+    source_snapshot_id: str | None | object = _UNSET,
+    source_campaign_id: str | None | object = _UNSET,
+    comment: str | None | object = _UNSET,
+    golden_authentication_policy: AuthenticationPosture | None | object = _UNSET,
+    schema_version: int | object = _UNSET,
+    expected_access_definitions: Iterable[Access] | object = _UNSET,
+    expected_access_relations: Iterable[AccessRelation] | object = _UNSET,
+    functional_access_models: Iterable[ExpectedAccessModel] | object = _UNSET,
+    access_comments: Iterable[GoldenAccessComment] | object = _UNSET,
+) -> GoldenSourceVersion:
+    """Create an immutable child version while preserving untouched V2 state."""
+    return create_golden_version(
+        golden_source,
+        active.assignments if assignments is _UNSET else assignments,  # type: ignore[arg-type]
+        source_type,
+        previous_versions,
+        source_snapshot_id=active.source_snapshot_id if source_snapshot_id is _UNSET else source_snapshot_id,  # type: ignore[arg-type]
+        source_campaign_id=active.source_campaign_id if source_campaign_id is _UNSET else source_campaign_id,  # type: ignore[arg-type]
+        parent_version_id=active.id,
+        comment=active.comment if comment is _UNSET else comment,  # type: ignore[arg-type]
+        golden_authentication_policy=(active.golden_authentication_policy if golden_authentication_policy is _UNSET else golden_authentication_policy),  # type: ignore[arg-type]
+        schema_version=active.schema_version if schema_version is _UNSET else schema_version,  # type: ignore[arg-type]
+        expected_access_definitions=(active.expected_access_definitions if expected_access_definitions is _UNSET else expected_access_definitions),  # type: ignore[arg-type]
+        expected_access_relations=(active.expected_access_relations if expected_access_relations is _UNSET else expected_access_relations),  # type: ignore[arg-type]
+        functional_access_models=(active.functional_access_models if functional_access_models is _UNSET else functional_access_models),  # type: ignore[arg-type]
+        access_comments=(active.access_comments if access_comments is _UNSET else access_comments),  # type: ignore[arg-type]
+    )
+
+
 def golden_version_from_snapshot(
     golden_source: GoldenSource,
     snapshot: Snapshot,
@@ -783,6 +822,7 @@ def golden_version_from_snapshot(
             )
         )
     parent_id = max(previous, key=lambda item: item.version).id if previous else None
+    latest = max(previous, key=lambda item: item.version) if previous else None
     return create_golden_version(
         golden_source,
         assignments,
@@ -791,6 +831,11 @@ def golden_version_from_snapshot(
         source_snapshot_id=snapshot.id,
         parent_version_id=parent_id,
         golden_authentication_policy=snapshot.authentication_posture,
+        schema_version=latest.schema_version if latest else 1,
+        expected_access_definitions=latest.expected_access_definitions if latest else (),
+        expected_access_relations=latest.expected_access_relations if latest else (),
+        functional_access_models=latest.functional_access_models if latest else (),
+        access_comments=latest.access_comments if latest else (),
     )
 
 

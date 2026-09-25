@@ -476,6 +476,14 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             rows = [row for row in rows if row.get("classification") == classification]
         rows = apply_field_filters(rows, filters)
         summary = review_summary(rows) if table == "review_items" else None
+        if table == "remediation_actions":
+            summary = {
+                "total": len(rows),
+                "pending": sum(row.get("status") == "pending" for row in rows),
+                "exported": sum(row.get("status") == "exported" for row in rows),
+                "not_completed": sum(row.get("status") == "not_completed" for row in rows),
+                "completed": sum(row.get("status") == "completed" for row in rows),
+            }
         if table in {"findings", "remediation_actions"} and not sort:
             rows = sorted_rows(rows, "source_group", "asc")
         elif sort and (sort == "source_group" or any(sort in row for row in rows)):
@@ -508,7 +516,7 @@ def _latest_provider_jobs(db_path: str) -> dict[str, dict[str, Any]]:
     """Return the latest web job for each provider without creating job rows."""
     import sqlite3
     try:
-        with sqlite3.connect(db_path) as conn:
+        with sqlite3.connect(db_path, timeout=30) as conn:
             rows = conn.execute(
                 "SELECT id, status, progress, created_at, result FROM web_jobs "
                 "WHERE kind = 'sync' ORDER BY created_at, id"

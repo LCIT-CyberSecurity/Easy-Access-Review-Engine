@@ -235,10 +235,27 @@ def functional_access_rows(repo: Repository, active: Any) -> list[dict[str, Any]
                     else FunctionalModelCompleteness.NOT_DEFINED
                 ),
                 "functional_rights": list(rights_by_key.values()),
+                "direct_functional_rights": [
+                    {
+                        "target": asdict(right.target),
+                        "target_path": target_path(right.target),
+                        "capability_id": right.capability_id,
+                        "provenance": right.provenance,
+                        "native_permission": right.native_permission,
+                        "granted_by": display_names.get(key, key[1]),
+                    }
+                    for right in (model.rights if model else ())
+                ],
+                "effective_functional_rights": list(rights_by_key.values()),
                 "effective_right_count": len(rights_by_key),
                 "expected_identities": len(assignments.get(key, [])),
                 "access_comment": comments.get(key),
                 "relation_diagnostics": traversal.diagnostics,
+                "expected_grants": [
+                    {"access_provider": relation.child_provider, "access_name": relation.child_access_name}
+                    for relation in active.expected_access_relations
+                    if relation.parent_key() == key
+                ],
                 "observed_business_context": context["source_context"],
                 "manual_business_context": context["manual_context"],
                 "business_context_fields": context["fields"],
@@ -323,6 +340,8 @@ def prepare_functional_model_update(
         right = FunctionalRight(
             target=target,
             capability_id=cap_id,
+            # Human validation creates a manual expected right; native permission
+            # remains evidence from the source and is intentionally retained.
             provenance=Provenance.MANUAL,
             native_permission=permission.strip() or None if permission else None,
         )

@@ -266,8 +266,12 @@ The generated HTML report is standalone and opens without a backend.
 - [Golden Source](docs/golden-source.md)
 - [Active Directory](docs/active-directory.md)
 - [OpenLDAP](docs/openldap.md)
+- [Reports](docs/reports.md)
+- [EARE Guide](docs/eare-guide.md)
+- [Current implementation specification](docs/specs/2026-09-25-current-implementation.md)
+- [Golden V2 specification](docs/specs/2026-09-21-model-evolution-golden-v2.md)
 
-The user guide covers configuration, collection, import, sync, dry-run, local analysis, Golden Source, campaigns, and reporting.
+The user guide covers configuration, collection, import, sync, dry-run, local analysis, Golden Source, campaigns, native Reports restitution, and reporting deliverables. The current implementation specification records the runtime topology, secure OpenLDAP connector contract, synchronization state machine, SQLite contention behavior, Golden V2 editor rules, Guide scope rules, and Reports contract.
 
 ## Active Directory Support
 

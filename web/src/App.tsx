@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Navigate, NavLink, Route, Routes, useParams, useSearchParams } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation, useParams, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   ArrowDown,
@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Database,
   FileDown,
+  HelpCircle,
   KeyRound,
   Languages,
   LayoutDashboard,
@@ -30,6 +31,7 @@ import {
   changePassword,
   deleteJson,
   getJson,
+  getGuidance,
   getPage,
   getSession,
   login,
@@ -50,6 +52,7 @@ import {
   roleHome,
   validProviderScope,
 } from "./projections";
+import { goldenFunctionalRightsAreValid } from "./goldenFunctionalValidation";
 const s = (v: unknown, f = "—") =>
     v instanceof Error
       ? v.message
@@ -487,7 +490,17 @@ const navSections = [
   },
 ];
 function Shell({ principal }: { principal: Principal }) {
-  const [c, setC] = useState(false);
+  const [c, setC] = useState(false),
+    [guideOpen, setGuideOpen] = useState(false),
+    [guideEnabled, setGuideEnabled] = useState(() => readGuidePreference(principal, "enabled", true)),
+    [onboardingSeen, setOnboardingSeen] = useState(() => readGuidePreference(principal, "seen", false)),
+    location = useLocation(),
+    guidance = useQuery({
+      queryKey: ["guidance", location.pathname],
+      queryFn: () => getGuidance(location.pathname),
+      enabled: guideEnabled,
+      staleTime: 30000,
+    });
   return (
     <div className="app-shell">
       <aside className={c ? "sidebar open" : "sidebar"}>
@@ -533,6 +546,9 @@ function Shell({ principal }: { principal: Principal }) {
             {ui("nav.workspace")} <ChevronRight size={14} /> {ui("nav.accessGovernance")}
           </span>
           <div className="top-actions">
+            <button className="guide-trigger" type="button" onClick={() => setGuideOpen(true)} aria-label={ui("guide.open")}>
+              <HelpCircle size={16} /> <span>{ui("guide.title")}</span>
+            </button>
             <UserMenu
               principal={principal}
               onSignOut={async () => {
@@ -562,8 +578,8 @@ function Shell({ principal }: { principal: Principal }) {
             <Route path="/campaigns/new" element={<CampaignNew principal={principal} />} />
             <Route path="/campaigns/:id/edit" element={<CampaignNew principal={principal} />} />
             <Route path="/campaigns/:id" element={<CampaignDetail />} />
-            <Route path="/findings" element={<List path="findings" title="Findings" />} />
-            <Route path="/actions" element={<List path="remediation-actions" title="Actions" />} />
+            <Route path="/findings" element={<List path="findings" title="Findings" principal={principal} />} />
+            <Route path="/actions" element={<List path="remediation-actions" title="Actions" principal={principal} />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/sources" element={<Sources principal={principal} />} />
             <Route path="/sources/:provider/browse" element={<SourceBrowser />} />
@@ -574,6 +590,8 @@ function Shell({ principal }: { principal: Principal }) {
           </Routes>
         </main>
       </div>
+      {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} /> : null}
+      {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
     </div>
   );
 }
@@ -944,6 +962,111 @@ function ApiTokenPanel({ menuOpen }: { menuOpen: boolean }) {
   );
 }
 
+function guideStorageKey(principal: Principal, suffix: string): string {
+  return `eare.guide.${suffix}.${principal.subject}`;
+}
+function readGuidePreference(principal: Principal, suffix: string, fallback: boolean): boolean {
+  try {
+    const value = window.localStorage.getItem(guideStorageKey(principal, suffix));
+    return value === null ? fallback : value === "1";
+  } catch {
+    return fallback;
+  }
+}
+function writeGuidePreference(principal: Principal, suffix: string, value: boolean): void {
+  try {
+    window.localStorage.setItem(guideStorageKey(principal, suffix), value ? "1" : "0");
+  } catch {
+    // Guidance remains available for this session when storage is unavailable.
+  }
+}
+function GuideDrawer({ data, loading, error, retry, principal, enabled, close, setEnabled }: { data?: Row; loading: boolean; error: boolean; retry: () => void; principal: Principal; enabled: boolean; close: () => void; setEnabled: (value: boolean) => void }) {
+  const recommendations = arr(data?.recommendations), state = (data?.state ?? {}) as Row, pageHelp = (data?.page_help ?? {}) as Row;
+  const readiness = (data?.campaign_readiness ?? null) as Row | null;
+  const text = (key: unknown) => ui(s(key, "common.unknown"));
+  const openRecommendation = recommendations.find((item) => item.priority === "primary") ?? recommendations[0];
+  return (
+    <Drawer title={text("guide.title")} close={close} size="wide">
+      <div className="guide-drawer">
+        <div className="guide-role"><span className="eyebrow">{text("guide.role")}</span><strong>{ui(`status.${principal.role}`)}</strong></div>
+        {loading ? <div className="empty">{text("guide.loading")}</div> : error ? (
+          <div className="empty"><p>{text("guide.loadError")}</p><button className="button subtle" onClick={retry}>{text("common.tryAgain")}</button></div>
+        ) : !enabled ? (
+          <section className="guide-disabled">
+            <p>{text("guide.disabled")}</p>
+            <button className="button primary" onClick={() => { writeGuidePreference(principal, "enabled", true); setEnabled(true); }}>{text("guide.enable")}</button>
+          </section>
+        ) : (
+          <>
+            <section className="guide-situation">
+              <h3>{text("guide.currentSituation")}</h3>
+              <div className="guide-facts">
+                {principal.role === "GROUP_OWNER" ? <><span>✓ {Number(state.assigned_pending_reviews ?? 0)} {text("labels.pendingReviews")}</span><span>✓ {Number(state.assigned_campaign_count ?? 0)} {text("labels.campaign")}</span></> : principal.role === "BUSINESS_ADMIN" || principal.role === "REMEDIATION_MANAGER" ? <><span>! {Number(state.open_actions ?? state.pending_actions ?? 0)} {text("labels.actions")}</span><span>✓ {Number(state.completed_actions ?? 0)} {text("labels.completed")}</span></> : <><span>{Number(state.sources) ? `✓ ${state.sources} ${text("guide.page.sources.title")}` : `○ ${text("guide.page.sources.title")}`}</span><span>{state.latest_snapshot ? `✓ ${text("labels.observedSnapshot")}` : `○ ${text("labels.observedSnapshot")}`}</span><span>{state.golden_available ? `✓ ${text("labels.expectedState")}` : `○ ${text("labels.expectedState")}`}</span><span>{Number(state.pending_reviews) ? `! ${state.pending_reviews} ${text("labels.pendingReviews")}` : null}</span></>}
+                {principal.role === "REMEDIATION_MANAGER" && Number(state.exported_actions) ? <span>! {s(state.exported_actions)} {text("labels.exported")}</span> : null}
+              </div>
+            </section>
+            {principal.role === "ADMIN" && arr(state.setup_checklist).length ? <section className="guide-section"><h3>{text("guide.setupTitle")}</h3><div className="guide-checklist">{arr(state.setup_checklist).map((item) => <div className="guide-checklist-item" key={s(item.id)}><span aria-hidden="true">{s(item.status) === "complete" ? "✓" : s(item.status) === "attention" ? "!" : "○"}</span><span><strong>{text(item.label)}</strong>{item.description ? <small>{text(item.description)}</small> : null}</span></div>)}</div></section> : null}
+            {openRecommendation ? (
+              <section className="guide-primary">
+                <span className="eyebrow">{text("guide.next")}</span>
+                <h3>{text(openRecommendation.title)}</h3>
+                <p>{text(openRecommendation.description)}</p>
+                <p className="guide-why"><strong>{text("guide.why")}</strong> {text(openRecommendation.reason)}</p>
+                {openRecommendation.action_url ? <NavLink className="button primary" to={s(openRecommendation.action_url)} onClick={close}>{text(openRecommendation.action_label)}</NavLink> : null}
+              </section>
+            ) : null}
+            {readiness ? <section className="guide-section"><h3>{text("guide.readinessTitle")}</h3><div className="guide-facts"><span>{readiness.scope ? `✓ ${text("guide.scopeDefined")}` : `○ ${text("guide.scopeRequired")}`}</span><span>{(readiness.snapshot as Row | undefined)?.selected ? `✓ ${text("guide.snapshotSelected")}` : `○ ${text("guide.snapshotRequired")}`}</span><span>{(readiness.expected_state as Row | undefined)?.selected ? `✓ ${text("guide.expectedSelected")}` : `○ ${text("guide.expectedRequired")}`}</span><span>{(readiness.pilot as Row | undefined)?.selected ? `✓ ${text("guide.pilotSelected")} ${s((readiness.pilot as Row).username)}` : `○ ${text("guide.pilotRequired")}`}</span><span>{Number((readiness.reviewers as Row | undefined)?.unresolved) ? `⚠ ${s((readiness.reviewers as Row).unresolved)} ${text("guide.unresolvedReviewers")}` : `✓ ${text("guide.reviewersResolved")}`}</span></div>{vals(readiness.warnings).some((item) => item === "unresolved_reviewers_bypassed") ? <p className="field-note">{text("guide.unresolvedReviewersBypassed")}</p> : null}</section> : null}
+            {recommendations.length > 1 ? (
+              <section className="guide-suggestions">
+                <h3>{text("guide.otherSuggestions")}</h3>
+                {recommendations.filter((item) => item !== openRecommendation).slice(0, 4).map((item) => (
+                  <div className="guide-suggestion" key={s(item.id)}>
+                    <strong>{text(item.title)}</strong>
+                    <p>{text(item.description)}</p>
+                    {item.action_url ? <NavLink className="text-button" to={s(item.action_url)} onClick={close}>{text(item.action_label)}</NavLink> : null}
+                  </div>
+                ))}
+              </section>
+            ) : null}
+            <section className="guide-page-help">
+              <h3>{text("guide.pageHelp")}: {text(pageHelp.title)}</h3>
+              <p>{text(pageHelp.description)}</p>
+              <div className="guide-questions">{arr(pageHelp.topics).map((topic) => <GuideTopic key={s(topic.id)} topic={topic} text={text} />)}</div>
+            </section>
+            <p className="guide-read-only">{text("guide.readOnly")}</p>
+            <button className="text-button" onClick={() => { writeGuidePreference(principal, "enabled", false); setEnabled(false); }}>{text("guide.disable")}</button>
+          </>
+        )}
+      </div>
+    </Drawer>
+  );
+}
+function GuideTopic({ topic, text }: { topic: Row; text: (key: unknown) => string }) {
+  const [open, setOpen] = useState(false);
+  return <div className="guide-topic"><button type="button" className="guide-question" onClick={() => setOpen((value) => !value)} aria-expanded={open}>{text(topic.question)}</button>{open ? <p>{text(topic.answer)}</p> : null}</div>;
+}
+function GuideOnboarding({ data, principal, close, onSeen }: { data: Row; principal: Principal; close: () => void; onSeen: () => void }) {
+  const recommendations = arr(data.recommendations), primary = recommendations.find((item) => item.priority === "primary") ?? recommendations[0];
+  const text = (key: unknown) => ui(s(key, "common.unknown"));
+  const finish = () => { writeGuidePreference(principal, "seen", true); onSeen(); };
+  return (
+    <div className="modal-backdrop">
+      <div className="modal guide-onboarding" role="dialog" aria-modal="true" aria-labelledby="guide-onboarding-title">
+        <span className="eyebrow">{text("guide.title")}</span>
+        <h2 id="guide-onboarding-title">{text("guide.onboardingTitle")}</h2>
+        <p>{text("guide.onboardingIntro")}</p>
+        <div className="guide-role"><span>{text("guide.role")}</span><strong>{ui(`status.${principal.role}`)}</strong></div>
+        {principal.role === "ADMIN" && arr((data.state as Row | undefined)?.setup_checklist).length ? <section className="guide-section"><h3>{text("guide.setupTitle")}</h3><div className="guide-checklist">{arr((data.state as Row | undefined)?.setup_checklist).map((item) => <div className="guide-checklist-item" key={s(item.id)}><span aria-hidden="true">{s(item.status) === "complete" ? "✓" : s(item.status) === "attention" ? "!" : "○"}</span><span><strong>{text(item.label)}</strong>{item.description ? <small>{text(item.description)}</small> : null}</span></div>)}</div></section> : null}
+        {primary ? <div className="guide-primary"><span className="eyebrow">{text("guide.next")}</span><h3>{text(primary.title)}</h3><p>{text(primary.description)}</p></div> : null}
+        <div className="modal-actions">
+          <button className="button subtle" onClick={finish}>{text("guide.explore")}</button>
+          <button className="button primary" onClick={() => { finish(); close(); }}>{text("guide.startSetup")}</button>
+        </div>
+        <button className="text-button" onClick={finish}>{text("guide.skip")}</button>
+      </div>
+    </div>
+  );
+}
 function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: () => void }) {
   const menu = useRef<HTMLDetailsElement>(null);
   const [theme, setTheme] = useState<ThemeId>(readTheme);
@@ -1279,6 +1402,7 @@ const when = (value: unknown): string => {
 };
 function Home() {
   const q = useQuery({ queryKey: ["dashboard"], queryFn: () => getJson("dashboard") }),
+    guide = useQuery({ queryKey: ["guidance", "/"], queryFn: () => getGuidance("/"), staleTime: 30000 }),
     m = (q.data?.metrics ?? {}) as Row,
     attention = arr(q.data?.attention),
     campaigns = arr(q.data?.campaigns),
@@ -1320,6 +1444,19 @@ function Home() {
           ? ` · Expected state: ${s(expected.name)} v${s(expected.version)} (${s(expected.assignments, "0")} accesses)`
           : " · No expected state yet"}
       </p>
+      {(() => {
+        const primary = arr(guide.data?.recommendations).find((item) => item.priority === "primary") ?? arr(guide.data?.recommendations)[0];
+        return primary ? (
+          <section className="guide-dashboard-card">
+            <div>
+              <span className="eyebrow">{ui("guide.next")}</span>
+              <h2>{ui(s(primary.title, "common.unknown"))}</h2>
+              <p>{ui(s(primary.description, "common.unknown"))}</p>
+            </div>
+            {primary.action_url ? <NavLink className="button primary" to={s(primary.action_url)}>{ui(s(primary.action_label, "common.unknown"))}</NavLink> : null}
+          </section>
+        ) : null;
+      })()}
       <div className="metrics">
         {tiles.map(([label, value, link, hint]) => (
           <NavLink className="metric" to={link} key={label}>
@@ -1713,6 +1850,7 @@ function Accesses() {
 function AccessDetail({ access }: { access: Row }) {
   const client = useQueryClient(),
     toast = useToast(),
+    [currentAccess, setCurrentAccess] = useState(access),
     [tab, setTab] = useState("overview"),
     [editingContext, setEditingContext] = useState(false),
     [manual, setManual] = useState<Row>(() => {
@@ -1733,7 +1871,8 @@ function AccessDetail({ access }: { access: Row }) {
     }),
     saveContext = useMutation({
       mutationFn: () => putJson(`accesses/${encodeURIComponent(accessId)}/enrichment`, manual),
-      onSuccess: async () => {
+      onSuccess: async (data) => {
+        setCurrentAccess((value) => ({ ...value, business_context: data.business_context }));
         setEditingContext(false);
         toast("ok", "Access information saved");
         await client.invalidateQueries({ queryKey: ["accesses"] });
@@ -1746,7 +1885,7 @@ function AccessDetail({ access }: { access: Row }) {
   const direct = arr(q.data?.holders),
     effective = arr(q.data?.effective_holders),
     holderLabel = (row: Row) => `${s(row.identity_provider, provider)} · ${s(row.identity_display_name, s(row.identity_identifier))}`,
-    ownerReference = contextValue(access.business_context, "owner", "manual") || contextValue(access.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
+    ownerReference = contextValue(currentAccess.business_context, "owner", "manual") || contextValue(currentAccess.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
     ownerDisplay = ownerReference ? ownerDisplayLabel(ownerReference, arr(ownerIdentities.data?.items), s((access.access_owner as Row | undefined)?.provider, provider)) : "—";
   return (
     <>
@@ -1764,7 +1903,7 @@ function AccessDetail({ access }: { access: Row }) {
           <p>Technical permission: {s(access.technical_permission, permissionText(access.permission) || "—")}</p>
           <p>Target: {targetText(access.target) || "—"}</p>
           <h4>BUSINESS CONTEXT</h4>
-          <BusinessContext context={access.business_context} />
+          <BusinessContext context={currentAccess.business_context} />
           {accessId ? <button className="button subtle" onClick={() => setEditingContext(!editingContext)}>Edit access information</button> : null}
           {editingContext ? (
             <div className="drawer-form">
@@ -2118,11 +2257,12 @@ function ReviewDrawer({
         </section>
       ) : null}
       {pending && (
-        <div className="reason-form">
-          <label>
-            Review comment {pending === "approve" ? "(optional)" : "*"}<textarea autoFocus value={reason} onChange={(e) => setReason(e.target.value)} />
+        <div className="drawer-form reason-form">
+          <label className="drawer-field">
+            Review comment {pending === "approve" ? "(optional)" : "*"}<textarea className="drawer-comment" autoFocus value={reason} onChange={(e) => setReason(e.target.value)} />
           </label>
-          <button
+          <div className="drawer-actions">
+          <button className="button subtle"
             onClick={() => {
               setPending(null);
               setReason("");
@@ -2130,9 +2270,10 @@ function ReviewDrawer({
           >
             Cancel
           </button>
-          <button disabled={(pending !== "approve" && !reason.trim()) || m.isPending} onClick={() => m.mutate(pending)}>
+          <button className="button primary" disabled={(pending !== "approve" && !reason.trim()) || m.isPending} onClick={() => m.mutate(pending)}>
             Confirm {pending === "revoke" ? "revoke" : pending === "approve" ? "approve" : "N/A"}
           </button>
+          </div>
         </div>
       )}
       {!pending && (
@@ -2147,7 +2288,7 @@ function ReviewDrawer({
     </Drawer>
   );
 }
-function List({ path, title }: { path: string; title: string }) {
+function List({ path, title, principal }: { path: string; title: string; principal: Principal }) {
   const campaigns = useQuery({
       queryKey: [path, "campaigns"],
       queryFn: () => getPage("campaigns", { limit: 100 }),
@@ -2244,13 +2385,14 @@ function List({ path, title }: { path: string; title: string }) {
         (findings ? (
           <FindingDrawer row={selected} close={() => setSelected(null)} />
         ) : (
-          <ActionDrawer row={selected} close={() => setSelected(null)} />
+          <ActionDrawer row={selected} principal={principal} close={() => setSelected(null)} />
         ))}
     </>
   );
 }
 function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
   const toast = useToast(),
+    queryClient = useQueryClient(),
     [ticket, setTicket] = useState(s((row.finding_tracking as Row | undefined)?.ticket, "")),
     [comment, setComment] = useState(s((row.finding_tracking as Row | undefined)?.comment, "")),
     save = useMutation({
@@ -2264,29 +2406,32 @@ function FindingDrawer({ row, close }: { row: Row; close: () => void }) {
         ticket,
         comment,
       }),
-      onSuccess: () => toast("ok", "Finding tracking saved"),
+      onSuccess: async () => {
+        toast("ok", "Finding tracking saved");
+        await queryClient.invalidateQueries({ queryKey: ["findings"] });
+      },
       onError: (error) => toast("error", s(error, "Unable to save finding tracking")),
     });
   return (
     <Drawer title="Finding" close={close}>
-      <h4>WHAT HAPPENED</h4>
+      <section className="drawer-section"><h4>WHAT HAPPENED</h4>
       <p>{s(vals(row.findings).join(", "), s(row.classification, "No classification"))}</p>
-      <h4>CURRENT STATE</h4>
+      </section><section className="drawer-section"><h4>CURRENT STATE</h4>
       <p>Observed: {readableDetails(row.observed)} · Expected: {readableDetails(row.expected)}</p>
-      <h4>CONTEXT</h4>
+      </section><section className="drawer-section"><h4>CONTEXT</h4>
       <p>Identity: {s((row.identity as Row | undefined)?.display_name, s(row.identity_identifier))}</p>
       <p>Access: {s((row.access as Row | undefined)?.display_name, s(row.access_name))}</p>
       <p className="muted">{describeAccess((row.access as Row) ?? row)}</p>
       <p>Source: {s(row.access_provider)}</p>
       {row.campaign_id != null || row.campaign_name ? <p>Campaign: {s(row.campaign_name, s(row.campaign_id))}</p> : null}
-      <h4>OPTIONAL TICKET</h4>
-      <label>Ticket reference<input value={ticket} onChange={(event) => setTicket(event.target.value)} placeholder="INC-1234 or Jira key" /></label>
-      <label>Follow-up comment<textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Business or operational follow-up" /></label>
-      <button className="button primary" disabled={save.isPending} onClick={() => save.mutate()}>Save ticket and comment</button>
+      </section><section className="drawer-section"><h4>FOLLOW-UP</h4><div className="drawer-form">
+      <label className="drawer-field">Ticket reference<input value={ticket} onChange={(event) => setTicket(event.target.value)} placeholder="INC-1234 or Jira key" /></label>
+      <label className="drawer-field">Follow-up comment<textarea className="drawer-comment" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Business or operational follow-up" /></label>
+      <div className="drawer-actions"><button className="button primary" disabled={save.isPending} onClick={() => save.mutate()}>Save follow-up</button></div></div></section>
     </Drawer>
   );
 }
-function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
+function ActionDrawer({ row, principal, close }: { row: Row; principal: Principal; close: () => void }) {
   const queryClient = useQueryClient(),
     toast = useToast(),
     [comment, setComment] = useState(s((row.details as Row | undefined)?.status_comment, "")),
@@ -2302,34 +2447,32 @@ function ActionDrawer({ row, close }: { row: Row; close: () => void }) {
     });
   return (
     <Drawer title={`${s(row.action, s(row.decision))} · ${s(row.access_display_name, s(row.access_name))}`} close={close}>
-      <h4>WHAT TO DO</h4>
+      <section className="drawer-section"><h4>WHAT TO DO</h4>
       <p>Identity: {s(row.identity_display_name, s(row.identity_identifier))}</p>
       <p>Access: {s(row.access_display_name, s(row.access_name))}</p>
       <p>{describeAccess(row) || "No description provided by the source."}</p>
       <p>Application / target: {targetText(row.target) || s(row.access_display_name, s(row.access_name))}</p>
-      <h4>WHY</h4>
+      </section><section className="drawer-section"><h4>WHY</h4>
       <p>Campaign: {s(row.campaign_name, s(row.campaign_id))}</p>
       <p>Decision: {s(row.decision)}</p>
-      <p>Comment: {s(row.comment)}</p>
-      <h4>STATUS</h4>
+      <p>Reviewer comment: {s(row.comment)}</p>
+      </section><section className="drawer-section"><h4>CURRENT FOLLOW-UP</h4>
       <Status v={row.status} />
-      {s((row.details as Row | undefined)?.status_comment, "") ? <p className="muted">{s((row.details as Row | undefined)?.status_comment)}</p> : null}
-      <label>
-        <input type="checkbox" checked={mitigated} onChange={(event) => setMitigated(event.target.checked)} />
-        Action mitigated / corrected
-      </label>
-      <p className="field-note">{mitigated ? "The administrator confirms the change was applied outside EARE." : "If the action is not mitigated, explain why in the comment below."}</p>
-      <label>
+      {s((row.details as Row | undefined)?.status_comment, "") ? <p className="muted"><strong>Administrator follow-up:</strong> {s((row.details as Row | undefined)?.status_comment)}</p> : null}
+      </section>
+      {principal.role !== "BUSINESS_ADMIN" ? <section className="drawer-section"><h4>UPDATE FOLLOW-UP</h4>
+      <label className="drawer-check"><input type="checkbox" checked={mitigated} onChange={(event) => setMitigated(event.target.checked)} /><span>Action mitigated / corrected</span><small>{mitigated ? "The administrator confirms the change was applied outside EARE." : "If the action is not mitigated, explain why in the comment below."}</small></label>
+      <label className="drawer-field">
         Administrator follow-up comment
-        <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Describe what was changed, or why the action was not completed." />
+        <textarea className="drawer-comment" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Describe what was changed, or why the action was not completed." />
       </label>
-      <div className="button-row">
+      <div className="drawer-actions">
         <button className="button primary" disabled={update.isPending || (!mitigated && !comment.trim())} onClick={() => update.mutate()}>Save remediation follow-up</button>
-      </div>
+      </div></section> : <p className="field-note">Operational correction is managed by an authorized remediation role.</p>}
     </Drawer>
   );
 }
-function RemediationManager() {
+function RemediationManager({ principal }: { principal: Principal }) {
   return (
     <>
       <Head title="Remediation follow-up" />
@@ -2337,7 +2480,7 @@ function RemediationManager() {
         <h3>Operational remediation queue</h3>
         <p className="muted">Administrators record what was done or not done. EARE only records the follow-up and never changes a source.</p>
       </div>
-      <List path="remediation-actions" title="Actions to follow up" />
+      <List path="remediation-actions" title="Actions to follow up" principal={principal} />
     </>
   );
 }
@@ -2491,7 +2634,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
         const d = draftId
           ? await putJson("campaigns/" + s(draftId), payload)
           : await postJson("campaigns", payload);
-        if (open && !draftId && d.id)
+        if (open && d.id)
           await postJson("campaigns/" + s(d.id) + "/open", { allow_unresolved_reviewers: allow });
         return { ...d, opened: open } as Row & { opened: boolean };
       },
@@ -3137,6 +3280,8 @@ function GoldenFunctionalSuggestions({ rows, onEdit }: { rows: Row[]; onEdit: (r
             <strong>{s(row.access_display_name, s(row.access_name))}</strong>
             <small>{s(row.access_provider)} · {row.business_context_conflicts ? "Conflict requires review" : "No context conflict"}</small>
             <BusinessContext context={{ fields: row.business_context_fields }} />
+            {arr(row.direct_functional_rights).length ? <p className="muted">Direct expected rights: {arr(row.direct_functional_rights).map((right) => s(right.capability_id)).join(", ")}</p> : null}
+            {arr(row.effective_functional_rights).length > arr(row.direct_functional_rights).length ? <p className="muted">Inherited / effective rights: {arr(row.effective_functional_rights).map((right) => `${s(right.capability_id)} · ${s(right.granted_by)}`).join(", ")}</p> : null}
             <p className="muted">Canonical candidates (not expected truth):</p>
             <ul>
               {target.service ? <li>Target service: {refText(service)} · {s(service.provenance)}</li> : null}
@@ -3468,9 +3613,9 @@ function Golden() {
     accessEditIsDirty = goldenAccessEditIsDirty,
     beginAccessEdit = (row: Row) => {
       const key = `${s(row.access_provider)}:${s(row.access_name)}`;
-      const application = contextValue(row.business_context, "application", "manual") || contextValue(row.business_context, "application", "source") || "";
-      const businessPermission = contextValue(row.business_context, "business_permission", "manual") || contextValue(row.business_context, "business_permission", "source") || "";
-      const owner = contextValue(row.business_context, "owner", "manual") || contextValue(row.business_context, "owner", "source") || s(row.access_owner, "");
+      const application = contextValue(row.business_context, "application", "manual");
+      const businessPermission = contextValue(row.business_context, "business_permission", "manual");
+      const owner = contextValue(row.business_context, "owner", "manual");
       setEditingAccess({
         key,
         access_id: row.access_id,
@@ -3502,6 +3647,13 @@ function Golden() {
       }
       setEditingAccess(null);
       setTab(nextTab);
+    },
+    guardTableContextChange = (change: () => void) => {
+      if (editingAccess && accessEditIsDirty(editingAccess)) {
+        setNotice({ tone: "error", text: "Save or cancel the current Golden access edit before changing the table context." });
+        return;
+      }
+      change();
     },
     saveEditedAccess = (continuation: { row?: Row; tab?: string } = {}) => {
       if (!editingAccess || saveAccessRow.isPending) return;
@@ -3554,9 +3706,11 @@ function Golden() {
             className="filter-button"
             value={sourceName}
             onChange={(e) => {
-              setChosen(e.target.value);
-              setCompare(null);
-              setNotice(null);
+              guardTableContextChange(() => {
+                setChosen(e.target.value);
+                setCompare(null);
+                setNotice(null);
+              });
             }}
           >
             {goldens.map((row) => (
@@ -3747,7 +3901,7 @@ function Golden() {
           </div>
           {tab === "accesses" && (
             <>
-              <Filter v={search} onChange={setSearch}>
+              <Filter v={search} onChange={(value) => guardTableContextChange(() => setSearch(value))}>
                 <button className="button subtle" onClick={() => setAdding(blankExpected())}>
                   + Add expected access
                 </button>
@@ -3802,20 +3956,20 @@ function Golden() {
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
                   const ownerDisplay = owner ? ownerDisplayLabel(owner, arr(ownerOptions.data?.items), s(r.access_provider)) : "";
                   const applicationCell = editing
-                    ? <select value={s(editingAccess?.application, "")} onChange={(event) => {
+                    ? <div className="inline-edit-stack"><select value={s(editingAccess?.application, "")} onChange={(event) => {
                         if (event.target.value === "__new_application__") setNewApplication({ name: "", comment: "", similar: [] });
                         else setEditingAccess({ ...editingAccess, application: event.target.value });
                       }} disabled={saveAccessRow.isPending}>
                         <option value="">Select application</option>
                         {applicationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                         <option value="__new_application__">+ Add new application</option>
-                      </select>
+                      </select><small>Observed: {contextValue(r.business_context, "application", "source") || "—"}</small></div>
                     : <button className="link-button" onClick={() => requestAccessEdit(r)}>{application || "—"}</button>;
                   const selectCell = (field: string, value: string, options: string[], placeholder: string) => editing
-                    ? <select value={s(editingAccess?.[field], "")} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })} disabled={saveAccessRow.isPending}>
+                    ? <div className="inline-edit-stack"><select value={s(editingAccess?.[field], "")} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })} disabled={saveAccessRow.isPending}>
                         <option value="">{placeholder}</option>
                         {options.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
+                      </select><small>Observed: {contextValue(r.business_context, "business_permission", "source") || "—"}</small></div>
                     : <button className="link-button" onClick={() => requestAccessEdit(r)}>{value || "—"}</button>;
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
@@ -3831,14 +3985,14 @@ function Golden() {
                     applicationCell,
                     selectCell("business_permission", businessPermission || "Not provided", permissionOptions, "Select permission"),
                     editing ? (
-                      <select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} disabled={saveAccessRow.isPending}>
+                      <div className="inline-edit-stack"><select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} disabled={saveAccessRow.isPending}>
                         <option value="">Select owner</option>
                         {arr(ownerOptions.data?.items).map((identity) => {
                           const identifier = s(identity.identifier, s(identity.id));
                           const value = `${s(identity.provider)}/${identifier}`;
                           return <option key={value} value={value}>{s(identity.provider)}/{s(identity.display_name, identifier)}</option>;
                         })}
-                      </select>
+                      </select><small>Observed: {contextValue(r.business_context, "owner", "source") || "—"}</small></div>
                     ) : <button className="link-button" onClick={() => requestAccessEdit(r)}>{ownerDisplay || "—"}</button>,
                     s(r.access_provider),
                     <button className="link-button" onClick={() => setHolders(r)}>
@@ -3879,14 +4033,14 @@ function Golden() {
                 total={Number(accessesQuery.data?.total ?? 0)}
                 limit={limit}
                 offset={offset}
-                setOffset={setOffset}
-                setLimit={setLimit}
+                setOffset={(value) => guardTableContextChange(() => setOffset(value))}
+                setLimit={(value) => guardTableContextChange(() => setLimit(value))}
               />
             </>
           )}
           {tab === "expected" && (
             <>
-              <Filter v={search} onChange={setSearch}>
+              <Filter v={search} onChange={(value) => guardTableContextChange(() => setSearch(value))}>
                 <button className="button subtle" onClick={() => setAdding(blankExpected())}>
                   + Add expected access
                 </button>
@@ -3911,11 +4065,14 @@ function Golden() {
                   return [
                     editing ? (
                       <div className="inline-edit-stack">
-                        <select value={s(editingHolder?.identity_provider, "")} onChange={(event) => setEditingHolder({ ...editingHolder, identity_provider: event.target.value, identity_identifier: "" })}>
+                        <select value={s(editingHolder?.identity_provider, "")} onChange={(event) => setEditingHolder({ ...editingHolder, identity_provider: event.target.value, identity_identifier: "", identity_native_id: undefined })}>
                           <option value="">Select source</option>
                           {arr(providerOptions.data?.items).map((provider) => <option key={s(provider.name)} value={s(provider.name)}>{s(provider.display_name, s(provider.name))}</option>)}
                         </select>
-                        <select value={s(editingHolder?.identity_identifier, "")} onChange={(event) => setEditingHolder({ ...editingHolder, identity_identifier: event.target.value })}>
+                        <select value={s(editingHolder?.identity_identifier, "")} onChange={(event) => {
+                          const identity = arr(holderIdentityOptions.data?.items).find((item) => s(item.identifier, s(item.id)) === event.target.value);
+                          setEditingHolder({ ...editingHolder, identity_identifier: event.target.value, identity_native_id: identity ? (s(identity.native_id, "") || undefined) : undefined });
+                        }}>
                           <option value="">Select holder</option>
                           {arr(holderIdentityOptions.data?.items).map((identity) => {
                             const identifier = s(identity.identifier, s(identity.id));
@@ -3948,8 +4105,8 @@ function Golden() {
                 total={Number(content.data?.total ?? 0)}
                 limit={limit}
                 offset={offset}
-                setOffset={setOffset}
-                setLimit={setLimit}
+                setOffset={(value) => guardTableContextChange(() => setOffset(value))}
+                setLimit={(value) => guardTableContextChange(() => setLimit(value))}
               />
             </>
           )}
@@ -3984,9 +4141,9 @@ function Golden() {
                       .filter((r) => r.status !== "unchanged")
                       .map((r) => [
                         <Status v={r.status === "added" ? "unexpected" : "missing"} />,
-                        s(r.identity_identifier),
-                        s(r.access_name),
-                        s(r.access_provider),
+                        s(r.identity_display_name, s(r.identity_identifier)),
+                        s(r.access_display_name, s(r.access_name)),
+                        s(r.access_provider_display_name, s(r.access_provider)),
                       ])}
                   />
                   <p className="muted">
@@ -4017,17 +4174,19 @@ function Golden() {
                   const service = (target.service ?? {}) as Row;
                   const resource = (target.resource ?? {}) as Row;
                   const mapped = vals(suggestion.mapped_capability_ids);
+                  const existingRights = arr(row.direct_functional_rights).map((right) => ({
+                    ...right,
+                    capability_id: s(right.capability_id, ""),
+                    target: right.target,
+                  }));
                   setFunctionalEditing({
                     access_provider: row.access_provider,
                     access_name: row.access_name,
                     access_display_name: row.access_display_name,
-                    completeness: row.completeness === "not_defined" ? "partial" : row.completeness,
-                    capability_id: mapped[0] ?? "",
-                    service_identifier: service.identifier ?? "",
-                    resource_identifier: resource.identifier ?? "",
-                    service_display_name: service.display_name ?? "",
-                    resource_display_name: resource.display_name ?? "",
+                    completeness: row.completeness ?? "not_defined",
                     version_comment: "Validate source-informed functional model",
+                    rights: existingRights.length ? existingRights : [{ capability_id: mapped[0] ?? "", target: { service: service.identifier ? { identifier: service.identifier, display_name: service.display_name } : undefined, resource: resource.identifier ? { identifier: resource.identifier, display_name: resource.display_name } : undefined } }],
+                    grants: arr(row.expected_grants),
                   });
                 }}
               />
@@ -4106,7 +4265,7 @@ function Golden() {
                 cols={["Application", "Comment", "Status", "Golden usage"]}
                 rows={arr(applicationCatalog.data?.applications).map((application) => [
                   <strong>{s(application.name)}</strong>,
-                  s(application.comment, ""),
+                  s(application.comment, "—"),
                   application.active === false ? <Status v="inactive" /> : <Status v="active" />,
                   s(application.usage_count, "0"),
                 ])}
@@ -4178,8 +4337,8 @@ function Golden() {
       {newApplication && (
         <Drawer title="Add new application" close={() => setNewApplication(null)}>
           <p className="muted">Create a catalogue entry. The comment explains the business scope of this application.</p>
-          <label>Application name<input autoFocus value={s(newApplication.name, "")} onChange={(event) => setNewApplication({ ...newApplication, name: event.target.value })} /></label>
-          <label>Comment<textarea value={s(newApplication.comment, "")} onChange={(event) => setNewApplication({ ...newApplication, comment: event.target.value })} /></label>
+          <div className="drawer-form"><label className="drawer-field">Application name<input autoFocus value={s(newApplication.name, "")} onChange={(event) => setNewApplication({ ...newApplication, name: event.target.value })} /></label>
+          <label className="drawer-field">Business comment<textarea className="drawer-comment" value={s(newApplication.comment, "")} onChange={(event) => setNewApplication({ ...newApplication, comment: event.target.value })} placeholder="Business scope / purpose" /></label>
           {arr(newApplication.similar).length ? (
             <div className="attention">
               <strong>Similar applications found</strong>
@@ -4187,80 +4346,86 @@ function Golden() {
               <p className="muted">Saving again will create this application explicitly.</p>
             </div>
           ) : null}
-          <button
+          <div className="drawer-actions"><button
             className="button primary"
             disabled={createApplication.isPending || !s(newApplication.name).trim()}
             onClick={() => createApplication.mutate({ name: s(newApplication.name).trim(), comment: s(newApplication.comment).trim(), confirm: arr(newApplication.similar).length > 0 })}
           >
             {createApplication.isPending ? "Saving…" : arr(newApplication.similar).length ? "Create anyway" : "Create application"}
-          </button>
+          </button></div></div>
         </Drawer>
       )}
       {functionalEditing && (
         <Drawer title={`Validate Golden V2 · ${s(functionalEditing.access_display_name, s(functionalEditing.access_name))}`} close={() => setFunctionalEditing(null)}>
-          <p className="muted">Observed and mapped values are prefilled for review. Saving creates a new immutable expected version; it does not rewrite the source observation.</p>
-          <label>Completeness<select value={s(functionalEditing.completeness, "partial")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, completeness: event.target.value })}>
+          <p className="muted">Observed and mapped values are prefilled for review. Saving creates a new immutable expected version; it does not rewrite the source observation.</p><div className="drawer-form">
+          <div className="drawer-section"><h4>FUNCTIONAL RIGHTS</h4>
+          <label className="drawer-field">Completeness<select value={s(functionalEditing.completeness, "partial")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, completeness: event.target.value })}>
             <option value="not_defined">Not defined</option><option value="partial">Partial</option><option value="complete">Complete</option>
           </select></label>
-          <label>Capability<select required value={s(functionalEditing.capability_id, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, capability_id: event.target.value })}>
-            <option value="">Select a capability</option>
-            {(arr(functionalModelQuery.data?.capabilities).length ? arr(functionalModelQuery.data?.capabilities).map((capability) => ({ id: s(capability.id), label: s(capability.label, s(capability.id)) })) : DEFAULT_GOLDEN_CAPABILITIES.map((id) => ({ id, label: id }))).map((capability) => <option key={capability.id} value={capability.id}>{capability.label}</option>)}
-          </select></label>
-          <label>Target service<input value={s(functionalEditing.service_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, service_identifier: event.target.value })} /></label>
-          <label>Target resource<input value={s(functionalEditing.resource_identifier, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, resource_identifier: event.target.value })} /></label>
-          <label>Version comment<textarea value={s(functionalEditing.version_comment, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, version_comment: event.target.value })} /></label>
-          <button
+          {arr(functionalEditing.rights).map((right, index) => {
+            const target = (right.target ?? {}) as Row;
+            const service = (target.service ?? {}) as Row;
+            const component = (target.component ?? {}) as Row;
+            const resource = (target.resource ?? {}) as Row;
+            const capabilities = arr(functionalModelQuery.data?.capabilities).length ? arr(functionalModelQuery.data?.capabilities).map((capability) => ({ id: s(capability.id), label: s(capability.label, s(capability.id)) })) : DEFAULT_GOLDEN_CAPABILITIES.map((id) => ({ id, label: id }));
+            const updateRight = (changes: Row) => setFunctionalEditing({ ...functionalEditing, rights: arr(functionalEditing.rights).map((item, itemIndex) => itemIndex === index ? { ...item, ...changes } : item) });
+            return <div className="drawer-section functional-right-editor" key={`right-${index}`}><div className="panel-title"><h4>Right {index + 1}</h4>{arr(functionalEditing.rights).length > 1 ? <button type="button" className="button subtle" onClick={() => setFunctionalEditing({ ...functionalEditing, rights: arr(functionalEditing.rights).filter((_, itemIndex) => itemIndex !== index) })}>Remove</button> : null}</div>
+              <label className="drawer-field">Capability<select required value={s(right.capability_id, "")} onChange={(event) => updateRight({ capability_id: event.target.value })}><option value="">Select a capability</option>{capabilities.map((capability) => <option key={capability.id} value={capability.id}>{capability.label}</option>)}</select></label>
+              <label className="drawer-field">Service<input value={s(service.identifier, "")} onChange={(event) => updateRight({ target: { ...target, service: event.target.value ? { identifier: event.target.value, display_name: event.target.value, type: "application" } : undefined } })} /></label>
+              <label className="drawer-field">Component<input value={s(component.identifier, "")} onChange={(event) => updateRight({ target: { ...target, component: event.target.value ? { identifier: event.target.value, display_name: event.target.value, type: "component" } : undefined } })} /></label>
+              <label className="drawer-field">Resource<input value={s(resource.identifier, "")} onChange={(event) => updateRight({ target: { ...target, resource: event.target.value ? { identifier: event.target.value, display_name: event.target.value, type: "business_object" } : undefined } })} /></label>
+            </div>;
+          })}
+          <button type="button" className="button subtle" onClick={() => setFunctionalEditing({ ...functionalEditing, rights: [...arr(functionalEditing.rights), { capability_id: "", target: {} }] })}>+ Add right</button>
+          </div>
+          <div className="drawer-section"><h4>EXPECTED RELATIONS</h4><p className="muted">{arr(functionalEditing.grants).length ? `${arr(functionalEditing.grants).length} existing relation(s) will be preserved.` : "No existing relations."}</p>{arr(functionalEditing.grants).map((grant, index) => <p key={`${s(grant.access_provider)}:${s(grant.access_name)}:${index}`} className="muted">{s(functionalEditing.access_display_name, s(functionalEditing.access_name))} → {s(grant.access_name)}</p>)}</div>
+          <label className="drawer-field">Version comment<textarea className="drawer-comment" value={s(functionalEditing.version_comment, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, version_comment: event.target.value })} /></label>
+          <div className="drawer-actions"><button
             className="button primary"
-            disabled={saveFunctional.isPending || !s(functionalEditing.capability_id, "") || (!s(functionalEditing.service_identifier, "") && !s(functionalEditing.resource_identifier, ""))}
+            disabled={saveFunctional.isPending || !goldenFunctionalRightsAreValid(functionalEditing.rights, functionalEditing.completeness)}
             onClick={() => saveFunctional.mutate({
               access_provider: functionalEditing.access_provider,
               access_name: functionalEditing.access_name,
               manual_access: false,
               completeness: functionalEditing.completeness,
-              rights: [{
-                target: {
-                  ...(s(functionalEditing.service_identifier, "") ? { service: { identifier: s(functionalEditing.service_identifier), display_name: s(functionalEditing.service_display_name, s(functionalEditing.service_identifier)), type: "application" } } : {}),
-                  ...(s(functionalEditing.resource_identifier, "") ? { resource: { identifier: s(functionalEditing.resource_identifier), display_name: s(functionalEditing.resource_display_name, s(functionalEditing.resource_identifier)), type: "business_object" } } : {}),
-                },
-                capability_id: functionalEditing.capability_id,
-              }],
-              grants: [],
+              rights: arr(functionalEditing.rights),
+              grants: arr(functionalEditing.grants),
               version_comment: functionalEditing.version_comment,
             })}
           >
             {saveFunctional.isPending ? "Saving…" : "Validate and save Golden V2"}
-          </button>
+          </button></div></div>
         </Drawer>
       )}
       {editingVersionComment && (
         <Drawer title="Golden version comment" close={() => setEditingVersionComment(false)}>
           <p className="muted">Explain this expected version. Saving creates a new immutable version and keeps its assignments and assignment comments.</p>
-          <label>Version comment<textarea value={versionComment} onChange={(event) => setVersionComment(event.target.value)} /></label>
-          <button className="button primary" disabled={updateVersionComment.isPending} onClick={() => updateVersionComment.mutate()}>Save in new version</button>
+          <div className="drawer-form"><label className="drawer-field">Version comment<textarea className="drawer-comment" value={versionComment} onChange={(event) => setVersionComment(event.target.value)} /></label><div className="drawer-actions"><button className="button primary" disabled={updateVersionComment.isPending} onClick={() => updateVersionComment.mutate()}>Save in new version</button></div></div>
         </Drawer>
       )}
       {commenting && (
         <Drawer title="Expected-assignment comment" close={() => setCommenting(null)}>
           <p><strong>{s(commenting.identity_display_name, s(commenting.identity_identifier))}</strong> → {s(commenting.access_display_name, s(commenting.access_name))}</p>
           <p className="muted">Explain why this identity should have this access. Saving creates a new immutable Golden version.</p>
-          <label>
+          <div className="drawer-form"><label className="drawer-field">
             Golden comment
-            <textarea value={assignmentComment} onChange={(event) => setAssignmentComment(event.target.value)} />
-          </label>
-          <button className="button primary" disabled={commentAssignment.isPending} onClick={() => commentAssignment.mutate()}>Save in new version</button>
+            <textarea className="drawer-comment" value={assignmentComment} onChange={(event) => setAssignmentComment(event.target.value)} />
+          </label><div className="drawer-actions"><button className="button primary" disabled={commentAssignment.isPending} onClick={() => commentAssignment.mutate()}>Save in new version</button></div></div>
         </Drawer>
       )}
       {accessCommenting && (
         <Drawer title="Golden access comment" close={() => setAccessCommenting(null)}>
           <p><strong>{s(accessCommenting.access_display_name, s(accessCommenting.access_name))}</strong></p>
           <p className="muted">This comment explains the business meaning of the access right.</p>
-          <label className="drawer-field">
-            Comment
-            <textarea className="drawer-comment" autoFocus value={accessComment} onChange={(event) => setAccessComment(event.target.value)} />
-          </label>
-          <div className="drawer-actions">
-            <button className="button subtle" onClick={() => setAccessCommenting(null)}>Cancel</button>
-            <button className="button primary" disabled={commentAccess.isPending} onClick={() => commentAccess.mutate()}>Save</button>
+          <div className="drawer-form">
+            <label className="drawer-field">
+              Comment
+              <textarea className="drawer-comment" autoFocus value={accessComment} onChange={(event) => setAccessComment(event.target.value)} />
+            </label>
+            <div className="drawer-actions">
+              <button className="button subtle" onClick={() => setAccessCommenting(null)}>Cancel</button>
+              <button className="button primary" disabled={commentAccess.isPending} onClick={() => commentAccess.mutate()}>Save</button>
+            </div>
           </div>
         </Drawer>
       )}
@@ -4298,10 +4463,21 @@ function Golden() {
             className="drawer-form"
             onSubmit={(e) => {
               e.preventDefault();
+              if (s(adding.identity_identifier, "").trim() && !s(adding.identity_provider, "").trim()) return;
               if (s(adding.identity_identifier, "").trim()) edit.mutate({ add: [adding] });
               else addExpectedAccess.mutate();
             }}
           >
+            <label>
+              Holder source {s(adding.identity_identifier, "").trim() ? "*" : "(optional)"}
+              <input
+                required={Boolean(s(adding.identity_identifier, "").trim())}
+                list="golden-assignment-providers"
+                placeholder="corp-ad"
+                value={s(adding.identity_provider, "")}
+                onChange={(e) => setAdding({ ...adding, identity_provider: e.target.value, identity_native_id: undefined })}
+              />
+            </label>
             <label>
               Expected holder (optional)
               <input
@@ -4312,32 +4488,23 @@ function Golden() {
               />
             </label>
             <label>
-              Holder source (optional)
-              <input
-                list="golden-assignment-providers"
-                placeholder="corp-ad"
-                value={s(adding.identity_provider, "")}
-                onChange={(e) => setAdding({ ...adding, identity_provider: e.target.value })}
-              />
-            </label>
-            <label>
-              Access
-              <input
-                required
-                list="golden-assignment-accesses"
-                placeholder="GRP-Finance-RW"
-                value={s(adding.access_name, "")}
-                onChange={(e) => setAdding({ ...adding, access_name: e.target.value })}
-              />
-            </label>
-            <label>
-              Access source
+              Access source *
               <input
                 required
                 list="golden-assignment-providers"
                 placeholder="corp-ad"
                 value={s(adding.access_provider, "")}
                 onChange={(e) => setAdding({ ...adding, access_provider: e.target.value })}
+              />
+            </label>
+            <label>
+              Access *
+              <input
+                required
+                list="golden-assignment-accesses"
+                placeholder="GRP-Finance-RW"
+                value={s(adding.access_name, "")}
+                onChange={(e) => setAdding({ ...adding, access_name: e.target.value })}
               />
             </label>
             <label>
@@ -4598,15 +4765,13 @@ function Sources({ principal }: { principal: Principal }) {
   return (
     <>
       <Head title="Sources & IdPs">
-        <button className="button primary" onClick={() => edit()}>
-          + Add source
-        </button>
+        {principal.role === "ADMIN" ? <button className="button primary" onClick={() => edit()}>+ Add source</button> : null}
       </Head>
       <p>
         Connect and monitor the identity and access systems EARE audits. Secrets remain referenced through
         environment variables and are never stored in the WebUI.
       </p>
-      {!cfg.isLoading && !configs.length && (
+      {!cfg.isLoading && !configs.length && principal.role === "ADMIN" && (
         <section className="panel">
           <h2>No collection source is configured.</h2>
           <p>
@@ -4641,12 +4806,7 @@ function Sources({ principal }: { principal: Principal }) {
             </div>
             <div className="source-foot">
               {principal.role === "ADMIN" && Boolean((r.capabilities as Row | undefined)?.source_browser) ? <NavLink className="button subtle" to={`/sources/${encodeURIComponent(s(r.provider))}/browse`}>Browse source</NavLink> : null}
-              <button
-                className="button subtle"
-                onClick={() => edit(configs.find((c) => s(c.provider) === s(r.provider)))}
-              >
-                Configure
-              </button>
+              {principal.role === "ADMIN" ? <button className="button subtle" onClick={() => edit(configs.find((c) => s(c.provider) === s(r.provider)))}>Configure</button> : null}
               <button
                 className="button subtle"
                 onClick={() => {
@@ -4690,7 +4850,7 @@ function Sources({ principal }: { principal: Principal }) {
       {editing && (
         <Drawer title={editing.id ? "Configure source" : "Add source"} close={() => setEditing(null)}>
           <form
-            className="admin-form"
+            className="drawer-form"
             onSubmit={(e) => {
               e.preventDefault();
               save.mutate(editing);
@@ -4873,7 +5033,7 @@ function AuditTrail() {
     </>
   );
 }
-function Reports() {
+export function Reports() {
   const campaignsQuery = useQuery({
       queryKey: ["reports"],
       queryFn: () => getPage("campaigns", { limit: 100 }),
@@ -4882,19 +5042,44 @@ function Reports() {
     [chosen, setChosen] = useState(() => new URLSearchParams(window.location.search).get("campaign") ?? ""),
     selected = campaigns.find((r) => s(r.id) === chosen) ?? campaigns.find((r) => s(r.status) === "closed") ?? campaigns[0],
     id = s(selected?.id, ""),
+    campaign = selected ?? {},
     [compareId, setCompareId] = useState(""),
     comparison = campaigns.find((r) => s(r.id) === compareId),
-    campaign = selected ?? {},
-    results = useQuery({
-      queryKey: ["report-results", id],
-      queryFn: () => getJson(`reports/${encodeURIComponent(id)}/results`, { limit: 500 }),
+    [search, setSearch] = useState(""),
+    [classification, setClassification] = useState(""),
+    [decision, setDecision] = useState(""),
+    [provider, setProvider] = useState(""),
+    [offset, setOffset] = useState(0),
+    [limit, setLimit] = useState(25),
+    [sort, setSort] = useState("source_group"),
+    [order, setOrder] = useState("asc"),
+    resultsQuery = useQuery({
+      queryKey: ["report-results", id, search, classification, decision, provider, offset, limit, sort, order],
+      queryFn: () => getJson(`reports/${encodeURIComponent(id)}/results`, { search, classification, decision, provider, limit, offset, sort, order }),
       enabled: Boolean(id),
     }),
     compareResults = useQuery({
       queryKey: ["report-results", compareId],
       queryFn: () => getJson(`reports/${encodeURIComponent(compareId)}/results`, { limit: 500 }),
       enabled: Boolean(compareId),
-    });
+    }),
+    actionsQuery = useQuery({
+      queryKey: ["report-actions", id],
+      queryFn: () => getPage("remediation-actions", { campaign: id, limit: 25 }),
+      enabled: Boolean(id),
+    }),
+    summary = (resultsQuery.data?.summary ?? {}) as Row,
+    actionSummary = (actionsQuery.data?.summary ?? {}) as Row,
+    reportRows = arr(resultsQuery.data?.items),
+    actionRows = arr(actionsQuery.data?.items),
+    toggleSort = (field: string) => {
+      if (sort === field) setOrder(order === "asc" ? "desc" : "asc");
+      else { setSort(field); setOrder("asc"); }
+      setOffset(0);
+    };
+  useEffect(() => {
+    if (id) window.history.replaceState(null, "", `/reports?campaign=${encodeURIComponent(id)}`);
+  }, [id]);
   if (!campaigns.length)
     return (
       <>
@@ -4926,25 +5111,14 @@ function Reports() {
           <a className="button subtle" href={`/api/reports/${id}/pdf`}>
             {uiLabel("Download PDF")}
           </a>
+          <a className="button subtle" href={`/api/reports/${id}/html`} target="_blank" rel="noreferrer">
+            {uiLabel("Open full report")}
+          </a>
         </div>
       </Head>
       <section className="report-controls panel">
         <div>
-          <span className="eyebrow">Campaign period</span>
-          <label>
-            Campaign
-            <select className="filter-button" value={id} onChange={(e) => { setChosen(e.target.value); setCompareId(""); }}>
-              {campaigns.map((r) => (
-                <option key={s(r.id)} value={s(r.id)}>
-                  {s(r.name, s(r.id))} · {reportPeriod(r)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="muted">{reportPeriod(campaign)}</p>
-        </div>
-        <div>
-          <span className="eyebrow">Compare evolution</span>
+          <span className="eyebrow">Campaign comparison</span>
           <label>
             Previous campaign
             <select className="filter-button" value={compareId} onChange={(e) => setCompareId(e.target.value)}>
@@ -4956,27 +5130,41 @@ function Reports() {
               ))}
             </select>
           </label>
-          <p className="muted">Compare decisions, classifications and reviewed population across two campaign dates.</p>
         </div>
+        <div className="muted">Compare decisions, classifications and reviewed population across campaign dates.</div>
       </section>
-      <div className="report-context-bar">
+      {comparison && compareResults.data ? <ReportComparison current={resultsQuery.data?.summary} previous={compareResults.data?.summary} /> : null}
+      <div className="filterbar">
+        <select className="filter-button" value={id} onChange={(e) => setChosen(e.target.value)}>
+          {campaigns.map((r) => (
+            <option key={s(r.id)} value={s(r.id)}>
+              {s(r.name)} — {s(r.status)}
+            </option>
+          ))}
+        </select>
         <Status v={campaign.status ?? selected?.status} />
-        <span>{reportPeriod(campaign)}</span>
-        <span>{comparison ? `Compared with ${s(comparison.name, s(comparison.id))} · ${reportPeriod(comparison)}` : "No comparison selected"}</span>
+        <span className="muted">
+          {campaign.closed_at
+            ? `closed ${when(campaign.closed_at)}`
+            : campaign.opened_at
+              ? `opened ${when(campaign.opened_at)}`
+              : "not opened yet"}
+        </span>
       </div>
-      <section className="report-summary-grid">
-        <ReportMetric label="Reviewed" value={reportCount(results.data?.summary, "identities")} detail={comparison ? reportDelta(results.data?.summary, compareResults.data?.summary, "identities") : "Current campaign"} />
-        <ReportMetric label="Observed" value={reportCount(results.data?.summary, "observed")} detail={comparison ? reportDelta(results.data?.summary, compareResults.data?.summary, "observed") : "Current campaign"} />
-        <ReportMetric label="Unexpected" value={reportCount(results.data?.summary, "unexpected")} detail={comparison ? reportDelta(results.data?.summary, compareResults.data?.summary, "unexpected") : "Current campaign"} tone="bad" />
-        <ReportMetric label="Pending decisions" value={reportCount(results.data?.summary, "pending")} detail={comparison ? reportDelta(results.data?.summary, compareResults.data?.summary, "pending") : "Current campaign"} tone="warn" />
-      </section>
-      {comparison && compareResults.data ? <ReportComparison current={results.data?.summary} previous={compareResults.data?.summary} /> : null}
-      <section className="report-results panel">
-        <div className="report-section-head">
-          <div><span className="eyebrow">Review evidence</span><h2>Campaign results</h2></div>
-          <span className="muted">{reportCount(results.data, "total")} rows · {reportPeriod(campaign)}</span>
+      <section className="report-workspace">
+        <div className="report-workspace-head">
+          <div>
+            <span className="eyebrow">{uiLabel("Governance evidence")}</span>
+            <h2>{s(campaign.display_name, s(campaign.name, "Campaign report"))}</h2>
+            <p className="muted">Native EARE restitution workspace · {s(campaign.pilot, "Pilot not recorded")}</p>
+          </div>
         </div>
-        <ReportResultsTable query={results} />
+        <section className="panel report-profile"><div className="panel-title"><h3>Campaign profile</h3><Status v={s(campaign.status)} /></div><div className="report-facts"><span><b>Period</b>{campaign.opened_at ? when(campaign.opened_at) : "Not opened"} → {campaign.closed_at ? when(campaign.closed_at) : "Not closed"}</span><span><b>Scope</b>{readableDetails(campaign.scope)}</span><span><b>Snapshot</b>{s(campaign.snapshot_id)}</span><span><b>Golden baseline</b>{s(campaign.golden_source_version_id)}</span><span><b>Reviewer coverage</b>{s(campaign.reviewer_resolution, "Not available")}</span></div></section>
+        <section className="report-section"><div className="panel-title"><h3>Executive summary</h3><span className="muted">Observed / expected and decision outcomes are separate.</span></div><div className="metrics report-metrics">{[["Reviewed accesses", summary.total], ["Approved", summary.approve], ["Revoked", summary.revoke], ["N/A", summary.not_applicable], ["Pending", summary.pending], ["As expected", summary.expected_and_observed], ["Unexpected", summary.unexpected], ["Missing", summary.missing], ["Unknown / scoped", summary.unknown_due_to_scope]].map(([label, value]) => <div className="metric" key={String(label)}><div className="metric-label">{String(label)}</div><strong>{s(value, "0")}</strong></div>)}</div></section>
+        <section className="panel report-observations"><h3>Key observations</h3><ul><li>{s(summary.unexpected, "0")} unexpected accesses identified.</li><li>{s(summary.missing, "0")} expected accesses missing.</li><li>{s(summary.revoke, "0")} revoked decisions require remediation.</li>{Number(summary.disabled_with_access) ? <li>{s(summary.disabled_with_access)} disabled accounts retain access.</li> : null}{Number(summary.technical_account_without_owner) ? <li>{s(summary.technical_account_without_owner)} technical accounts have no owner.</li> : null}</ul></section>
+        <section className="panel report-section"><div className="panel-title"><h3>Remediation / action plan</h3><NavLink className="button subtle" to={`/actions?campaign=${encodeURIComponent(id)}`}>View all actions</NavLink></div><div className="metrics report-metrics">{[["Total actions", actionSummary.total], ["Pending", actionSummary.pending], ["Exported", actionSummary.exported], ["Not completed", actionSummary.not_completed], ["Completed", actionSummary.completed]].map(([label, value]) => <div className="metric" key={String(label)}><div className="metric-label">{String(label)}</div><strong>{s(value, "0")}</strong></div>)}</div><p className="field-note">Exported means sent for operational work; Completed means the correction was confirmed.</p><Table q={actionsQuery} cols={["Action", "Identity", "Application / access", "Source", "Permission", "Reason", "Status"]} rows={actionRows.map((row) => [s(row.action, s(row.decision)), s(row.identity_display_name, s(row.identity_identifier)), s(row.access_display_name, s(row.access_name)), s(row.access_provider), s(row.technical_permission, s(row.permission)), s(row.comment, s(row.action_reason)), <Status v={s(row.status)} />])} /></section>
+        <section className="panel report-section"><div className="panel-title"><h3>Coverage / traceability</h3><span className="muted">Governance evidence for the selected campaign.</span></div><div className="report-facts"><span><b>Providers / sources</b>{s(summary.providers, "0")}</span><span><b>Identities reviewed</b>{s(summary.identities, "0")}</span><span><b>Accesses reviewed</b>{s(summary.total, "0")}</span><span><b>Campaign ID</b>{id}</span><span><b>Pilot</b>{s(campaign.pilot)}</span><span><b>Opened / closed</b>{s(campaign.opened_at)} / {s(campaign.closed_at)}</span><span><b>Decision count</b>{Number(summary.approve || 0) + Number(summary.revoke || 0) + Number(summary.not_applicable || 0)}</span></div></section>
+        <section className="report-section"><div className="panel-title"><h3>Detailed results</h3><span className="muted">Human-readable review evidence.</span></div><Filter v={search} onChange={(value) => { setSearch(value); setOffset(0); }}><SelectFilter value={classification} onChange={(value) => { setClassification(value); setOffset(0); }} options={vals((resultsQuery.data?.facets as Row | undefined)?.classification)} placeholder="Classification" /><SelectFilter value={decision} onChange={(value) => { setDecision(value); setOffset(0); }} options={vals((resultsQuery.data?.facets as Row | undefined)?.decision)} placeholder="Decision" /><SelectFilter value={provider} onChange={(value) => { setProvider(value); setOffset(0); }} options={vals((resultsQuery.data?.facets as Row | undefined)?.provider)} placeholder="Provider" /></Filter><Table q={resultsQuery} cols={["Identity", "Access", "Application", "Permission", "Expected / observed", "Decision", "Reason", "Reviewer"]} fields={["identity", "access", "service", "permission", "classification", "decision", "action_reason", "reviewer"]} sorting={{ sort, order, toggle: toggleSort }} rows={reportRows.map((row) => [s(row.identity, s(row.identity_identifier)), <><strong>{s(row.access)}</strong><small className="cell-sub">{s(row.access_identifier)}</small></>, s(row.service, s(row.component)), s(row.permission), <Status v={s(row.classification)} />, <Status v={s(row.decision)} />, s(row.action_reason, s(row.issue)), s(row.reviewer)])} /><Pager total={Number(resultsQuery.data?.total ?? 0)} limit={limit} offset={offset} setOffset={setOffset} setLimit={setLimit} /></section>
       </section>
     </>
   );
@@ -5659,7 +5847,7 @@ function Auth() {
           close={() => setEditing(null)}
         >
           <form
-            className="admin-form"
+            className="drawer-form"
             onSubmit={(e) => {
               e.preventDefault();
               save.mutate(editing);
