@@ -340,6 +340,8 @@ def prepare_functional_model_update(
         right = FunctionalRight(
             target=target,
             capability_id=cap_id,
+            # Human validation creates a manual expected right; native permission
+            # remains evidence from the source and is intentionally retained.
             provenance=Provenance.MANUAL,
             native_permission=permission.strip() or None if permission else None,
         )

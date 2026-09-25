@@ -74,6 +74,34 @@ SESSION_TTL_SECONDS = 8 * 60 * 60
 ROLES = ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER")
 
 
+def _golden_version_provider_domains(version: dict[str, Any]) -> set[str]:
+    """Resolve current Golden scope from expected content, not version history."""
+    domains: set[str] = set()
+    for assignment in version.get("assignments", []):
+        for field in ("access_provider", "identity_provider"):
+            value = str(assignment.get(field) or "").strip()
+            if value:
+                domains.add(value)
+    for definition in version.get("expected_access_definitions", []):
+        value = str(definition.get("provider") or "").strip()
+        if value:
+            domains.add(value)
+    for relation in version.get("expected_access_relations", []):
+        for field in ("parent_provider", "child_provider"):
+            value = str(relation.get(field) or "").strip()
+            if value:
+                domains.add(value)
+    for model in version.get("functional_access_models", []):
+        value = str(model.get("access_provider") or "").strip()
+        if value:
+            domains.add(value)
+    for comment in version.get("access_comments", []):
+        value = str(comment.get("access_provider") or "").strip()
+        if value:
+            domains.add(value)
+    return domains
+
+
 @dataclass(frozen=True)
 class WebPrincipal:
     subject: str
@@ -138,7 +166,7 @@ def create_app(db_path: str | None = None):
         raise RuntimeError("Install the 'app' extra to use the REST API")
     db_path = db_path or os.environ.get("EARE_DB_PATH", "access-review.db")
     app = FastAPI(title="Easy Access Review Engine", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
-    system_conn = sqlite3.connect(db_path, check_same_thread=False)
+    system_conn = sqlite3.connect(db_path, timeout=30, check_same_thread=False)
     system_conn.row_factory = sqlite3.Row
     init_system(system_conn)
     ensure_bootstrap_user(system_conn)
@@ -1706,15 +1734,16 @@ def create_app(db_path: str | None = None):
                     snapshot for snapshot in snapshots
                     if any(str(provider.get("name") or "") in allowed_domains for provider in snapshot.get("providers", []))
                 ]
-            snapshot_ids = {str(snapshot.get("id")) for snapshot in snapshots}
             sources = repo.list_payloads("golden_sources")
             versions = repo.list_payloads("golden_source_versions")
             golden_available = any(
                 str(source.get("active_version_id") or "") in {
                     str(version.get("id")) for version in versions
                     if allowed_domains is None
-                    or str(version.get("source_snapshot_id") or "") in snapshot_ids
-                    or str(version.get("source_type") or "") == "from_scratch"
+                    or (
+                        (domains := _golden_version_provider_domains(version))
+                        and domains <= allowed_domains
+                    )
                 }
                 for source in sources
             )

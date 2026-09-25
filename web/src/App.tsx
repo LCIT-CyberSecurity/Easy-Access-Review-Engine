@@ -52,6 +52,7 @@ import {
   roleHome,
   validProviderScope,
 } from "./projections";
+import { goldenFunctionalRightsAreValid } from "./goldenFunctionalValidation";
 const s = (v: unknown, f = "—") =>
     v instanceof Error
       ? v.message
@@ -4174,6 +4175,7 @@ function Golden() {
                   const resource = (target.resource ?? {}) as Row;
                   const mapped = vals(suggestion.mapped_capability_ids);
                   const existingRights = arr(row.direct_functional_rights).map((right) => ({
+                    ...right,
                     capability_id: s(right.capability_id, ""),
                     target: right.target,
                   }));
@@ -4181,12 +4183,7 @@ function Golden() {
                     access_provider: row.access_provider,
                     access_name: row.access_name,
                     access_display_name: row.access_display_name,
-                    completeness: row.completeness === "not_defined" ? "partial" : row.completeness,
-                    capability_id: mapped[0] ?? s(existingRights[0]?.capability_id, ""),
-                    service_identifier: service.identifier ?? "",
-                    resource_identifier: resource.identifier ?? "",
-                    service_display_name: service.display_name ?? "",
-                    resource_display_name: resource.display_name ?? "",
+                    completeness: row.completeness ?? "not_defined",
                     version_comment: "Validate source-informed functional model",
                     rights: existingRights.length ? existingRights : [{ capability_id: mapped[0] ?? "", target: { service: service.identifier ? { identifier: service.identifier, display_name: service.display_name } : undefined, resource: resource.identifier ? { identifier: resource.identifier, display_name: resource.display_name } : undefined } }],
                     grants: arr(row.expected_grants),
@@ -4385,7 +4382,7 @@ function Golden() {
           <label className="drawer-field">Version comment<textarea className="drawer-comment" value={s(functionalEditing.version_comment, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, version_comment: event.target.value })} /></label>
           <div className="drawer-actions"><button
             className="button primary"
-            disabled={saveFunctional.isPending || !s(functionalEditing.capability_id, "") || (!s(functionalEditing.service_identifier, "") && !s(functionalEditing.resource_identifier, ""))}
+            disabled={saveFunctional.isPending || !goldenFunctionalRightsAreValid(functionalEditing.rights, functionalEditing.completeness)}
             onClick={() => saveFunctional.mutate({
               access_provider: functionalEditing.access_provider,
               access_name: functionalEditing.access_name,
@@ -5036,7 +5033,7 @@ function AuditTrail() {
     </>
   );
 }
-function Reports() {
+export function Reports() {
   const campaignsQuery = useQuery({
       queryKey: ["reports"],
       queryFn: () => getPage("campaigns", { limit: 100 }),
@@ -5049,7 +5046,37 @@ function Reports() {
       campaigns.find((r) => s(r.status) === "closed") ??
       campaigns[0],
     id = s(selected?.id, ""),
-    campaign = selected ?? {};
+    campaign = selected ?? {},
+    [search, setSearch] = useState(""),
+    [classification, setClassification] = useState(""),
+    [decision, setDecision] = useState(""),
+    [provider, setProvider] = useState(""),
+    [offset, setOffset] = useState(0),
+    [limit, setLimit] = useState(25),
+    [sort, setSort] = useState("source_group"),
+    [order, setOrder] = useState("asc"),
+    resultsQuery = useQuery({
+      queryKey: ["report-results", id, search, classification, decision, provider, offset, limit, sort, order],
+      queryFn: () => getJson(`reports/${encodeURIComponent(id)}/results`, { search, classification, decision, provider, limit, offset, sort, order }),
+      enabled: Boolean(id),
+    }),
+    actionsQuery = useQuery({
+      queryKey: ["report-actions", id],
+      queryFn: () => getPage("remediation-actions", { campaign: id, limit: 25 }),
+      enabled: Boolean(id),
+    }),
+    summary = (resultsQuery.data?.summary ?? {}) as Row,
+    actionSummary = (actionsQuery.data?.summary ?? {}) as Row,
+    reportRows = arr(resultsQuery.data?.items),
+    actionRows = arr(actionsQuery.data?.items),
+    toggleSort = (field: string) => {
+      if (sort === field) setOrder(order === "asc" ? "desc" : "asc");
+      else { setSort(field); setOrder("asc"); }
+      setOffset(0);
+    };
+  useEffect(() => {
+    if (id) window.history.replaceState(null, "", `/reports?campaign=${encodeURIComponent(id)}`);
+  }, [id]);
   if (!campaigns.length)
     return (
       <>
@@ -5081,6 +5108,9 @@ function Reports() {
           <a className="button subtle" href={`/api/reports/${id}/pdf`}>
             {uiLabel("Download PDF")}
           </a>
+          <a className="button subtle" href={`/api/reports/${id}/html`} target="_blank" rel="noreferrer">
+            {uiLabel("Open full report")}
+          </a>
         </div>
       </Head>
       <div className="filterbar">
@@ -5104,14 +5134,16 @@ function Reports() {
         <div className="report-workspace-head">
           <div>
             <span className="eyebrow">{uiLabel("Governance evidence")}</span>
-            <h2>{uiLabel("Final campaign report")}</h2>
-            <p className="muted">{ui("ui.reportDisplayed", { defaultValue: "The report is displayed here as a complete document. Use the downloads above to distribute it." })}</p>
+            <h2>{s(campaign.display_name, s(campaign.name, "Campaign report"))}</h2>
+            <p className="muted">Native EARE restitution workspace · {s(campaign.pilot, "Pilot not recorded")}</p>
           </div>
-          <a className="button subtle" href={`/api/reports/${id}/html?inline=true`} target="_blank" rel="noreferrer">
-            {uiLabel("Open full report")}
-          </a>
         </div>
-        <iframe className="report-document" title={`Final report for ${s(campaign.name)}`} src={`/api/reports/${id}/html?inline=true`} loading="lazy" />
+        <section className="panel report-profile"><div className="panel-title"><h3>Campaign profile</h3><Status v={s(campaign.status)} /></div><div className="report-facts"><span><b>Period</b>{campaign.opened_at ? when(campaign.opened_at) : "Not opened"} → {campaign.closed_at ? when(campaign.closed_at) : "Not closed"}</span><span><b>Scope</b>{readableDetails(campaign.scope)}</span><span><b>Snapshot</b>{s(campaign.snapshot_id)}</span><span><b>Golden baseline</b>{s(campaign.golden_source_version_id)}</span><span><b>Reviewer coverage</b>{s(campaign.reviewer_resolution, "Not available")}</span></div></section>
+        <section className="report-section"><div className="panel-title"><h3>Executive summary</h3><span className="muted">Observed / expected and decision outcomes are separate.</span></div><div className="metrics report-metrics">{[["Reviewed accesses", summary.total], ["Approved", summary.approve], ["Revoked", summary.revoke], ["N/A", summary.not_applicable], ["Pending", summary.pending], ["As expected", summary.expected_and_observed], ["Unexpected", summary.unexpected], ["Missing", summary.missing], ["Unknown / scoped", summary.unknown_due_to_scope]].map(([label, value]) => <div className="metric" key={String(label)}><div className="metric-label">{String(label)}</div><strong>{s(value, "0")}</strong></div>)}</div></section>
+        <section className="panel report-observations"><h3>Key observations</h3><ul><li>{s(summary.unexpected, "0")} unexpected accesses identified.</li><li>{s(summary.missing, "0")} expected accesses missing.</li><li>{s(summary.revoke, "0")} revoked decisions require remediation.</li>{Number(summary.disabled_with_access) ? <li>{s(summary.disabled_with_access)} disabled accounts retain access.</li> : null}{Number(summary.technical_account_without_owner) ? <li>{s(summary.technical_account_without_owner)} technical accounts have no owner.</li> : null}</ul></section>
+        <section className="panel report-section"><div className="panel-title"><h3>Remediation / action plan</h3><NavLink className="button subtle" to={`/actions?campaign=${encodeURIComponent(id)}`}>View all actions</NavLink></div><div className="metrics report-metrics">{[["Total actions", actionSummary.total], ["Pending", actionSummary.pending], ["Exported", actionSummary.exported], ["Not completed", actionSummary.not_completed], ["Completed", actionSummary.completed]].map(([label, value]) => <div className="metric" key={String(label)}><div className="metric-label">{String(label)}</div><strong>{s(value, "0")}</strong></div>)}</div><p className="field-note">Exported means sent for operational work; Completed means the correction was confirmed.</p><Table q={actionsQuery} cols={["Action", "Identity", "Application / access", "Source", "Permission", "Reason", "Status"]} rows={actionRows.map((row) => [s(row.action, s(row.decision)), s(row.identity_display_name, s(row.identity_identifier)), s(row.access_display_name, s(row.access_name)), s(row.access_provider), s(row.technical_permission, s(row.permission)), s(row.comment, s(row.action_reason)), <Status v={s(row.status)} />])} /></section>
+        <section className="panel report-section"><div className="panel-title"><h3>Coverage / traceability</h3><span className="muted">Governance evidence for the selected campaign.</span></div><div className="report-facts"><span><b>Providers / sources</b>{s(summary.providers, "0")}</span><span><b>Identities reviewed</b>{s(summary.identities, "0")}</span><span><b>Accesses reviewed</b>{s(summary.total, "0")}</span><span><b>Campaign ID</b>{id}</span><span><b>Pilot</b>{s(campaign.pilot)}</span><span><b>Opened / closed</b>{s(campaign.opened_at)} / {s(campaign.closed_at)}</span><span><b>Decision count</b>{Number(summary.approve || 0) + Number(summary.revoke || 0) + Number(summary.not_applicable || 0)}</span></div></section>
+        <section className="report-section"><div className="panel-title"><h3>Detailed results</h3><span className="muted">Human-readable review evidence.</span></div><Filter v={search} onChange={(value) => { setSearch(value); setOffset(0); }}><SelectFilter value={classification} onChange={(value) => { setClassification(value); setOffset(0); }} options={vals((resultsQuery.data?.facets as Row | undefined)?.classification)} placeholder="Classification" /><SelectFilter value={decision} onChange={(value) => { setDecision(value); setOffset(0); }} options={vals((resultsQuery.data?.facets as Row | undefined)?.decision)} placeholder="Decision" /><SelectFilter value={provider} onChange={(value) => { setProvider(value); setOffset(0); }} options={vals((resultsQuery.data?.facets as Row | undefined)?.provider)} placeholder="Provider" /></Filter><Table q={resultsQuery} cols={["Identity", "Access", "Application", "Permission", "Expected / observed", "Decision", "Reason", "Reviewer"]} fields={["identity", "access", "service", "permission", "classification", "decision", "action_reason", "reviewer"]} sorting={{ sort, order, toggle: toggleSort }} rows={reportRows.map((row) => [s(row.identity, s(row.identity_identifier)), <><strong>{s(row.access)}</strong><small className="cell-sub">{s(row.access_identifier)}</small></>, s(row.service, s(row.component)), s(row.permission), <Status v={s(row.classification)} />, <Status v={s(row.decision)} />, s(row.action_reason, s(row.issue)), s(row.reviewer)])} /><Pager total={Number(resultsQuery.data?.total ?? 0)} limit={limit} offset={offset} setOffset={setOffset} setLimit={setLimit} /></section>
       </section>
     </>
   );

@@ -264,6 +264,44 @@ LDAP_FILTER=(objectClass=*)
 
 Authenticated bind requires LDAPS or StartTLS. TLS verification remains strict. `ALLOW_PARTIAL=1` keeps a diagnostic artifact after an error, but completeness becomes conservative.
 
+### Configuring an OpenLDAP source in the WebUI
+
+For a WebUI deployment, open **Sources & IdPs → Add source** and select
+**OpenLDAP**. Configure the provider name, secure LDAP URI, base DN, read-only
+bind DN and a secret reference. Store no password in connector YAML: the bind
+password is supplied at runtime through an environment variable or password
+file. The UI may show that credentials are configured without exposing them.
+
+In Docker, the API container—not the WebUI container—must have the secret, CA
+bundle and network access to LDAP. For example:
+
+```yaml
+connection:
+  uri: ldaps://crashtests-ldap:636
+  base_dn: dc=example,dc=test
+  bind_dn: cn=svc-eare,ou=services,dc=example,dc=test
+credentials:
+  password_env: EARE_LDAP_PASSWORD
+```
+
+The values above are an integration example. Use the actual provider and secret
+for each environment. A running OpenLDAP container alone is not enough; EARE
+also needs the connector, runtime secret, trusted CA and Docker connectivity.
+
+### Synchronizing an OpenLDAP source
+
+Click **Synchronize** on the configured source. EARE queues a read-only job that
+binds over LDAP, performs a paged search, creates a temporary ZIP/LDIF artifact,
+imports it through the normal importer, stores a new immutable Snapshot and
+deletes the temporary artifact. Synchronization never writes to LDAP.
+
+The page refreshes the job until it is `SUCCEEDED` or `FAILED`. A failed or
+partial collection must be investigated before it is used for authoritative
+missing-access or deletion conclusions. If a page is refreshed while several
+requests are loading, the API waits briefly for normal SQLite contention; a
+persistent `database is locked` error requires checking API logs and container
+health.
+
 ## 11. Completeness and Scope
 
 Collection completeness drives safety:
@@ -350,7 +388,20 @@ Use **Download remediation CSV** to send the actionable list to technical admini
 
 #### 7. Read and distribute the final report
 
-Open **Reports**, choose the closed campaign and select **View report**. The HTML report is displayed directly in the page. The available downloads are **HTML**, **PDF**, **CSV** and **JSON**.
+Open **Reports** and choose the closed campaign. Reports is a native EARE
+governance workspace, not an embedded standalone document. It presents the
+campaign profile, executive summary, deterministic observations, observed versus
+expected outcomes, review decisions, remediation/action-plan counts, coverage,
+traceability evidence and detailed results.
+
+The standalone deliverables remain separate: **Download HTML**, **Download
+PDF**, **Download CSV** and **Download JSON**. **Open standalone report** opens
+the generated HTML in a new browser tab when available. The Reports page itself
+does not embed HTML, PDF or another report document.
+
+The remediation section distinguishes pending, exported, not completed and
+completed actions. **Exported does not mean completed**. Use **View all actions**
+for operational follow-up; Reports never executes remediation.
 
 The final campaign report is for governance, audit, compliance, RSSI, management and auditors. It contains campaign metadata, counts, expected/observed comparison, findings and review evidence including reviewer decisions and comments. It is deliberately different from the remediation plan; do not ask technical administrators to extract operational work from the audit report.
 
@@ -372,7 +423,7 @@ The campaign screen makes the following steps visible:
 2. **Review** — reviewers certify each access as Approve, Revoke or Not applicable.
 3. **Close** — once every review is decided, closing freezes the result and stops new decisions.
 4. **Remediate** — closing generates operational actions for administrators. EARE never writes to AD, LDAP, AWS or SaaS providers.
-5. **Report** — the final governance/audit report is available as an in-application preview and as HTML, PDF, CSV and JSON downloads.
+5. **Report** — the native governance workspace is available in EARE; standalone HTML, PDF, CSV and JSON deliverables can be downloaded or opened separately.
 6. **Update baseline** — optionally promote decisions to a new immutable Golden version.
 
 Preview is non-persistent: it calculates what would be reviewed. Opening the campaign freezes the Snapshot evidence, materializes ReviewItems, resolves reviewers and captures historical business context. Later synchronizations do not rewrite that campaign.

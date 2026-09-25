@@ -15,7 +15,9 @@ def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 def _connect(path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+    # A sync job is commonly queued while the page is refreshing several
+    # read-model requests; tolerate that short SQLite write contention.
+    conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE IF NOT EXISTS web_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, progress TEXT NOT NULL, result TEXT, error TEXT, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT)")
     conn.execute("CREATE TABLE IF NOT EXISTS web_job_events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, event TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL)")

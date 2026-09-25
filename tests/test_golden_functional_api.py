@@ -57,7 +57,7 @@ def test_golden_functional_model_creates_immutable_v2_and_reads_effective_rights
                         },
                     },
                     "capability_id": "read",
-                    "native_permission": None,
+                    "native_permission": "SELECT",
                 }
             ],
             "grants": [],
@@ -75,7 +75,10 @@ def test_golden_functional_model_creates_immutable_v2_and_reads_effective_rights
     assert item["completeness"] == "partial"
     assert item["effective_right_count"] == 1
     assert item["functional_rights"][0]["capability_id"] == "read"
+    assert item["functional_rights"][0]["native_permission"] == "SELECT"
     assert item["direct_functional_rights"][0]["capability_id"] == "read"
+    assert item["direct_functional_rights"][0]["native_permission"] == "SELECT"
+    assert item["direct_functional_rights"][0]["provenance"] == "manual"
     assert item["effective_functional_rights"][0]["capability_id"] == "read"
     assert item["functional_rights"][0]["target_path"] == "NexaByte CRM › Invoices"
     assert item["access_comment"] == "Accounting access"
