@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ActionMenu, goldenAccessEditIsDirty, goldenAccessEditPayload, sourceSupportsAttributeMapping } from "./App";
+import { ActionMenu, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, sourceSupportsAttributeMapping } from "./App";
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {
@@ -77,5 +77,30 @@ describe("Golden access inline edit draft", () => {
 
   it("keeps deliberate clearing in the payload", () => {
     expect(goldenAccessEditPayload({ ...original, application: "", original_application: "CRM" }).application).toBe("");
+  });
+});
+
+describe("Guide and Access density contracts", () => {
+  it("uses translated short checklist labels and never exposes a missing recommendation key", () => {
+    expect(guideChecklistLabelKey({ id: "operatorCoverage" })).toBe("guide.setupShort.operatorCoverage");
+    expect(guideChecklistLabelKey({ id: "operator_coverage" })).toBe("guide.setupShort.operatorCoverage");
+    expect(guideTranslation("guide.rec.operatorCoverage.title")).not.toContain("guide.rec.operatorCoverage.title");
+  });
+
+  it("renders checklist statuses and short labels without inline descriptions", () => {
+    const html = renderToStaticMarkup(createElement(GuideChecklist, {
+      items: [{ id: "operator_coverage", status: "attention", description: "Long operational explanation" }],
+      text: (key: unknown) => String(key),
+    }));
+    expect(html).toContain("guide.setupShort.operatorCoverage");
+    expect(html).toContain("!");
+    expect(html).not.toContain("Long operational explanation");
+  });
+
+  it("keeps the human access name primary and technical identifier secondary", () => {
+    const access = { display_name: "CRM Admin", name: "crm-admin:member" };
+    expect(accessDrawerTitle(access)).toBe("CRM Admin");
+    expect(accessDrawerTechnicalIdentifier(access)).toBe("crm-admin:member");
+    expect(accessDrawerBusinessContextOrder).toEqual(["application", "business_permission", "owner", "description"]);
   });
 });
