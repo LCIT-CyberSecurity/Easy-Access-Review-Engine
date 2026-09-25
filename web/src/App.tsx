@@ -3647,6 +3647,13 @@ function Golden() {
       setEditingAccess(null);
       setTab(nextTab);
     },
+    guardTableContextChange = (change: () => void) => {
+      if (editingAccess && accessEditIsDirty(editingAccess)) {
+        setNotice({ tone: "error", text: "Save or cancel the current Golden access edit before changing the table context." });
+        return;
+      }
+      change();
+    },
     saveEditedAccess = (continuation: { row?: Row; tab?: string } = {}) => {
       if (!editingAccess || saveAccessRow.isPending) return;
       saveAccessRow.mutate({ body: goldenAccessEditPayload(editingAccess), continuation });
@@ -3698,9 +3705,11 @@ function Golden() {
             className="filter-button"
             value={sourceName}
             onChange={(e) => {
-              setChosen(e.target.value);
-              setCompare(null);
-              setNotice(null);
+              guardTableContextChange(() => {
+                setChosen(e.target.value);
+                setCompare(null);
+                setNotice(null);
+              });
             }}
           >
             {goldens.map((row) => (
@@ -3891,7 +3900,7 @@ function Golden() {
           </div>
           {tab === "accesses" && (
             <>
-              <Filter v={search} onChange={setSearch}>
+              <Filter v={search} onChange={(value) => guardTableContextChange(() => setSearch(value))}>
                 <button className="button subtle" onClick={() => setAdding(blankExpected())}>
                   + Add expected access
                 </button>
@@ -4023,14 +4032,14 @@ function Golden() {
                 total={Number(accessesQuery.data?.total ?? 0)}
                 limit={limit}
                 offset={offset}
-                setOffset={setOffset}
-                setLimit={setLimit}
+                setOffset={(value) => guardTableContextChange(() => setOffset(value))}
+                setLimit={(value) => guardTableContextChange(() => setLimit(value))}
               />
             </>
           )}
           {tab === "expected" && (
             <>
-              <Filter v={search} onChange={setSearch}>
+              <Filter v={search} onChange={(value) => guardTableContextChange(() => setSearch(value))}>
                 <button className="button subtle" onClick={() => setAdding(blankExpected())}>
                   + Add expected access
                 </button>
@@ -4095,8 +4104,8 @@ function Golden() {
                 total={Number(content.data?.total ?? 0)}
                 limit={limit}
                 offset={offset}
-                setOffset={setOffset}
-                setLimit={setLimit}
+                setOffset={(value) => guardTableContextChange(() => setOffset(value))}
+                setLimit={(value) => guardTableContextChange(() => setLimit(value))}
               />
             </>
           )}
