@@ -48,6 +48,13 @@ def _status(row: dict[str, Any]) -> str:
     return IdentityStatus.ACTIVE
 
 
+def _display_name(row: dict[str, Any], fallback: str) -> str:
+    name = row.get("name")
+    if isinstance(name, dict) and name.get("fullName"):
+        return str(name["fullName"])
+    return str(row.get("displayName") or name or fallback)
+
+
 def import_google_workspace_zip(
     path: str, known_identities: list[Identity] | None = None
 ) -> ImportResult:
@@ -70,7 +77,7 @@ def import_google_workspace_zip(
             IdentityType.USER_ACCOUNT,
             _status(row),
             native_id=native,
-            display_name=row.get("name") or row.get("displayName"),
+            display_name=_display_name(row, email),
             email=email,
             metadata={"aliases": list(row.get("aliases") or [])},
         )
@@ -115,7 +122,7 @@ def import_google_workspace_zip(
                 control_object=ControlObject(
                     "google_group",
                     group.identifier,
-                    group.native_id,
+                    f"google-group:{group.native_id or group.identifier}:{role}",
                     group.display_name,
                     {"membership_role": role},
                 ),
@@ -126,7 +133,11 @@ def import_google_workspace_zip(
                     resource={"identifier": group.identifier},
                 ),
                 display_name=f"{group.display_name or group.identifier} — {role.title()}",
-                metadata={"membership_role": role, "source_group": group.identifier},
+                metadata={
+                    "membership_role": role,
+                    "source_group": group.identifier,
+                    "group_native_id": group.native_id,
+                },
             )
             accesses.append(access)
             access_by_name[name] = access
@@ -156,8 +167,39 @@ def import_google_workspace_zip(
             str(row.get("member_email") or row.get("email") or "").lower()
         )
         role = str(row.get("role") or "MEMBER").upper()
-        if group is None or member is None or role not in {"MEMBER", "MANAGER", "OWNER"}:
+        if group is None or role not in {"MEMBER", "MANAGER", "OWNER"}:
             continue
+        if member is None:
+            member_type = str(row.get("member_type") or "USER").upper()
+            member_identifier = (
+                str(row.get("member_email") or row.get("member_id") or "").strip().lower()
+            )
+            if not member_identifier:
+                continue
+            identity_type = {
+                "USER": IdentityType.USER_ACCOUNT,
+                "GROUP": IdentityType.GROUP,
+                "CUSTOMER": IdentityType.GROUP,
+            }.get(member_type, IdentityType.GROUP)
+            member = Identity(
+                provider_name,
+                member_identifier,
+                identity_type,
+                IdentityStatus.UNKNOWN,
+                native_id=str(row.get("member_id") or "") or None,
+                display_name=member_identifier,
+                email=member_identifier if identity_type == IdentityType.USER_ACCOUNT else None,
+                built_in=member_type == "CUSTOMER",
+                metadata={
+                    "unresolved": True,
+                    "google_member_type": member_type,
+                    "raw_member_id": row.get("member_id"),
+                },
+            )
+            identities.append(member)
+            if member.native_id:
+                by_native[member.native_id] = member
+            by_email[member.identifier] = member
         access_name = f"google-group:{group.native_id or group.identifier}:{role}"
         assignments.append(
             AccessAssignment(
@@ -182,13 +224,20 @@ def import_google_workspace_zip(
                     id=_id("workspace-nesting", f"{member.identifier}:{access_name}"),
                 )
             )
+    role_definitions = {
+        str(row.get("roleId")): row for row in records["admin-roles.jsonl"] if row.get("roleId")
+    }
     for row in records["admin-role-assignments.jsonl"]:
         role_id = str(row.get("roleId") or row.get("role_id") or "")
         scope_type = str(row.get("scopeType") or row.get("scope_type") or "CUSTOMER")
         scope_id = str(row.get("orgUnitId") or row.get("org_unit_id") or "")
         if not role_id:
             continue
-        semantic = f"{role_id}|{scope_type}|{scope_id}|{row.get('condition') or ''}"
+        role_definition = role_definitions.get(role_id, {})
+        condition = row.get("condition") or row.get("conditionExpression") or ""
+        semantic = (
+            f"{role_id}|{scope_type}|{scope_id}|{condition}|{row.get('expirationDetails') or ''}"
+        )
         name = f"google-admin:{_id('workspace-admin', semantic)}"
         if name not in access_by_name:
             access = Access(
@@ -196,22 +245,23 @@ def import_google_workspace_zip(
                 provider=provider_name,
                 control_object=ControlObject(
                     "google_workspace_admin_role",
-                    role_id,
-                    role_id,
-                    row.get("roleName") or role_id,
+                    name,
+                    role_definition.get("roleName") or role_id,
                     {"scope_type": scope_type, "scope_id": scope_id},
                 ),
-                permission=Permission(role_id, row.get("roleName") or role_id),
+                permission=Permission(role_id, role_definition.get("roleName") or role_id),
                 target=Target(
                     service={"identifier": "Google Workspace"},
                     component={"identifier": "Administration"},
                     resource={"identifier": scope_id or scope_type},
                 ),
-                display_name=row.get("roleName") or role_id,
+                display_name=role_definition.get("roleName") or role_id,
                 metadata={
                     "scope_type": scope_type,
                     "scope_id": scope_id,
-                    "condition": row.get("condition"),
+                    "condition": condition,
+                    "role_id": role_id,
+                    "role_definition": role_definition,
                 },
             )
             accesses.append(access)

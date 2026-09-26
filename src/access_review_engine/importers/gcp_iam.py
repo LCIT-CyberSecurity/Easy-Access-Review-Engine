@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from hashlib import sha256
 
 from access_review_engine.domain import (
@@ -35,25 +36,46 @@ def _stable(value: str) -> str:
     return sha256(value.encode()).hexdigest()
 
 
-def _principal(value: str) -> tuple[str, str, str]:
-    prefix, _, identifier = value.partition(":")
-    if prefix == "user":
-        return "user_account", identifier.lower(), "user"
-    if prefix == "group":
-        return "group", identifier.lower(), "group"
-    if prefix == "serviceAccount":
-        return "technical_account", identifier.lower(), "serviceAccount"
-    return "unknown", value, prefix
+def _principal(value: str) -> tuple[str, str, str, dict[str, object]]:
+    raw = value.strip()
+    if raw in {"allUsers", "allAuthenticatedUsers"}:
+        return IdentityType.GROUP, raw, raw, {"built_in": True}
+    deleted = re.match(r"^deleted:(user|group|serviceAccount):(.+)$", raw)
+    if deleted:
+        kind, identifier = deleted.groups()
+        mapped = {
+            "user": IdentityType.USER_ACCOUNT,
+            "group": IdentityType.GROUP,
+            "serviceAccount": IdentityType.TECHNICAL_ACCOUNT,
+        }[kind]
+        return mapped, identifier.lower(), kind, {"deleted": True}
+    if raw.startswith("principalSet://"):
+        return IdentityType.GROUP, raw, "principalSet", {"unresolved": True}
+    if raw.startswith("principal://"):
+        return IdentityType.TECHNICAL_ACCOUNT, raw, "principal", {"unresolved": True}
+    prefix, _, identifier = raw.partition(":")
+    mapped = {
+        "user": IdentityType.USER_ACCOUNT,
+        "group": IdentityType.GROUP,
+        "serviceAccount": IdentityType.TECHNICAL_ACCOUNT,
+        "domain": IdentityType.GROUP,
+    }.get(prefix)
+    if mapped:
+        return mapped, identifier.lower(), prefix, {}
+    return IdentityType.TECHNICAL_ACCOUNT, raw, "unknown", {"unresolved": True}
 
 
 def import_gcp_iam_zip(path: str, known_identities: list[Identity] | None = None) -> ImportResult:
     manifest, records = read_artifact(path, "gcp_iam", FILES)
     provider_name = str(manifest["provider"])
     provider = Provider(provider_name, "gcp_iam", manifest.get("display_name") or provider_name)
-    known = {
-        (identity.identifier.lower(), identity.type): identity
-        for identity in (known_identities or [])
-    }
+    known: dict[tuple[str, str], Identity] = {}
+    for identity in known_identities or []:
+        known[(identity.identifier.lower(), identity.type)] = identity
+        for alias in (
+            identity.metadata.get("aliases", []) if isinstance(identity.metadata, dict) else []
+        ):
+            known[(str(alias).lower(), identity.type)] = identity
     identities: list[Identity] = []
     service_accounts: dict[str, Identity] = {}
     for row in records["service-accounts.jsonl"]:
@@ -100,8 +122,8 @@ def import_gcp_iam_zip(path: str, known_identities: list[Identity] | None = None
                     provider_name,
                     ControlObject(
                         "gcp_iam_binding",
-                        f"{resource}|{role}|{_stable(expression)}",
-                        None,
+                        f"gcp-iam-binding:{_stable(semantic)}",
+                        f"gcp-iam-binding:{_stable(semantic)}",
                         role,
                         {"condition": condition} if condition else {},
                     ),
@@ -117,19 +139,14 @@ def import_gcp_iam_zip(path: str, known_identities: list[Identity] | None = None
             )
         for raw_member in row.get("members") or []:
             member = str(raw_member)
-            kind, identifier, prefix = _principal(member)
+            kind, identifier, prefix, principal_metadata = _principal(member)
             resolved: Identity | None = None
             if prefix == "serviceAccount":
                 resolved = service_accounts.get(identifier) or known.get(
                     (identifier, IdentityType.TECHNICAL_ACCOUNT)
                 )
-            elif prefix in {"user", "group"}:
-                resolved = known.get((identifier, kind)) or known.get(
-                    (
-                        identifier,
-                        IdentityType.USER_ACCOUNT if prefix == "user" else IdentityType.GROUP,
-                    )
-                )
+            elif prefix in {"user", "group", "domain"}:
+                resolved = known.get((identifier, kind))
             if resolved:
                 identity_provider, identity_identifier = resolved.provider, resolved.identifier
             else:
@@ -142,9 +159,16 @@ def import_gcp_iam_zip(path: str, known_identities: list[Identity] | None = None
                             provider_name,
                             identifier,
                             kind,
-                            IdentityStatus.UNKNOWN,
-                            built_in=prefix in {"allUsers", "allAuthenticatedUsers"},
-                            metadata={"unresolved": True, "principal": member},
+                            IdentityStatus.DELETED
+                            if principal_metadata.get("deleted")
+                            else IdentityStatus.UNKNOWN,
+                            built_in=bool(principal_metadata.get("built_in")),
+                            metadata={
+                                "unresolved": True,
+                                "principal": member,
+                                "principal_type": prefix,
+                                **principal_metadata,
+                            },
                         )
                     )
             assignments.append(

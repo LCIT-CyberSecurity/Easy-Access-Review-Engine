@@ -47,6 +47,31 @@ def read_artifact(
             provider = manifest.get("provider")
             if not isinstance(provider, str) or not provider.strip():
                 raise ValueError("Artifact manifest must define provider")
+            requested = manifest.get("requested_surfaces", [])
+            completed = manifest.get("completed_surfaces", [])
+            if (
+                not isinstance(requested, list)
+                or not isinstance(completed, list)
+                or not set(completed).issubset(set(requested))
+            ):
+                raise ValueError("Artifact manifest has invalid surface completion data")
+            surface_files = {
+                "users": "users.jsonl",
+                "groups": "groups.jsonl",
+                "memberships": "memberships.jsonl",
+                "admin_roles": "admin-roles.jsonl",
+                "admin_role_assignments": "admin-role-assignments.jsonl",
+                "iam_allow_policies": "iam-bindings.jsonl",
+                "service_accounts": "service-accounts.jsonl",
+            }
+            required_names = {
+                surface_files[surface] for surface in completed if surface in surface_files
+            }
+            missing = sorted(required_names - set(names))
+            if manifest.get("completeness") == "full" and missing:
+                raise ValueError(f"FULL artifact is missing completed surface files: {missing}")
+            if manifest.get("completeness") == "full" and set(completed) != set(requested):
+                raise ValueError("FULL artifact does not complete every requested surface")
             records: dict[str, list[dict[str, Any]]] = {}
             for name in files:
                 if name not in names:
@@ -72,6 +97,24 @@ def read_artifact(
                         raise ValueError(f"Artifact record in {name} must be an object")
                     rows.append(value)
                 records[name] = rows
+            counts = manifest.get("counts")
+            if isinstance(counts, dict):
+                count_keys = {
+                    "users.jsonl": "users",
+                    "groups.jsonl": "groups",
+                    "memberships.jsonl": "memberships",
+                    "admin-roles.jsonl": "admin_roles",
+                    "admin-role-assignments.jsonl": "admin_role_assignments",
+                    "iam-bindings.jsonl": "iam-bindings",
+                    "service-accounts.jsonl": "service-accounts",
+                }
+                for filename, key in count_keys.items():
+                    if (
+                        key in counts
+                        and filename in records
+                        and int(counts[key]) != len(records[filename])
+                    ):
+                        raise ValueError(f"Artifact count mismatch for {key}")
             return manifest, records
     except BadZipFile as exc:
         raise ValueError("Invalid ZIP archive") from exc

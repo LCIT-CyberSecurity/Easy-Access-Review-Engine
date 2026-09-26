@@ -49,6 +49,8 @@ def validate_connector(data: Any, expected_name: str | None = None) -> None:
     missing = [key for key in required if not connection.get(key)]
     if missing:
         raise ConfigError("Missing connection settings: " + ", ".join(missing))
+    if kind == "gcp_iam" and (not str(connection.get("scope", "")).startswith("projects/") or not str(connection.get("scope", "")).removeprefix("projects/")):
+        raise ConfigError("GCP V1 supports only scope projects/<project>")
     collection = data.get("collection", {})
     if not isinstance(collection, dict):
         raise ConfigError("Connector collection settings must be a mapping")
@@ -109,7 +111,7 @@ def template(provider: str, kind: str) -> dict[str, Any]:
     if kind == "openldap":
         return {"provider": provider, "type": kind, "connection": {"uri": "ldaps://", "base_dn": "", "bind_dn": ""}, "collection": {"search_scope": "sub", "page_size": 1000, "connection_timeout": 10, "search_timeout": 120, "command_timeout": 180, "allow_partial": False, "allow_anonymous": False, "read_only_account": False}, "business_mapping": validate_business_mapping(kind, None)}
     if kind == "google_workspace":
-        return {"provider": provider, "type": kind, "connection": {"customer_id": "my_customer", "delegated_admin": ""}, "credentials": {"service_account_file_env": "EARE_WORKSPACE_CREDENTIALS_FILE"}, "collection": {"users": True, "groups": True, "memberships": True, "admin_roles": True, "page_size": 200, "allow_partial": False, "read_only_account": True}}
+        return {"provider": provider, "type": kind, "connection": {"customer_id": "my_customer", "delegated_admin": ""}, "credentials": {"service_account_file_env": "EARE_WORKSPACE_CREDENTIALS_FILE"}, "collection": {"users": True, "groups": True, "memberships": True, "admin_roles": True, "admin_role_assignments": True, "page_size": 200, "allow_partial": False, "read_only_account": True}}
     if kind == "gcp_iam":
         return {"provider": provider, "type": kind, "connection": {"scope": "projects/"}, "credentials": {"application_default": True}, "collection": {"iam_allow_policies": True, "service_accounts": True, "allow_partial": False, "read_only_account": True}}
     raise ConfigError(f"Unsupported connector type: {kind}")

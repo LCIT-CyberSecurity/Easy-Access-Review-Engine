@@ -792,6 +792,12 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=502, detail="Source connection test failed") from exc
         if result.returncode:
             raise HTTPException(status_code=502, detail="Source connection test failed")
+        google_diagnostics = None
+        if str(candidate.get("type")) in {"google_workspace", "gcp_iam"} and result.stdout.strip():
+            try:
+                google_diagnostics = json.loads(result.stdout.splitlines()[-1])
+            except (TypeError, ValueError):
+                google_diagnostics = None
         try:
             if not connector_capabilities(str(candidate["type"])).attribute_mapping:
                 diagnostics = []
@@ -806,6 +812,7 @@ def create_app(db_path: str | None = None):
         return {
             "status": "healthy",
             "connection": {"status": "success", "message": "Connection test succeeded"},
+            "diagnostics": (google_diagnostics or {}).get("diagnostics", []),
             "provider": candidate["provider"],
             "mapping": {"warning": mapping_warning, "diagnostics": diagnostics},
             "message": "Connection test succeeded",
@@ -863,7 +870,7 @@ def create_app(db_path: str | None = None):
             imports = {row.get("id"): str(row.get("completeness") or row.get("scope", {}).get("completeness") or Completeness.UNKNOWN) for row in repo.list_payloads("imports")}
             current = []
             for provider in requested:
-                candidates = [snapshot for snapshot in snapshots if any(item.name == provider for item in snapshot.providers)]
+                candidates = [snapshot for snapshot in snapshots if len(snapshot.providers) == 1 and snapshot.providers[0].name == provider]
                 if not candidates:
                     raise HTTPException(status_code=404, detail=f"No snapshot available for provider {provider}")
                 current.append(candidates[-1])
