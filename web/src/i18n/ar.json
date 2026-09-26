@@ -201,7 +201,16 @@
     "notConfigured": "غير مُعدّ",
     "warning": "تحذير",
     "source": "Source",
-    "application": "Source / application"
+    "application": "Source / application",
+    "coverageTitle": "نطاق جمع بيانات Google",
+    "users": "المستخدمون",
+    "groups": "المجموعات",
+    "memberships": "العضويات",
+    "adminRoles": "أدوار المسؤول والتعيينات",
+    "iamAllowPolicies": "سياسات السماح في IAM",
+    "serviceAccounts": "حسابات الخدمة",
+    "buildSnapshot": "إنشاء اللقطة الحالية",
+    "readOnlyGoogle": "يجب أن تملك بيانات اعتماد Google أدواراً أو نطاقات للقراءة فقط؛ التفويض على مستوى النطاق لا يجعل الحساب للقراءة فقط بحد ذاته."
   },
   "settings": {
     "settings": "الإعدادات",

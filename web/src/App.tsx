@@ -3281,6 +3281,15 @@ function CampaignNew({ principal }: { principal: Principal }) {
         }),
       onSuccess: setPreview,
     }),
+    compose = useMutation({
+      mutationFn: () => postJson("snapshots/compose", { providers: vals(form.providers) }),
+      onSuccess: async (snapshot) => {
+        await snap.refetch();
+        setForm((current) => ({ ...current, snapshot_id: s(snapshot.id) }));
+        toast("ok", ui("source.buildSnapshot"));
+      },
+      onError: (e: unknown) => toast("error", s(e, "Unable to build the snapshot")),
+    }),
     toast = useToast(),
     create = useMutation({
       mutationFn: async (open: boolean) => {
@@ -3403,6 +3412,9 @@ function CampaignNew({ principal }: { principal: Principal }) {
                 ))}
               </select>
               <span className="field-note">Choose at least one provider. Use Ctrl/Cmd to select several.</span>
+              {vals(form.providers).length > 1 ? (
+                <button type="button" className="button subtle" disabled={compose.isPending} onClick={() => compose.mutate()}>{ui("source.buildSnapshot")}</button>
+              ) : null}
             </label>
           ) : null}
           {form.scope_type === "accesses" ? (
@@ -5611,6 +5623,29 @@ function Sources({ principal }: { principal: Principal }) {
                 <p className="field-note">Only enable this when the directory intentionally permits anonymous read access. Authenticated collection should use LDAPS or StartTLS.</p>
               </>
             )}
+            {editing.type === "google_workspace" ? (
+              <section className="source-coverage">
+                <h4>{ui("source.coverageTitle")}</h4>
+                {[["users", "source.users"], ["groups", "source.groups"], ["memberships", "source.memberships"], ["admin_roles", "source.adminRoles"]].map(([key, label]) => (
+                  <label className="checkbox-label" key={key}>
+                    <input type="checkbox" checked={(editing.collection as Row | undefined)?.[key] !== false} onChange={(e) => updateNested("collection", key, e.target.checked)} />
+                    {ui(label)}
+                  </label>
+                ))}
+                <p className="field-note">{ui("source.readOnlyGoogle")}</p>
+              </section>
+            ) : editing.type === "gcp_iam" ? (
+              <section className="source-coverage">
+                <h4>{ui("source.coverageTitle")}</h4>
+                {[['iam_allow_policies', 'source.iamAllowPolicies'], ['service_accounts', 'source.serviceAccounts']].map(([key, label]) => (
+                  <label className="checkbox-label" key={key}>
+                    <input type="checkbox" checked={(editing.collection as Row | undefined)?.[key] !== false} onChange={(e) => updateNested("collection", key, e.target.checked)} />
+                    {ui(label)}
+                  </label>
+                ))}
+                <p className="field-note">{ui("source.readOnlyGoogle")}</p>
+              </section>
+            ) : null}
             <h4>COLLECTION ACCOUNT</h4>
             <label className="checkbox-label" data-guide-target="read-only-account">
               <input

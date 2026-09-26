@@ -201,7 +201,16 @@
     "notConfigured": "No configurado",
     "warning": "Advertencia",
     "source": "Source",
-    "application": "Source / application"
+    "application": "Source / application",
+    "coverageTitle": "Cobertura de recopilación de Google",
+    "users": "Usuarios",
+    "groups": "Grupos",
+    "memberships": "Membresías",
+    "adminRoles": "Roles de administrador y asignaciones",
+    "iamAllowPolicies": "Políticas IAM de autorización",
+    "serviceAccounts": "Cuentas de servicio",
+    "buildSnapshot": "Crear instantánea actual",
+    "readOnlyGoogle": "Las credenciales de Google deben tener roles o permisos de solo lectura; la delegación en todo el dominio no hace que una cuenta sea de solo lectura por sí sola."
   },
   "settings": {
     "settings": "Configuración",

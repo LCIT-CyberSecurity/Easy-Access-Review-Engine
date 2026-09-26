@@ -201,7 +201,16 @@
     "notConfigured": "Not configured",
     "warning": "Warning",
     "source": "Source",
-    "application": "Source / application"
+    "application": "Source / application",
+    "coverageTitle": "Google collection coverage",
+    "users": "Users",
+    "groups": "Groups",
+    "memberships": "Memberships",
+    "adminRoles": "Admin roles and assignments",
+    "iamAllowPolicies": "IAM allow policies",
+    "serviceAccounts": "Service accounts",
+    "buildSnapshot": "Build current snapshot",
+    "readOnlyGoogle": "Google credentials must have read-only scopes or roles; domain-wide delegation alone does not make an account read-only."
   },
   "settings": {
     "settings": "Settings",
