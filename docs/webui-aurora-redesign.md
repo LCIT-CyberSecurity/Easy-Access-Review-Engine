@@ -85,13 +85,12 @@ working: no JSX had to be rewritten to adopt it.
 
 Result: 820 dense lines → 2 083 readable ones (one declaration per line, every
 rule grouped under the section it belongs to), while the *built* stylesheet goes
-from **81.4 kB → 71.9 kB** — smaller despite gaining a whole second appearance,
-because the duplication is gone.
+from **81.4 kB → 74.2 kB** — smaller despite gaining a whole second appearance
+and a fifth style, because the duplication is gone.
 
-### Aurora, the new default style
+### Blue, the default style
 
-Cooler neutrals, an indigo accent used as a gradient only where the product asks
-for an action, one focus ring token applied to every control, softer and more
+The product's blue accent (`#2545d3`, as on `main`) over cool neutrals, one focus ring token applied to every control, softer and more
 consistent elevation, tabular figures in every data column, and Inter's
 alternate glyph set (`cv11`, `ss01`, `cv05`) which reads better in long columns
 of counts.
@@ -121,12 +120,54 @@ nothing in it mutates data. Arrow keys move, `Enter` opens, `Esc` closes.
 - Tables load as skeleton rows shaped like the data they replace, with the
   loading word kept for screen readers.
 - `.pagination` is styled: the count sits left, the controls right.
-- The duplicated sign-in eyebrow is gone; the window behind the sign-in panel
-  matches it.
+- The window behind the sign-in panel matches it. The sign-in keeps the LCIT
+  navy composition of `main`, including its `WELCOME BACK` eyebrow.
 - Section headings are stored as words and shouted by CSS in the rail only.
+- Every rail entry has its own icon (reviews, campaigns and actions no longer
+  share a check mark; users and audit trail no longer reuse other glyphs).
+- Page titles drop the `EARE` eyebrow: the breadcrumb already names the section.
+- Introductory prose is held to a 76-character measure on wide screens.
+- Empty states open on an accent glyph and lead with a primary action.
+- The rail uses the LCIT mark without its tagline (`lcit-mark.png`), which was
+  unreadable at that size; sign-in keeps the full logo.
+- Disabled pagination buttons stay legible instead of fading to near-invisible.
+- A row of actions under a table or a sentence keeps its distance from it.
 - The LCIT mark gets a plate on the dark rail instead of disappearing into it.
 - The bundle is split: 666 kB in one chunk → 316 kB of application over a
   cacheable 238 kB vendor chunk, so a release no longer re-ships React.
+
+### Density
+
+Content reads at `main`'s size (15px body text, 15×18px table cells). The rail is
+260px; its links grow from 38px to 46px so the navigation fills a tall screen
+without turning into oversized buttons. Page gutters scale from 24px to 48px and
+the content column stops at 1840px.
+
+### Tables as one unit
+
+- The pagination is the table card's footer; with a single page it only states
+  the count.
+- Page-level actions (the remediation CSV export) sit at the end of the toolbar.
+- The search box is one field, not a box inside a box.
+- Sort carets appear on hover, focus, or on the sorted/filtered column only.
+- Tables drop tabular figures: Inter widens the hyphen with them.
+- A destructive row action (Delete) stays quiet until pointed at.
+
+### Reports and settings pages
+
+- Reports: the four download formats are one joined control; "Open full report"
+  is the primary action. Campaign choice and comparison share one toolbar.
+- Report figures are one strip divided into columns instead of nine cards.
+- Reviewer coverage and opened/closed dates are shown as text, not raw JSON/ISO.
+- Section titles no longer carry the prose `h3` top margin inside their card.
+- Stacked panels keep 16px between them; authentication methods put the title
+  and its status on one line.
+
+### Business permissions
+
+A Golden access may carry several business permissions (`read, write, execute`).
+The Golden table and the access drawer edit them as a set of toggles and store
+them as one comma-separated value, so the API is unchanged.
 
 ### Accessibility and RTL
 

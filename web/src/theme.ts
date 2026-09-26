@@ -4,16 +4,22 @@
 // Keeping them apart means every style works in both appearances, instead of
 // dark being a fifth style that has to be maintained on its own.
 
-export type ThemeId = "default" | "azure" | "violet" | "studio";
+export type ThemeId = "default" | "aurora" | "azure" | "violet" | "studio";
 export type Appearance = "light" | "dark" | "system";
 
 export const THEMES: { id: ThemeId; name: string; summary: string; detail: string }[] = [
   {
     id: "default",
-    name: "Aurora",
+    name: "Blue",
     summary: "The product's own chrome",
     detail:
-      "Cool neutrals, an indigo accent and a calm grid. Built for long review sessions where the data carries the page rather than the decoration.",
+      "Cool neutrals, the product's blue accent and a calm grid. Built for long review sessions where the data carries the page rather than the decoration.",
+  },
+  {
+    id: "aurora",
+    name: "Aurora",
+    summary: "Indigo, the redesign's first palette",
+    detail: "Cool neutrals with an indigo-to-violet accent and a soft aurora wash behind the page.",
   },
   {
     id: "azure",

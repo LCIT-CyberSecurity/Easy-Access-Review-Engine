@@ -5,10 +5,13 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowLeft,
+  CalendarCheck,
   Check,
   ChevronRight,
+  ClipboardCheck,
   CornerDownLeft,
   Database,
+  FileBarChart,
   FileDown,
   HelpCircle,
   KeyRound,
@@ -21,11 +24,14 @@ import {
   Moon,
   MoreHorizontal,
   Palette,
+  ScrollText,
   Search,
   Settings,
   ShieldCheck,
   Sun,
+  UserCog,
   Users,
+  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -84,6 +90,30 @@ const s = (v: unknown, f = "—") =>
 const ui = (key: string, options?: Record<string, string | number>) => String(i18n.t(key, options as never));
 const count = (rows: Row[], keep: (row: Row) => boolean) => rows.filter(keep).length;
 const DEFAULT_GOLDEN_CAPABILITIES = ["read", "write", "delete", "execute", "approve", "admin", "grant"];
+/** A business permission may combine several rights ("read, write, execute"); it is stored as one list. */
+export const splitPermissions = (value: unknown): string[] =>
+  Array.from(new Set(s(value, "").split(/[,;|]/).map((part) => part.trim()).filter(Boolean)));
+export const joinPermissions = (values: string[]): string => values.join(", ");
+function PermissionPicker({ value, options, disabled, onChange }: { value: string; options: string[]; disabled?: boolean; onChange: (value: string) => void }) {
+  const selected = splitPermissions(value),
+    // A stored value outside the catalogue stays visible so saving never drops it.
+    all = [...options, ...selected.filter((option) => !options.includes(option))];
+  return (
+    <div className="permission-picker" role="group">
+      {all.map((option) => (
+        <label key={option} className={selected.includes(option) ? "permission-chip selected" : "permission-chip"}>
+          <input
+            type="checkbox"
+            checked={selected.includes(option)}
+            disabled={disabled}
+            onChange={(event) => onChange(joinPermissions(all.filter((item) => (item === option ? event.target.checked : selected.includes(item)))))}
+          />
+          {option}
+        </label>
+      ))}
+    </div>
+  );
+}
 export const goldenAccessEditIsDirty = (value: Row | null): boolean => Boolean(value &&
   ["application", "business_permission", "owner"].some((field) => s(value[field], "") !== s(value[`original_${field}`], "")));
 export const goldenAccessEditPayload = (value: Row): Row => ({
@@ -371,6 +401,7 @@ function Login() {
           m.mutate();
         }}
       >
+        <span className="auth-eyebrow">{ui("auth.welcomeBack").toUpperCase()}</span>
         <h1>{ui("auth.welcomeBack")}</h1>
         <p>{ui("auth.signInContinue")}</p>
         <label>
@@ -460,6 +491,16 @@ const UI_LABEL_KEYS: Record<string, string> = {
   "Open my queue": "dashboard.openMyQueue", "Needs attention": "dashboard.needsAttention", "Campaigns in progress": "dashboard.campaignsInProgress",
   "No results": "common.noResults", "No reviews assigned": "ui.noReviewsAssigned", "No campaign is open": "ui.noCampaignOpen",
 };
+/** Reviewer resolution arrives as `{"resolved":n,"unresolved":n}`, possibly serialised; show it as a sentence. */
+const reviewerCoverage = (value: unknown): string => {
+  let parsed = value;
+  if (typeof value === "string") {
+    try { parsed = JSON.parse(value); } catch { return value || "Not available"; }
+  }
+  if (!parsed || typeof parsed !== "object") return "Not available";
+  const row = parsed as Row;
+  return `${s(row.resolved, "0")} resolved · ${s(row.unresolved, "0")} unresolved`;
+};
 const uiLabel = (value: string) => UI_LABEL_KEYS[value] ? ui(UI_LABEL_KEYS[value]) : value;
 
 
@@ -468,7 +509,7 @@ const navSections = [
     heading: null,
     items: [
       { to: "/", label: "Overview", icon: LayoutDashboard, roles: ["ADMIN", "OPERATOR"] },
-      { to: "/reviews", label: "My Reviews", icon: Check, roles: ["ADMIN", "OPERATOR", "GROUP_OWNER"] },
+      { to: "/reviews", label: "My Reviews", icon: ClipboardCheck, roles: ["ADMIN", "OPERATOR", "GROUP_OWNER"] },
     ],
   },
   {
@@ -482,19 +523,19 @@ const navSections = [
   {
     heading: "AUDIT",
     items: [
-      { to: "/campaigns", label: "Campaigns", icon: Check, roles: ["ADMIN", "OPERATOR"] },
+      { to: "/campaigns", label: "Campaigns", icon: CalendarCheck, roles: ["ADMIN", "OPERATOR"] },
       { to: "/findings", label: "Findings", icon: AlertTriangle, roles: ["ADMIN", "OPERATOR"] },
-      { to: "/actions", label: "Actions", icon: Check, roles: ["ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"] },
-      { to: "/reports", label: "Reports", icon: FileDown, roles: ["ADMIN", "OPERATOR"] },
+      { to: "/actions", label: "Actions", icon: Wrench, roles: ["ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"] },
+      { to: "/reports", label: "Reports", icon: FileBarChart, roles: ["ADMIN", "OPERATOR"] },
     ],
   },
   {
     heading: "SYSTEM",
     items: [
       { to: "/sources", label: "Sources & IdPs", icon: Database, roles: ["ADMIN", "OPERATOR"] },
-      { to: "/system/users", label: "Users & permissions", icon: Users, roles: ["ADMIN"] },
+      { to: "/system/users", label: "Users & permissions", icon: UserCog, roles: ["ADMIN"] },
       { to: "/system/authentication", label: "Authentication", icon: Settings, roles: ["ADMIN"] },
-      { to: "/system/audit", label: "Audit trail", icon: FileDown, roles: ["ADMIN"] },
+      { to: "/system/audit", label: "Audit trail", icon: ScrollText, roles: ["ADMIN"] },
     ],
   },
 ];
@@ -677,7 +718,7 @@ function Shell({ principal }: { principal: Principal }) {
     <div className="app-shell">
       <aside className={c ? "sidebar open" : "sidebar"}>
         <div className="brand">
-          <img className="brand-logo" src="/lcit-logo.png" alt="LCIT Cybersecurity" />
+          <img className="brand-logo" src="/lcit-mark.png" alt="LCIT Cybersecurity" />
           <div>
             <span>EARE</span>
             <small>Access governance</small>
@@ -697,7 +738,7 @@ function Shell({ principal }: { principal: Principal }) {
                     onClick={() => setC(false)}
                     className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
                   >
-                    <I size={17} />
+                    <I size={18} />
                     {ui(NAV_KEYS[label] ?? label)}
                   </NavLink>
                 ))}
@@ -775,7 +816,6 @@ function Head({ title, subtitle, children }: { title: string; subtitle?: string;
   return (
     <div className="page-header">
       <div>
-        <div className="eyebrow">EARE</div>
         <h1>{uiLabel(title)}</h1>
         {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
       </div>
@@ -975,6 +1015,13 @@ function Pager({
 }) {
   const pages = pageCount(total, limit),
     p = Math.floor(offset / limit) + 1;
+  // A single page has nowhere to go: the footer then only states the count.
+  if (pages <= 1 && total <= 25)
+    return (
+      <div className="pagination">
+        <span>{pageLabel(total, limit, offset)}</span>
+      </div>
+    );
   return (
     <div className="pagination">
       <span>{pageLabel(total, limit, offset)}</span>
@@ -2157,7 +2204,9 @@ function AccessDetail({ access }: { access: Row }) {
                 [ui("labels.description"), "description"],
                 [ui("labels.owner"), "owner"],
               ].map(([label, field]) => (
-                <label key={field}>{label}<input value={s(manual[field], "")} onChange={(event) => setManual((current) => ({ ...current, [field]: event.target.value }))} /></label>
+                field === "business_permission"
+                  ? <div key={field} className="drawer-form-group"><span>{label}</span><PermissionPicker value={s(manual[field], "")} options={DEFAULT_GOLDEN_CAPABILITIES} onChange={(value) => setManual((current) => ({ ...current, [field]: value }))} /></div>
+                  : <label key={field}>{label}<input value={s(manual[field], "")} onChange={(event) => setManual((current) => ({ ...current, [field]: event.target.value }))} /></label>
               ))}
               <button className="button primary" disabled={saveContext.isPending} onClick={() => saveContext.mutate()}>Save manual reference</button>
             </div>
@@ -2584,6 +2633,12 @@ function List({ path, title, principal }: { path: string; title: string; princip
           onChange={setCampaign}
           campaigns={campaignRows}
         />
+        {!findings ? (
+          <a className="button subtle toolbar-end" href={`/api/remediation-actions/export?${exportParams.toString()}`}>
+            <FileDown size={15} />
+            Download remediation CSV
+          </a>
+        ) : null}
       </Filter>
       <Table
           cols={
@@ -2628,7 +2683,6 @@ function List({ path, title, principal }: { path: string; title: string; princip
               ],
         )}
       />
-      {!findings ? <div className="button-row action-export-row"><a className="button subtle" href={`/api/remediation-actions/export?${exportParams.toString()}`}>Download remediation CSV</a></div> : null}
       <Pager
         total={x.q.data?.total ?? 0}
         limit={x.limit}
@@ -3950,7 +4004,7 @@ function Golden() {
           </div>
         )}
       </Head>
-      <p className="muted">
+      <p className="page-intro">
         The Golden Source is the list of accesses that are <strong>expected</strong>. Everything the systems
         contain beyond this list is reported as unexpected, and everything missing from the systems is
         reported as missing.
@@ -4069,9 +4123,11 @@ function Golden() {
             <>
               <p>Nothing has been collected yet, so there is no state to declare as expected.</p>
               <p className="muted">Synchronize a source first, then come back here.</p>
-              <NavLink className="button subtle" to="/sources">
-                Go to Sources &amp; IdPs
-              </NavLink>
+              <div className="button-row">
+                <NavLink className="button primary" to="/sources">
+                  Go to Sources &amp; IdPs
+                </NavLink>
+              </div>
             </>
           ) : (
             <div className="admin-form">
@@ -4220,12 +4276,9 @@ function Golden() {
                         <option value="__new_application__">+ Add new application</option>
                       </select><small>Observed: {contextValue(r.business_context, "application", "source") || "—"}</small></div>
                     : <button className="link-button" onClick={() => requestAccessEdit(r)}>{application || "—"}</button>;
-                  const selectCell = (field: string, value: string, options: string[], placeholder: string) => editing
-                    ? <div className="inline-edit-stack"><select value={s(editingAccess?.[field], "")} onChange={(event) => setEditingAccess({ ...editingAccess, [field]: event.target.value })} disabled={saveAccessRow.isPending}>
-                        <option value="">{placeholder}</option>
-                        {options.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select><small>Observed: {contextValue(r.business_context, "business_permission", "source") || "—"}</small></div>
-                    : <button className="link-button" onClick={() => requestAccessEdit(r)}>{value || "—"}</button>;
+                  const permissionCell = editing
+                    ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>Observed: {contextValue(r.business_context, "business_permission", "source") || "—"}</small></div>
+                    : <button className="link-button" onClick={() => requestAccessEdit(r)}>{businessPermission ? joinPermissions(splitPermissions(businessPermission)) : "Not provided"}</button>;
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.access_display_name, s(r.access_name))}
@@ -4238,7 +4291,7 @@ function Golden() {
                       })}
                     </Sub>,
                     applicationCell,
-                    selectCell("business_permission", businessPermission || "Not provided", permissionOptions, "Select permission"),
+                    permissionCell,
                     editing ? (
                       <div className="inline-edit-stack"><select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} disabled={saveAccessRow.isPending}>
                         <option value="">Select owner</option>
@@ -5343,7 +5396,7 @@ export function Reports() {
           <div className="empty">
             <strong>{uiLabel("No campaign yet")}</strong>
             <span>{ui("ui.reportExplain", { defaultValue: "A report describes what a campaign decided. Run one first." })}</span>
-            <NavLink className="button subtle" to="/campaigns/new">
+            <NavLink className="button primary" to="/campaigns/new">
               {uiLabel("Create a campaign")}
             </NavLink>
           </div>
@@ -5354,43 +5407,21 @@ export function Reports() {
     <>
       <Head title="Reports">
         <div className="button-row">
-          <a className="button subtle" href={`/api/reports/${id}/html`}>
-            {uiLabel("Download HTML")}
-          </a>
-          <a className="button subtle" href={`/api/reports/${id}/csv`}>
-            {uiLabel("Download CSV")}
-          </a>
-          <a className="button subtle" href={`/api/reports/${id}/json`}>
-            {uiLabel("Download JSON")}
-          </a>
-          <a className="button subtle" href={`/api/reports/${id}/pdf`}>
-            {uiLabel("Download PDF")}
-          </a>
-          <a className="button subtle" href={`/api/reports/${id}/html`} target="_blank" rel="noreferrer">
+          {/* One control for the four formats instead of four equal buttons. */}
+          <div className="button-group" role="group" aria-label={uiLabel("Download")}>
+            <span className="button-group-label"><FileDown size={15} />{uiLabel("Download")}</span>
+            <a className="button subtle" href={`/api/reports/${id}/html`} aria-label={uiLabel("Download HTML")}>HTML</a>
+            <a className="button subtle" href={`/api/reports/${id}/csv`} aria-label={uiLabel("Download CSV")}>CSV</a>
+            <a className="button subtle" href={`/api/reports/${id}/json`} aria-label={uiLabel("Download JSON")}>JSON</a>
+            <a className="button subtle" href={`/api/reports/${id}/pdf`} aria-label={uiLabel("Download PDF")}>PDF</a>
+          </div>
+          <a className="button primary" href={`/api/reports/${id}/html`} target="_blank" rel="noreferrer">
             {uiLabel("Open full report")}
           </a>
         </div>
       </Head>
-      <section className="report-controls panel">
-        <div>
-          <span className="eyebrow">Campaign comparison</span>
-          <label>
-            Previous campaign
-            <select className="filter-button" value={compareId} onChange={(e) => setCompareId(e.target.value)}>
-              <option value="">No comparison</option>
-              {campaigns.filter((r) => s(r.id) !== id).map((r) => (
-                <option key={s(r.id)} value={s(r.id)}>
-                  {s(r.name, s(r.id))} · {reportPeriod(r)}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div className="muted">Compare decisions, classifications and reviewed population across campaign dates.</div>
-      </section>
-      {comparison && compareResults.data ? <ReportComparison current={resultsQuery.data?.summary} previous={compareResults.data?.summary} /> : null}
-      <div className="filterbar">
-        <select className="filter-button" value={id} onChange={(e) => setChosen(e.target.value)}>
+      <div className="filterbar report-toolbar">
+        <select className="filter-button" value={id} onChange={(e) => setChosen(e.target.value)} aria-label="Campaign">
           {campaigns.map((r) => (
             <option key={s(r.id)} value={s(r.id)}>
               {s(r.name)} — {s(r.status)}
@@ -5405,7 +5436,19 @@ export function Reports() {
               ? `opened ${when(campaign.opened_at)}`
               : "not opened yet"}
         </span>
+        <label className="toolbar-end report-compare" title="Compare decisions, classifications and reviewed population across campaign dates.">
+          Compare with
+          <select className="filter-button" value={compareId} onChange={(e) => setCompareId(e.target.value)}>
+            <option value="">No comparison</option>
+            {campaigns.filter((r) => s(r.id) !== id).map((r) => (
+              <option key={s(r.id)} value={s(r.id)}>
+                {s(r.name, s(r.id))} · {reportPeriod(r)}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
+      {comparison && compareResults.data ? <ReportComparison current={resultsQuery.data?.summary} previous={compareResults.data?.summary} /> : null}
       <section className="report-workspace">
         <div className="report-workspace-head">
           <div>
@@ -5414,11 +5457,11 @@ export function Reports() {
             <p className="muted">Native EARE restitution workspace · {s(campaign.pilot, "Pilot not recorded")}</p>
           </div>
         </div>
-        <section className="panel report-profile"><div className="panel-title"><h3>Campaign profile</h3><Status v={s(campaign.status)} /></div><div className="report-facts"><span><b>Period</b>{campaign.opened_at ? when(campaign.opened_at) : "Not opened"} → {campaign.closed_at ? when(campaign.closed_at) : "Not closed"}</span><span><b>Scope</b>{readableDetails(campaign.scope)}</span><span><b>Snapshot</b>{s(campaign.snapshot_id)}</span><span><b>Golden baseline</b>{s(campaign.golden_source_version_id)}</span><span><b>Reviewer coverage</b>{s(campaign.reviewer_resolution, "Not available")}</span></div></section>
+        <section className="panel report-profile"><div className="panel-title"><h3>Campaign profile</h3><Status v={s(campaign.status)} /></div><div className="report-facts"><span><b>Period</b>{campaign.opened_at ? when(campaign.opened_at) : "Not opened"} → {campaign.closed_at ? when(campaign.closed_at) : "Not closed"}</span><span><b>Scope</b>{readableDetails(campaign.scope)}</span><span><b>Snapshot</b>{s(campaign.snapshot_id)}</span><span><b>Golden baseline</b>{s(campaign.golden_source_version_id)}</span><span><b>Reviewer coverage</b>{reviewerCoverage(campaign.reviewer_resolution)}</span></div></section>
         <section className="report-section"><div className="panel-title"><h3>Executive summary</h3><span className="muted">Observed / expected and decision outcomes are separate.</span></div><div className="metrics report-metrics">{[["Reviewed accesses", summary.total], ["Approved", summary.approve], ["Revoked", summary.revoke], ["N/A", summary.not_applicable], ["Pending", summary.pending], ["As expected", summary.expected_and_observed], ["Unexpected", summary.unexpected], ["Missing", summary.missing], ["Unknown / scoped", summary.unknown_due_to_scope]].map(([label, value]) => <div className="metric" key={String(label)}><div className="metric-label">{String(label)}</div><strong>{s(value, "0")}</strong></div>)}</div></section>
         <section className="panel report-observations"><h3>Key observations</h3><ul><li>{s(summary.unexpected, "0")} unexpected accesses identified.</li><li>{s(summary.missing, "0")} expected accesses missing.</li><li>{s(summary.revoke, "0")} revoked decisions require remediation.</li>{Number(summary.disabled_with_access) ? <li>{s(summary.disabled_with_access)} disabled accounts retain access.</li> : null}{Number(summary.technical_account_without_owner) ? <li>{s(summary.technical_account_without_owner)} technical accounts have no owner.</li> : null}</ul></section>
         <section className="panel report-section"><div className="panel-title"><h3>Remediation / action plan</h3><NavLink className="button subtle" to={`/actions?campaign=${encodeURIComponent(id)}`}>View all actions</NavLink></div><div className="metrics report-metrics">{[["Total actions", actionSummary.total], ["Pending", actionSummary.pending], ["Exported", actionSummary.exported], ["Not completed", actionSummary.not_completed], ["Completed", actionSummary.completed]].map(([label, value]) => <div className="metric" key={String(label)}><div className="metric-label">{String(label)}</div><strong>{s(value, "0")}</strong></div>)}</div><p className="field-note">Exported means sent for operational work; Completed means the correction was confirmed.</p><Table q={actionsQuery} cols={["Action", "Identity", "Application / access", "Source", "Permission", "Reason", "Status"]} rows={actionRows.map((row) => [s(row.action, s(row.decision)), s(row.identity_display_name, s(row.identity_identifier)), s(row.access_display_name, s(row.access_name)), s(row.access_provider), s(row.technical_permission, s(row.permission)), s(row.comment, s(row.action_reason)), <Status v={s(row.status)} />])} /></section>
-        <section className="panel report-section"><div className="panel-title"><h3>Coverage / traceability</h3><span className="muted">Governance evidence for the selected campaign.</span></div><div className="report-facts"><span><b>Providers / sources</b>{s(summary.providers, "0")}</span><span><b>Identities reviewed</b>{s(summary.identities, "0")}</span><span><b>Accesses reviewed</b>{s(summary.total, "0")}</span><span><b>Campaign ID</b>{id}</span><span><b>Pilot</b>{s(campaign.pilot)}</span><span><b>Opened / closed</b>{s(campaign.opened_at)} / {s(campaign.closed_at)}</span><span><b>Decision count</b>{Number(summary.approve || 0) + Number(summary.revoke || 0) + Number(summary.not_applicable || 0)}</span></div></section>
+        <section className="panel report-section"><div className="panel-title"><h3>Coverage / traceability</h3><span className="muted">Governance evidence for the selected campaign.</span></div><div className="report-facts"><span><b>Providers / sources</b>{s(summary.providers, "0")}</span><span><b>Identities reviewed</b>{s(summary.identities, "0")}</span><span><b>Accesses reviewed</b>{s(summary.total, "0")}</span><span><b>Campaign ID</b>{id}</span><span><b>Pilot</b>{s(campaign.pilot)}</span><span><b>Opened / closed</b>{campaign.opened_at ? when(campaign.opened_at) : "—"} / {campaign.closed_at ? when(campaign.closed_at) : "—"}</span><span><b>Decision count</b>{Number(summary.approve || 0) + Number(summary.revoke || 0) + Number(summary.not_applicable || 0)}</span></div></section>
         <section className="report-section"><div className="panel-title"><h3>Detailed results</h3><span className="muted">Human-readable review evidence.</span></div><Filter v={search} onChange={(value) => { setSearch(value); setOffset(0); }}><SelectFilter value={classification} onChange={(value) => { setClassification(value); setOffset(0); }} options={vals((resultsQuery.data?.facets as Row | undefined)?.classification)} placeholder="Classification" /><SelectFilter value={decision} onChange={(value) => { setDecision(value); setOffset(0); }} options={vals((resultsQuery.data?.facets as Row | undefined)?.decision)} placeholder="Decision" /><SelectFilter value={provider} onChange={(value) => { setProvider(value); setOffset(0); }} options={vals((resultsQuery.data?.facets as Row | undefined)?.provider)} placeholder="Provider" /></Filter><Table q={resultsQuery} cols={["Identity", "Access", "Application", "Permission", "Expected / observed", "Decision", "Reason", "Reviewer"]} fields={["identity", "access", "service", "permission", "classification", "decision", "action_reason", "reviewer"]} sorting={{ sort, order, toggle: toggleSort }} rows={reportRows.map((row) => [s(row.identity, s(row.identity_identifier)), <><strong>{s(row.access)}</strong><small className="cell-sub">{s(row.access_identifier)}</small></>, s(row.service, s(row.component)), s(row.permission), <Status v={s(row.classification)} />, <Status v={s(row.decision)} />, s(row.action_reason, s(row.issue)), s(row.reviewer)])} /><Pager total={Number(resultsQuery.data?.total ?? 0)} limit={limit} offset={offset} setOffset={setOffset} setLimit={setLimit} /></section>
       </section>
     </>
@@ -6041,25 +6084,25 @@ function Auth() {
           + Add LDAP directory
         </button>
       </Head>
-      <p className="muted">
+      <p className="page-intro">
         How people sign in to EARE. The directories EARE audits are configured in Sources &amp; IdPs.
       </p>
       {notice && <p className={notice.tone === "ok" ? "form-success" : "form-error"}>{notice.text}</p>}
-      <section className="panel">
-        <h2>Local accounts</h2>
-        <Status v="ACTIVE" />
+      <section className="panel auth-method">
+        <div className="auth-method-head"><h2>Local accounts</h2><Status v="ACTIVE" /></div>
         <p>
           {localCount} local account(s). Passwords need at least 12 characters, a password set by an
           administrator must be changed at the next sign-in, and a session lasts 8 hours.
         </p>
-        <NavLink className="button subtle" to="/system/users">
-          Manage users
-        </NavLink>
+        <div className="button-row">
+          <NavLink className="button subtle" to="/system/users">
+            Manage users
+          </NavLink>
+        </div>
       </section>
       {directories.map((r) => (
-        <section className="panel" key={s(r.id)}>
-          <h2>{s(r.name)}</h2>
-          <Status v={r.enabled ? "ACTIVE" : "DISABLED"} />
+        <section className="panel auth-method" key={s(r.id)}>
+          <div className="auth-method-head"><h2>{s(r.name)}</h2><Status v={r.enabled ? "ACTIVE" : "DISABLED"} /></div>
           <p>
             {s(r.kind)} · {s(r.endpoint)}
           </p>
@@ -6090,9 +6133,8 @@ function Auth() {
           </div>
         </section>
       ))}
-      <section className="panel">
-        <h2>Single sign-on (OIDC / SAML)</h2>
-        <Status v="NOT_YET_ACTIVE" />
+      <section className="panel auth-method">
+        <div className="auth-method-head"><h2>Single sign-on (OIDC / SAML)</h2><Status v="NOT_YET_ACTIVE" /></div>
         <p>Not available yet. People sign in with a local account or with a configured LDAP directory.</p>
       </section>
       {editing && (
