@@ -194,7 +194,8 @@ def test_public_swagger_is_read_only_and_hides_internal_routes(tmp_path):
     swagger_html = client.get("/swagger").text
     assert 'src="/swagger-ui-bundle.js"' in swagger_html
     assert 'href="/swagger-ui.css"' in swagger_html
-    assert "url: '/openapi.json'" in swagger_html
+    assert 'src="/swagger-ui-init.js"' in swagger_html
+    assert "SwaggerUIBundle({" not in swagger_html
 
 
 def test_external_user_api_and_swagger_are_disabled_by_default(tmp_path):
