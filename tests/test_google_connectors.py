@@ -262,7 +262,13 @@ def test_workspace_service_account_email_does_not_resolve_to_other_provider(tmp_
 
 
 def test_google_lab_verifier_uses_canonical_object_fields(tmp_path):
-    from scripts.google_lab.verify_google_lab import main
+    import importlib.util
+
+    verifier_path = Path(__file__).parents[1] / "scripts/google_lab/verify_google_lab.py"
+    spec = importlib.util.spec_from_file_location("verify_google_lab", verifier_path)
+    assert spec is not None and spec.loader is not None
+    verifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verifier)
 
     artifact = tmp_path / "workspace.zip"
     _artifact(
@@ -284,7 +290,7 @@ def test_google_lab_verifier_uses_canonical_object_fields(tmp_path):
     previous = sys.argv
     try:
         sys.argv = ["verify_google_lab.py", "--artifact", str(artifact), "--spec", str(spec), "--source", "workspace"]
-        assert main() == 0
+        assert verifier.main() == 0
     finally:
         sys.argv = previous
 
