@@ -420,7 +420,8 @@
       "initialCollection": "Snapshot iniziale raccolto",
       "users": "Utenti EARE configurati",
       "operatorCoverage": "Copertura degli Operatori",
-      "expectedState": "Stato atteso definito"
+      "expectedState": "Stato atteso definito",
+      "readOnlyAccounts": "Account in sola lettura"
     },
     "setup": {
       "sources": "Configura una fonte di raccolta",
@@ -428,7 +429,9 @@
       "users": "Configura gli utenti EARE",
       "operatorCoverage": "Stabilisci la copertura degli Operatori",
       "operatorCoverageIncomplete": "Alcuni provider configurati non sono coperti da un Operatore attivo.",
-      "expectedState": "Definisci lo stato atteso"
+      "expectedState": "Definisci lo stato atteso",
+      "readOnlyAccounts": "Account dedicato in sola lettura per ogni fonte",
+      "readOnlyAccountsIncomplete": "Alcune fonti non confermano ancora un account di raccolta dedicato in sola lettura."
     },
     "reviewRemediation": {
       "title": "Esamina l’avanzamento della remediation",
@@ -547,6 +550,11 @@
         "title": "Review findings",
         "description": "Some authorized review items contain findings.",
         "reason": "Findings explain observed differences that may need governance attention."
+      },
+      "readOnlyAccounts": {
+        "title": "Usare un account dedicato in sola lettura per ogni fonte",
+        "description": "Crea per EARE un account di servizio per ogni fonte, con soli diritti di lettura, quindi confermalo nelle impostazioni della fonte.",
+        "reason": "EARE deve solo leggere. Un account in grado di modificare la directory, o un account personale, aggrava l'impatto di una fuga di credenziali e confonde la traccia di audit."
       }
     },
     "page": {

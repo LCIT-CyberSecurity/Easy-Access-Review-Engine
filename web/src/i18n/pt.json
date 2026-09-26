@@ -420,7 +420,8 @@
       "initialCollection": "Snapshot inicial recolhido",
       "users": "Utilizadores EARE configurados",
       "operatorCoverage": "Cobertura de Operadores",
-      "expectedState": "Estado esperado definido"
+      "expectedState": "Estado esperado definido",
+      "readOnlyAccounts": "Contas somente leitura"
     },
     "setup": {
       "sources": "Configurar uma fonte de coleta",
@@ -428,7 +429,9 @@
       "users": "Configurar usuários do EARE",
       "operatorCoverage": "Estabelecer a cobertura de Operadores",
       "operatorCoverageIncomplete": "Alguns provedores configurados não são cobertos por um Operador ativo.",
-      "expectedState": "Definir o estado esperado"
+      "expectedState": "Definir o estado esperado",
+      "readOnlyAccounts": "Conta dedicada somente leitura por fonte",
+      "readOnlyAccountsIncomplete": "Algumas fontes ainda não confirmam uma conta de coleta dedicada somente leitura."
     },
     "reviewRemediation": {
       "title": "Revisar o progresso da remediação",
@@ -547,6 +550,11 @@
         "title": "Review findings",
         "description": "Some authorized review items contain findings.",
         "reason": "Findings explain observed differences that may need governance attention."
+      },
+      "readOnlyAccounts": {
+        "title": "Usar uma conta dedicada somente leitura para cada fonte",
+        "description": "Crie para o EARE uma conta de serviço por fonte, apenas com permissões de leitura, e confirme-a nas configurações da fonte.",
+        "reason": "O EARE só precisa ler. Uma conta capaz de alterar o diretório, ou uma conta pessoal, agrava o impacto de um vazamento de credenciais e confunde a trilha de auditoria."
       }
     },
     "page": {

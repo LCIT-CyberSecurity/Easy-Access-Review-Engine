@@ -30,6 +30,9 @@ class GuidanceContext:
     operator_count: int = 0
     operator_coverage_complete: bool = True
     uncovered_operator_domains: tuple[str, ...] = ()
+    # Sources whose administrator has not confirmed a dedicated, read-only
+    # collection account; EARE only needs to read, so it should never hold more.
+    sources_without_read_only_account: tuple[str, ...] = ()
     setup_checklist: tuple[dict[str, Any], ...] = ()
     username: str = ""
     capabilities: frozenset[str] = field(default_factory=frozenset)
@@ -268,6 +271,12 @@ def build_guidance(context: GuidanceContext) -> dict[str, Any]:
                 "guide.action.prepareCampaign", action_url="/campaigns/new",
             )
 
+    if role == "ADMIN" and context.source_count and context.sources_without_read_only_account:
+        add(
+            "dedicated_read_only_accounts", "security", "guide.rec.readOnlyAccounts.title",
+            "guide.rec.readOnlyAccounts.description", "guide.rec.readOnlyAccounts.reason", "attention",
+            "guide.action.manageSources", action_url="/sources",
+        )
     if context.unresolved_reviewers:
         recommendations.append(_recommendation(
             "unresolved_reviewers", "readiness", "guide.rec.unresolvedReviewers.title",
@@ -304,6 +313,7 @@ def build_guidance(context: GuidanceContext) -> dict[str, Any]:
             "operator_count": context.operator_count,
             "operator_coverage_complete": context.operator_coverage_complete,
             "uncovered_operator_domains": list(context.uncovered_operator_domains),
+            "sources_without_read_only_account": list(context.sources_without_read_only_account),
             "unresolved_reviewers": context.unresolved_reviewers,
             "findings": context.findings_count,
             "capabilities": sorted(context.capabilities),

@@ -5245,6 +5245,8 @@ function Sources({ principal }: { principal: Principal }) {
     [kind, setKind] = useState("preview"),
     [error, setError] = useState(""),
     [editing, setEditing] = useState<Row | null>(null),
+    // Sources are keyed by provider name, not an id, so remember whether the drawer opened on one.
+    [editingExisting, setEditingExisting] = useState(false),
     [testResult, setTestResult] = useState<Row | null>(null),
     start = useMutation({
       mutationFn: (x: { p: string; a: string }) => postJson(`sources/${x.p}/${x.a}`),
@@ -5313,6 +5315,7 @@ function Sources({ principal }: { principal: Principal }) {
   const edit = (source?: Row) => {
     setError("");
     setTestResult(null);
+    setEditingExisting(Boolean(source));
     setEditing(source ? JSON.parse(JSON.stringify(source)) : blank());
   };
   const update = (key: string, value: unknown) => setEditing((x) => (x ? { ...x, [key]: value } : x));
@@ -5411,7 +5414,7 @@ function Sources({ principal }: { principal: Principal }) {
         </section>
       )}
       {editing && (
-        <Drawer title={editing.id ? "Configure source" : "Add source"} close={() => setEditing(null)}>
+        <Drawer title={editingExisting ? "Configure source" : "Add source"} close={() => setEditing(null)}>
           <form
             className="drawer-form"
             onSubmit={(e) => {
@@ -5483,6 +5486,16 @@ function Sources({ principal }: { principal: Principal }) {
                 <p className="field-note">Only enable this when the directory intentionally permits anonymous read access. Authenticated collection should use LDAPS or StartTLS.</p>
               </>
             )}
+            <h4>COLLECTION ACCOUNT</h4>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={(editing.collection as Row | undefined)?.read_only_account === true}
+                onChange={(e) => updateNested("collection", "read_only_account", e.target.checked)}
+              />
+              This source uses a dedicated, read-only service account
+            </label>
+            <p className="field-note">EARE only reads identities and group memberships. Create one account for EARE in each directory, with read rights only: never a personal account, and never one that can change the directory.</p>
             {supportsAttributeMapping ? <>
               <h4>BUSINESS MAPPING</h4>
               <p className="field-note">Technical identifiers and group membership remain connector-controlled. Suggestions are bounded; safe custom attribute names can also be typed and are validated when saved.</p>

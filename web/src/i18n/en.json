@@ -420,7 +420,8 @@
       "initialCollection": "Initial Snapshot collected",
       "users": "EARE users configured",
       "operatorCoverage": "Operator coverage",
-      "expectedState": "Expected state defined"
+      "expectedState": "Expected state defined",
+      "readOnlyAccounts": "Read-only accounts"
     },
     "setup": {
       "sources": "Configure a collection source",
@@ -428,7 +429,9 @@
       "users": "Configure EARE users",
       "operatorCoverage": "Establish Operator coverage",
       "operatorCoverageIncomplete": "Some configured providers are not covered by an enabled Operator.",
-      "expectedState": "Define the expected state"
+      "expectedState": "Define the expected state",
+      "readOnlyAccounts": "Dedicated read-only account per source",
+      "readOnlyAccountsIncomplete": "Some sources do not yet confirm a dedicated read-only collection account."
     },
     "reviewRemediation": {
       "title": "Review remediation progress",
@@ -547,6 +550,11 @@
         "title": "Review findings",
         "description": "Some authorized review items contain findings.",
         "reason": "Findings explain observed differences that may need governance attention."
+      },
+      "readOnlyAccounts": {
+        "title": "Use a dedicated read-only account for each source",
+        "description": "Create one service account per source for EARE, with read rights only, then confirm it in the source settings.",
+        "reason": "EARE only needs to read. An account that can change the directory, or a personal one, widens the damage if its credentials leak and blurs the audit trail."
       }
     },
     "page": {

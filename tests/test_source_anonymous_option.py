@@ -34,3 +34,17 @@ def test_openldap_anonymous_option_must_be_boolean() -> None:
 
     with pytest.raises(ConfigError, match="collection.allow_anonymous must be a boolean"):
         validate_connector(config)
+
+
+def test_read_only_account_confirmation_defaults_off_and_must_be_boolean() -> None:
+    config = template("corp-ad", "active_directory")
+    config["connection"]["server"] = "dc01.corp.example"
+    assert config["collection"]["read_only_account"] is False
+    config["collection"]["read_only_account"] = "yes"
+
+    try:
+        validate_connector(config)
+    except ConfigError as error:
+        assert "collection.read_only_account must be a boolean" in str(error)
+    else:
+        raise AssertionError("a non-boolean confirmation must be rejected")

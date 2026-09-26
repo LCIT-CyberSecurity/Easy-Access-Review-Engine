@@ -189,6 +189,15 @@ The API used one SQLite connection for the system tables across FastAPI's worker
 threads; concurrent reads interleaved and returned incomplete rows, which showed
 as random 500s and sign-outs. Each worker thread now gets its own connection.
 
+### Dedicated read-only collection accounts
+
+Each source records whether it collects through a dedicated, read-only service
+account (`collection.read_only_account`, a boolean, off by default). The EARE
+Guide adds "Dedicated read-only account per source" to the admin setup
+checklist and recommends creating one for every source not yet confirmed,
+naming them in `sources_without_read_only_account`. It is an attestation by the
+administrator: EARE cannot inspect a directory account's rights itself.
+
 ### Accessibility and RTL
 
 One focus-ring token on every interactive element; `prefers-reduced-motion`

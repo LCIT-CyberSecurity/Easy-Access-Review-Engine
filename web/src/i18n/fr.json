@@ -420,7 +420,8 @@
       "initialCollection": "Snapshot initial collecté",
       "users": "Utilisateurs EARE configurés",
       "operatorCoverage": "Couverture des Opérateurs",
-      "expectedState": "État attendu défini"
+      "expectedState": "État attendu défini",
+      "readOnlyAccounts": "Comptes en lecture seule"
     },
     "setup": {
       "sources": "Configurer une source de collecte",
@@ -428,7 +429,9 @@
       "users": "Configurer les utilisateurs EARE",
       "operatorCoverage": "Établir la couverture des Opérateurs",
       "operatorCoverageIncomplete": "Certains fournisseurs configurés ne sont couverts par aucun Opérateur actif.",
-      "expectedState": "Définir l’état attendu"
+      "expectedState": "Définir l’état attendu",
+      "readOnlyAccounts": "Compte dédié en lecture seule par source",
+      "readOnlyAccountsIncomplete": "Certaines sources ne confirment pas encore un compte de collecte dédié en lecture seule."
     },
     "reviewRemediation": {
       "title": "Suivre l’avancement de la remédiation",
@@ -547,6 +550,11 @@
         "title": "Review findings",
         "description": "Some authorized review items contain findings.",
         "reason": "Findings explain observed differences that may need governance attention."
+      },
+      "readOnlyAccounts": {
+        "title": "Utiliser un compte dédié en lecture seule pour chaque source",
+        "description": "Créez pour EARE un compte de service par source, avec des droits de lecture uniquement, puis confirmez-le dans les réglages de la source.",
+        "reason": "EARE n'a besoin que de lire. Un compte capable de modifier l'annuaire, ou un compte personnel, aggrave l'impact d'une fuite d'identifiants et brouille la piste d'audit."
       }
     },
     "page": {

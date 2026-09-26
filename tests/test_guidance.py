@@ -139,3 +139,21 @@ def test_guidance_exposes_campaign_priority_facts_and_readiness() -> None:
     ))
     assert result["campaign_readiness"]["blockers"] == ["unresolved_reviewers"]
     assert result["state"]["configured_source_count"] == 1
+
+
+def test_admin_is_asked_for_a_dedicated_read_only_account_per_source() -> None:
+    result = build_guidance(_context("ADMIN", source_count=2, latest_snapshot=True, golden_available=True, operator_count=1, sources_without_read_only_account=("corp-ad",)))
+    advice = next(item for item in result["recommendations"] if item["id"] == "dedicated_read_only_accounts")
+    assert advice["action_url"] == "/sources"
+    assert advice["priority"] == "attention"
+    assert result["state"]["sources_without_read_only_account"] == ["corp-ad"]
+
+
+def test_read_only_advice_disappears_once_every_source_is_confirmed() -> None:
+    result = build_guidance(_context("ADMIN", source_count=2, latest_snapshot=True, golden_available=True, operator_count=1))
+    assert all(item["id"] != "dedicated_read_only_accounts" for item in result["recommendations"])
+
+
+def test_only_admins_are_asked_about_collection_accounts() -> None:
+    result = build_guidance(_context("OPERATOR", source_count=1, latest_snapshot=True, golden_available=True, sources_without_read_only_account=("corp-ad",)))
+    assert all(item["id"] != "dedicated_read_only_accounts" for item in result["recommendations"])
