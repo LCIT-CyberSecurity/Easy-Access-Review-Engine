@@ -5548,7 +5548,7 @@ function Sources({ principal }: { principal: Principal }) {
                 update("type", next);
                 update("business_mapping", ["active_directory", "openldap"].includes(next) ? Object.fromEntries(["display_name", "description", "application", "business_permission", "resource", "owner"].map((field) => [field, { mode: "default" }])) : {});
               }}>
-                <option value="active_directory">Active Directory</option>
+            <option value="active_directory">Active Directory</option>
             <option value="openldap">OpenLDAP</option>
             <option value="google_workspace">Google Workspace</option>
             <option value="gcp_iam">Google Cloud IAM</option>
