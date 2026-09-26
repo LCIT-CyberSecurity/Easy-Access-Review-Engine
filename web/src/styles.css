@@ -1724,8 +1724,21 @@ p + .button-row { margin-top: 14px; }
 .report-metric.bad strong { color: var(--danger); }
 .report-metric.warn strong { color: var(--warning); }
 .report-comparison, .report-results { margin-bottom: 18px; padding: 20px; }
+.report-statistics { margin: 0 0 32px; padding: 20px; }
 .report-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .report-section-head h2 { margin: 3px 0 0; font-size: 21px; letter-spacing: -0.026em; }
+.report-chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.report-chart h3 { margin: 0 0 14px; font-size: 15px; }
+.report-bars { display: grid; gap: 12px; }
+.report-bar-row { display: grid; gap: 6px; }
+.report-bar-label { display: flex; justify-content: space-between; gap: 12px; color: var(--text-secondary); font-size: 14px; }
+.report-bar-label strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.report-bar-track { height: 9px; overflow: hidden; background: var(--surface-secondary); border-radius: 999px; }
+.report-bar-fill { display: block; height: 100%; background: var(--primary); border-radius: inherit; transition: width 180ms ease; }
+.report-bar-fill.good { background: var(--success); }
+.report-bar-fill.bad { background: var(--danger); }
+.report-bar-fill.warn { background: var(--warning); }
+.report-bar-fill.muted { background: var(--text-faint); }
 .comparison-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .comparison-grid > div { display: grid; gap: 5px; padding: 13px; background: var(--surface-secondary); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .comparison-grid strong { color: var(--text-primary); font-size: 21px; }
@@ -2302,7 +2315,7 @@ a.guide-checklist-item:hover > svg:last-child { color: var(--primary); }
   .review-summary .button { margin-left: auto; }
   .review-kpis { grid-template-columns: repeat(2, 1fr); }
   .review-kpi:nth-child(3) { border-left: 0; }
-  .source-grid, .report-summary-grid { grid-template-columns: 1fr; }
+  .source-grid, .report-summary-grid, .report-chart-grid { grid-template-columns: 1fr; }
   .comparison-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .golden-empty { flex-wrap: wrap; }
   .golden-empty > div { min-width: 70%; }

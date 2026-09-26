@@ -5884,6 +5884,7 @@ export function Reports() {
       </div>
       {comparison && compareResults.data ? <ReportComparison current={resultsQuery.data?.summary} previous={compareResults.data?.summary} /> : null}
       <section className="report-workspace">
+        <ReportStatistics summary={summary} />
         <div className="report-workspace-head">
           <div>
             <span className="eyebrow">{uiLabel("Governance evidence")}</span>
@@ -5916,6 +5917,39 @@ function reportDelta(current: unknown, previous: unknown, key: string): string {
 }
 function ReportMetric({ label, value, detail, tone = "" }: { label: string; value: number; detail: string; tone?: string }) {
   return <article className={`report-metric ${tone}`}><span>{label}</span><strong>{value}</strong><small>{detail}</small></article>;
+}
+export function reportBarPercent(value: unknown, total: unknown): number {
+  const amount = Math.max(0, Number(value) || 0);
+  const denominator = Math.max(0, Number(total) || 0);
+  return denominator ? Math.min(100, Math.round((amount / denominator) * 100)) : 0;
+}
+function ReportStatistics({ summary }: { summary: Row }) {
+  const total = reportCount(summary, "total");
+  const groups = [
+    { title: "Outcome classification", items: [["As expected", summary.expected_and_observed, "good"], ["Unexpected", summary.unexpected, "bad"], ["Missing", summary.missing, "warn"], ["Unknown / scoped", summary.unknown_due_to_scope, "muted"]] },
+    { title: "Decision status", items: [["Approved", summary.approve, "good"], ["Revoked", summary.revoke, "bad"], ["N/A", summary.not_applicable, "muted"], ["Pending", summary.pending, "warn"]] },
+  ] as const;
+  return (
+    <section className="panel report-statistics" aria-labelledby="report-statistics-title">
+      <div className="report-section-head">
+        <div><span className="eyebrow">Visual summary</span><h2 id="report-statistics-title">Report statistics</h2></div>
+        <span className="muted">Bars show the share of {total} reviewed accesses.</span>
+      </div>
+      <div className="report-chart-grid">
+        {groups.map((group) => (
+          <div className="report-chart" key={group.title}>
+            <h3>{group.title}</h3>
+            <div className="report-bars" role="list" aria-label={group.title}>
+              {group.items.map(([label, value, tone]) => {
+                const count = Number(value) || 0;
+                return <div className="report-bar-row" role="listitem" key={label}><div className="report-bar-label"><span>{label}</span><strong>{count}</strong></div><div className="report-bar-track" aria-hidden="true"><span className={`report-bar-fill ${tone}`} style={{ width: `${reportBarPercent(value, total)}%` }} /></div></div>;
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 function ReportComparison({ current, previous }: { current: unknown; previous: unknown }) {
   const values = [
