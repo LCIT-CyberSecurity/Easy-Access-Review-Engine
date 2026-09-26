@@ -492,6 +492,8 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                 "not_completed": sum(remediation_status(row) == "not_completed" for row in rows),
                 "completed": sum(remediation_status(row) == "completed" for row in rows),
             }
+        if table in {"identities", "accesses", "campaigns"}:
+            summary = list_summary(table, rows)
         if table in {"findings", "remediation_actions"} and not sort:
             rows = sorted_rows(rows, "source_group", "asc")
         elif sort and (sort == "source_group" or any(sort in row for row in rows)):
@@ -510,6 +512,48 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
         if summary is not None:
             result["summary"] = summary
         return result
+
+
+def _count(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def list_summary(table: str, rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Headline figures for a list page, over every filtered row rather than one page."""
+    if table == "identities":
+        return {
+            "total": len(rows),
+            "sources": len({str(row.get("provider")) for row in rows if row.get("provider")}),
+            "assignments": sum(_count(row.get("access_count")) for row in rows),
+            "with_findings": sum(_count(row.get("finding_count")) > 0 for row in rows),
+        }
+    if table == "accesses":
+        return {
+            "total": len(rows),
+            "sources": len({str(row.get("provider")) for row in rows if row.get("provider")}),
+            "holders": sum(_count(row.get("holder_count")) for row in rows),
+            "with_findings": sum(_count(row.get("finding_count")) > 0 for row in rows),
+        }
+    if table == "campaigns":
+        return {
+            "total": len(rows),
+            "open": sum(str(row.get("status")) == "open" for row in rows),
+            "closed": sum(str(row.get("status")) == "closed" for row in rows),
+            "pending": sum(_count(row.get("pending")) for row in rows),
+        }
+    return {"total": len(rows)}
+
+
+def findings_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "total": len(rows),
+        "unexpected": sum(row.get("classification") == "unexpected" for row in rows),
+        "missing": sum(row.get("classification") == "missing" for row in rows),
+        "sources": len({str(row.get("access_provider")) for row in rows if row.get("access_provider")}),
+    }
 
 
 def _search_text(value: Any) -> str:

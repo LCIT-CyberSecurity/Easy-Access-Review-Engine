@@ -420,7 +420,8 @@
       "initialCollection": "تم جمع Snapshot الأولي",
       "users": "تم تهيئة مستخدمي EARE",
       "operatorCoverage": "تغطية المشغلين",
-      "expectedState": "تم تحديد الحالة المتوقعة"
+      "expectedState": "تم تحديد الحالة المتوقعة",
+      "readOnlyAccounts": "حسابات القراءة فقط"
     },
     "setup": {
       "sources": "تهيئة مصدر جمع",
@@ -428,7 +429,9 @@
       "users": "تهيئة مستخدمي EARE",
       "operatorCoverage": "إنشاء تغطية المشغلين",
       "operatorCoverageIncomplete": "بعض المزوّدين المهيئين غير مغطّين بمشغّل مفعّل.",
-      "expectedState": "تحديد الحالة المتوقعة"
+      "expectedState": "تحديد الحالة المتوقعة",
+      "readOnlyAccounts": "حساب مخصص للقراءة فقط لكل مصدر",
+      "readOnlyAccountsIncomplete": "بعض المصادر لم تؤكد بعد حساب جمع مخصصًا للقراءة فقط."
     },
     "reviewRemediation": {
       "title": "مراجعة تقدم المعالجة",
@@ -547,6 +550,11 @@
         "title": "Review findings",
         "description": "Some authorized review items contain findings.",
         "reason": "Findings explain observed differences that may need governance attention."
+      },
+      "readOnlyAccounts": {
+        "title": "استخدم حسابًا مخصصًا للقراءة فقط لكل مصدر",
+        "description": "أنشئ لـ EARE حساب خدمة لكل مصدر بصلاحيات قراءة فقط، ثم أكّده في إعدادات المصدر.",
+        "reason": "لا يحتاج EARE إلا إلى القراءة. الحساب القادر على تعديل الدليل، أو الحساب الشخصي، يضاعف أثر تسرب بيانات الاعتماد ويشوّش أثر التدقيق."
       }
     },
     "page": {

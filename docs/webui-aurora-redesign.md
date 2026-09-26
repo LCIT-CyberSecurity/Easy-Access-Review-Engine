@@ -120,8 +120,9 @@ nothing in it mutates data. Arrow keys move, `Enter` opens, `Esc` closes.
 - Tables load as skeleton rows shaped like the data they replace, with the
   loading word kept for screen readers.
 - `.pagination` is styled: the count sits left, the controls right.
-- The window behind the sign-in panel matches it. The sign-in keeps the LCIT
-  navy composition of `main`, including its `WELCOME BACK` eyebrow.
+- The sign-in card no longer repeats `WELCOME BACK` as an eyebrow above the
+  `Welcome back` heading; the window behind the sign-in panel matches it. The
+  sign-in keeps the LCIT navy composition of `main`.
 - Section headings are stored as words and shouted by CSS in the rail only.
 - Every rail entry has its own icon (reviews, campaigns and actions no longer
   share a check mark; users and audit trail no longer reuse other glyphs).
@@ -187,6 +188,15 @@ applications, so the payload shape is unchanged.
 The API used one SQLite connection for the system tables across FastAPI's worker
 threads; concurrent reads interleaved and returned incomplete rows, which showed
 as random 500s and sign-outs. Each worker thread now gets its own connection.
+
+### Dedicated read-only collection accounts
+
+Each source records whether it collects through a dedicated, read-only service
+account (`collection.read_only_account`, a boolean, off by default). The EARE
+Guide adds "Dedicated read-only account per source" to the admin setup
+checklist and recommends creating one for every source not yet confirmed,
+naming them in `sources_without_read_only_account`. It is an attestation by the
+administrator: EARE cannot inspect a directory account's rights itself.
 
 ### Accessibility and RTL
 

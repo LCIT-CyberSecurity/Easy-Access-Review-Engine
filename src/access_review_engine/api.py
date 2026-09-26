@@ -1904,11 +1904,17 @@ def create_app(db_path: str | None = None):
         }
         operator_coverage_complete = any("*" in user.get("scopes", []) for user in enabled_operators) or configured_domains.issubset(covered_domains)
         uncovered_operator_domains = tuple(sorted(configured_domains - covered_domains)) if enabled_operators and not operator_coverage_complete else ()
+        sources_without_read_only_account = tuple(sorted(
+            str(row.get("provider") or row.get("name"))
+            for row in configured_sources
+            if not (isinstance(row.get("collection"), dict) and row["collection"].get("read_only_account") is True)
+        ))
         setup_checklist = ()
         if principal.role == "ADMIN":
             enabled_users = [user for user in list_users(system_conn) if user.get("enabled")]
             setup_checklist = (
                 {"id": "sources", "label": "guide.setup.sources", "status": "complete" if configured_source_count else "not_started", "action_label": "guide.action.manageSources", "action_url": "/sources"},
+                {"id": "read_only_accounts", "label": "guide.setup.readOnlyAccounts", "status": "not_started" if not configured_source_count else "attention" if sources_without_read_only_account else "complete", "description": "guide.setup.readOnlyAccountsIncomplete" if configured_source_count and sources_without_read_only_account else None, "action_label": "guide.action.manageSources", "action_url": "/sources"},
                 {"id": "initial_collection", "label": "guide.setup.initialCollection", "status": "complete" if snapshots else "not_started", "action_label": "guide.action.openSources", "action_url": "/sources"},
                 {"id": "users", "label": "guide.setup.users", "status": "complete" if enabled_users else "not_started", "action_label": "guide.action.viewUsers", "action_url": "/system/users"},
                 {"id": "operator_coverage", "label": "guide.setup.operatorCoverage", "status": "complete" if enabled_operators and operator_coverage_complete else "attention" if enabled_operators else "not_started", "description": "guide.setup.operatorCoverageIncomplete" if enabled_operators and not operator_coverage_complete else None, "action_label": "guide.action.viewUsers", "action_url": "/system/users"},
@@ -1970,6 +1976,7 @@ def create_app(db_path: str | None = None):
             operator_count=operator_count,
             operator_coverage_complete=operator_coverage_complete,
             uncovered_operator_domains=uncovered_operator_domains,
+            sources_without_read_only_account=sources_without_read_only_account,
             setup_checklist=setup_checklist,
             username=principal.username,
             capabilities=frozenset(capabilities_by_role.get(principal.role, set())),
