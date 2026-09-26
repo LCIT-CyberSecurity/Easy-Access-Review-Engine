@@ -2008,6 +2008,49 @@ p + .button-row { margin-top: 14px; }
 .guide-checklist-item { display: flex; align-items: center; gap: 9px; min-height: 30px; padding: 4px 0; color: var(--text-secondary); }
 .guide-checklist-item > span:first-child { width: 16px; color: var(--primary); font-weight: 700; text-align: center; }
 .guide-checklist-item strong { color: var(--text-primary); font-size: 15.5px; font-weight: 600; }
+/* Open steps are links to where they are done. */
+a.guide-checklist-item { margin: 0 -10px; padding: 4px 10px; border-radius: var(--radius-sm); text-decoration: none; transition: background var(--fast) var(--ease); }
+a.guide-checklist-item:hover { background: var(--primary-soft); }
+a.guide-checklist-item > svg:last-child { margin-left: auto; color: var(--text-faint); }
+a.guide-checklist-item:hover > svg:last-child { color: var(--primary); }
+.guide-checklist-item.attention > span:first-child { color: var(--warning); }
+.guide-progress { display: grid; gap: 8px; margin: 4px 0 14px; color: var(--text-muted); font-size: 14px; font-weight: 500; }
+.guide-progress-bar { height: 6px; overflow: hidden; background: var(--surface-secondary); border-radius: 999px; }
+.guide-progress-bar span { display: block; height: 100%; background: var(--primary); border-radius: inherit; transition: width var(--slow) var(--ease); }
+
+/* Count of what is left to do, on the guide button itself. */
+.guide-trigger { position: relative; }
+.guide-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  margin-left: 2px;
+  padding: 0 6px;
+  color: var(--text-on-accent);
+  background: var(--primary);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* The element a guide step points at: a ring that pulses until it is used. */
+.guide-focus {
+  position: relative;
+  z-index: 5;
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+  animation: guide-pulse 1.4s var(--ease) infinite;
+}
+@keyframes guide-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 35%, transparent); }
+  50% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--primary) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .guide-focus { animation: none; box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 20%, transparent); }
+}
 
 /* ===========================================================================
    3. THEMES — each interface style is a token set, nothing more.

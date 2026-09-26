@@ -596,6 +596,10 @@
       "reviewDecision": "What does this review mean?",
       "remediation": "Why does this action exist?",
       "reportMeaning": "What does this report contain?"
-    }
+    },
+    "progress": "{{done}} de {{total}} pasos completados",
+    "pendingBadge": "{{count}} pendientes",
+    "stepDoneNext": "Paso completado: {{step}}. Siguiente: {{next}}.",
+    "stepDoneAll": "Paso completado: {{step}}. La configuración inicial ha terminado."
   }
 }

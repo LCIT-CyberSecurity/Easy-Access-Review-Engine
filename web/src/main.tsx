@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./i18n";
@@ -13,7 +13,13 @@ import { applyAppearance, applyTheme, readAppearance, readTheme } from "./theme"
 applyTheme(readTheme());
 applyAppearance(readAppearance());
 
-const queryClient = new QueryClient();
+// Any successful change may complete a guide step, so the guide re-reads its
+// facts after each one instead of waiting for its cache to expire.
+const queryClient: QueryClient = new QueryClient({
+  mutationCache: new MutationCache({
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["guidance"] }),
+  }),
+});
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
