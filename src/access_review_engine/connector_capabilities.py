@@ -24,6 +24,8 @@ _DIRECTORY_CAPABILITIES = ConnectorCapabilities(
 _CAPABILITIES = {
     "active_directory": _DIRECTORY_CAPABILITIES,
     "openldap": _DIRECTORY_CAPABILITIES,
+    "google_workspace": ConnectorCapabilities(False, False, False, True, True),
+    "gcp_iam": ConnectorCapabilities(False, False, False, True, True),
 }
 _UNSUPPORTED = ConnectorCapabilities(False, False, False, False, False)
 

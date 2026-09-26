@@ -40,6 +40,7 @@ from access_review_engine.domain import (
     Access,
     AccessAssignment,
     ControlObject,
+    Completeness,
     AccessRelation,
     AccessRelationType,
     Capability,
@@ -60,6 +61,7 @@ from access_review_engine.golden_annotations import annotation_for_assignment, c
 from access_review_engine.guidance import GuidanceContext, build_guidance
 from access_review_engine.reporting import access_names_from_snapshot, build_report_rows, identity_names_from_snapshot, render_pdf_report, report_summary, write_reports
 from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, compare_snapshot, create_decision, create_golden_source, create_golden_version, evolve_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
+from access_review_engine.snapshot_composition import compose_snapshots
 from access_review_engine.source_inspector import SourceInspectorError, browse_source_tree, discover_source_attributes, get_source_object, search_source_objects, source_object_kinds
 from access_review_engine.source_mapping import mapping_diagnostics
 from access_review_engine.storage import Repository, hydrate_access, hydrate_authentication_posture, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
@@ -791,9 +793,13 @@ def create_app(db_path: str | None = None):
         if result.returncode:
             raise HTTPException(status_code=502, detail="Source connection test failed")
         try:
-            discovered = discover_source_attributes(candidate, "group")
-            diagnostics = mapping_diagnostics(str(candidate["type"]), candidate, discovered)
-            mapping_warning = any(row.get("status") in {"not_found", "warning"} for row in diagnostics)
+            if not connector_capabilities(str(candidate["type"])).attribute_mapping:
+                diagnostics = []
+                mapping_warning = False
+            else:
+                discovered = discover_source_attributes(candidate, "group")
+                diagnostics = mapping_diagnostics(str(candidate["type"]), candidate, discovered)
+                mapping_warning = any(row.get("status") in {"not_found", "warning"} for row in diagnostics)
         except SourceInspectorError:
             diagnostics = []
             mapping_warning = True
@@ -842,6 +848,30 @@ def create_app(db_path: str | None = None):
         except SourceInspectorError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {"kind": kind, "attributes": attributes}
+
+    @app.post("/api/snapshots/compose")
+    def compose_current_snapshots(request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        providers = payload.get("providers")
+        if not isinstance(providers, list) or not providers or not all(isinstance(item, str) and item.strip() for item in providers):
+            raise HTTPException(status_code=400, detail="providers must be a non-empty list")
+        requested = sorted({item.strip() for item in providers})
+        if principal.role == "OPERATOR" and "*" not in principal.scopes and not set(requested).issubset(principal.scopes):
+            raise HTTPException(status_code=403, detail="Operator is not authorized for all requested providers")
+        with Repository(db_path) as repo:
+            snapshots = [hydrate_snapshot(row) for row in repo.list_payloads("snapshots")]
+            imports = {row.get("id"): str(row.get("completeness") or row.get("scope", {}).get("completeness") or Completeness.UNKNOWN) for row in repo.list_payloads("imports")}
+            current = []
+            for provider in requested:
+                candidates = [snapshot for snapshot in snapshots if any(item.name == provider for item in snapshot.providers)]
+                if not candidates:
+                    raise HTTPException(status_code=404, detail=f"No snapshot available for provider {provider}")
+                current.append(candidates[-1])
+            completeness = [imports.get(import_id, str(Completeness.UNKNOWN)) for snapshot in current for import_id in snapshot.source_import_ids]
+            composed = compose_snapshots(current, requested, completeness)
+            repo.insert_append_only("snapshots", composed)
+            record_audit(repo, request, "snapshot.composed", "snapshot", composed.id, {"providers": requested})
+            return composed
 
     @app.post("/api/golden-sources/baseline")
     def create_baseline(request: Request, payload: dict[str, Any] | None = Body(default=None)):

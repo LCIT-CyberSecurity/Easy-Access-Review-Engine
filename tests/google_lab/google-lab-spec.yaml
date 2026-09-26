@@ -1,0 +1,10 @@
+# Non-secret, read-only verification expectations for a dedicated test tenant.
+workspace:
+  users: []
+  groups: []
+  memberships: []
+  admin_roles: []
+gcp:
+  project: projects/example-test
+  bindings: []
+  service_accounts: []

@@ -23,6 +23,10 @@ dev = [
   "pytest-cov>=5.0",
   "ruff>=0.5",
 ]
+google = [
+  "google-api-python-client>=2.150",
+  "google-auth>=2.35",
+]
 
 [project.scripts]
 eare = "access_review_engine.cli.main:main"

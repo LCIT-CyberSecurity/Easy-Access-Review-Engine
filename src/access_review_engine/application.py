@@ -24,6 +24,8 @@ from access_review_engine.importers.openldap import (
     import_openldap_ldif,
     import_openldap_zip,
 )
+from access_review_engine.importers.google_workspace import import_google_workspace_zip
+from access_review_engine.importers.gcp_iam import import_gcp_iam_zip
 from access_review_engine.services import create_snapshot, reconcile_identities
 from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
 from access_review_engine.storage import (
@@ -58,6 +60,10 @@ def import_file_to_repository(
             )
         elif source_type == "openldap":
             result = import_openldap_zip(file_path, source_config=source_config)
+        elif source_type == "google_workspace":
+            result = import_google_workspace_zip(file_path, known_identities=known_identities)
+        elif source_type == "gcp_iam":
+            result = import_gcp_iam_zip(file_path, known_identities=known_identities)
         else:
             raise ValueError(f"Unsupported ZIP source_type: {source_type or 'missing'}")
     else:

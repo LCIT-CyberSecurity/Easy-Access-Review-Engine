@@ -1,6 +1,7 @@
 from __future__ import annotations
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from .config_loader import secret_environment
@@ -55,6 +56,8 @@ def build_command(config: dict[str, object], output: Path, root: str | Path | No
         if collection.get("allow_anonymous") is True: env["ALLOW_ANONYMOUS"] = "1"
         if config.get("_check_only"): env["CHECK_ONLY"] = "1"
         return ["bash", str(base / "exporters/openldap/export-openldap.sh"), str(output)], env
+    if kind in {"google_workspace", "gcp_iam"}:
+        return [sys.executable, "-m", f"access_review_engine.collectors.{kind}", "--config", str(config.get("_path", "")), "--output", str(output)], os.environ.copy()
     raise ValueError(f"Unsupported connector type: {kind}")
 
 def run_exporter(config: dict[str, object], output: str | Path, root: str | Path | None = None, timeout: int | None = None) -> RunnerResult:

@@ -22,7 +22,7 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY exporters ./exporters
 COPY scripts ./scripts
-RUN pip install --no-cache-dir '.[app]'
+RUN pip install --no-cache-dir '.[app,google]'
 
 RUN useradd --create-home --uid 10001 eare \
     && mkdir -p /data \
