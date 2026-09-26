@@ -101,26 +101,71 @@ def main() -> int:
             }
         return set()
 
+    def expected_tuples(key: str) -> set[tuple[str, ...]]:
+        values = expected.get(key, [])
+        if not isinstance(values, list):
+            return set()
+        if key == "users":
+            return {
+                (
+                    str(row.get("primaryEmail") or row.get("email") or "").lower(),
+                    str(row.get("id") or row.get("native_id") or ""),
+                )
+                for row in values
+                if isinstance(row, dict)
+            }
+        if key == "groups":
+            return {
+                (
+                    str(row.get("email") or "").lower(),
+                    str(row.get("id") or row.get("native_id") or ""),
+                )
+                for row in values
+                if isinstance(row, dict)
+            }
+        if key == "memberships":
+            return {
+                (
+                    str(row.get("group_id") or ""),
+                    str(row.get("member_id") or ""),
+                    str(row.get("role") or "").upper(),
+                )
+                for row in values
+                if isinstance(row, dict)
+            }
+        if key == "bindings":
+            return {
+                (
+                    str(row.get("resource") or ""),
+                    str(row.get("role") or ""),
+                    str(
+                        (row.get("condition") or {}).get("expression", "")
+                        if isinstance(row.get("condition"), dict)
+                        else row.get("condition") or ""
+                    ),
+                    ",".join(sorted(str(item) for item in row.get("members", []))),
+                )
+                for row in values
+                if isinstance(row, dict)
+            }
+        if key == "service_accounts":
+            return {
+                (
+                    str(row.get("email") or row.get("name") or "").lower(),
+                    str(row.get("uniqueId") or row.get("unique_id") or ""),
+                )
+                for row in values
+                if isinstance(row, dict)
+            }
+        return set()
+
     for key in ("users", "groups", "memberships", "bindings", "service_accounts"):
         if (
             isinstance(expected.get(key), list)
             and expected[key]
             and isinstance(expected[key][0], dict)
         ):
-            expected_tuples = {
-                tuple(str(value) for value in item.values()) for item in expected[key]
-            }
-            actual = tuples(key)
-            if not all(
-                any(
-                    all(
-                        part.casefold() in actual_part.casefold()
-                        for part, actual_part in zip(expected_item, actual_row, strict=False)
-                    )
-                    for actual_row in actual
-                )
-                for expected_item in expected_tuples
-            ):
+            if expected_tuples(key) != tuples(key):
                 failures.append(f"{key}: stable object mismatch")
     print(
         f"source={manifest['source_type']} provider={manifest['provider']} "

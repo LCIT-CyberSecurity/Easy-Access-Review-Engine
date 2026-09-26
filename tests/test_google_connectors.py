@@ -261,6 +261,34 @@ def test_workspace_service_account_email_does_not_resolve_to_other_provider(tmp_
     assert result.assignments == []
 
 
+def test_google_lab_verifier_uses_canonical_object_fields(tmp_path):
+    from scripts.google_lab.verify_google_lab import main
+
+    artifact = tmp_path / "workspace.zip"
+    _artifact(
+        artifact,
+        {"source_type": "google_workspace", "provider": "workspace", "completeness": "full"},
+        {
+            "users.jsonl": [{"id": "alice", "primaryEmail": "alice@example.com"}],
+            "groups.jsonl": [], "memberships.jsonl": [], "admin-roles.jsonl": [],
+            "admin-role-assignments.jsonl": [], "collection-errors.json": [],
+        },
+    )
+    spec = tmp_path / "spec.yaml"
+    spec.write_text(
+        "workspace:\n  users:\n    - {id: alice, primaryEmail: alice@example.com}\n",
+        encoding="utf-8",
+    )
+    import sys
+
+    previous = sys.argv
+    try:
+        sys.argv = ["verify_google_lab.py", "--artifact", str(artifact), "--spec", str(spec), "--source", "workspace"]
+        assert main() == 0
+    finally:
+        sys.argv = previous
+
+
 def test_workspace_memberships_require_groups():
     config = {
         "provider": "workspace",
