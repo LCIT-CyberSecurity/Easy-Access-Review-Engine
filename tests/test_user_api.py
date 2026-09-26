@@ -181,6 +181,7 @@ def test_external_api_rechecks_current_provider_scopes_and_historical_campaign_a
 def test_public_swagger_is_read_only_and_hides_internal_routes(tmp_path):
     client, _ = _setup(tmp_path)
     assert client.get("/swagger").status_code == 200
+    assert client.get("/api/v1/me").status_code == 401
     response = client.get("/openapi.json")
     assert response.status_code == 200
     schema = response.json()
@@ -193,6 +194,16 @@ def test_public_swagger_is_read_only_and_hides_internal_routes(tmp_path):
     swagger_html = client.get("/swagger").text
     assert 'src="/swagger-ui-bundle.js"' in swagger_html
     assert 'href="/swagger-ui.css"' in swagger_html
+    assert 'src="/swagger-ui-init.js"' in swagger_html
+    assert "SwaggerUIBundle({" not in swagger_html
+
+
+def test_external_user_api_and_swagger_are_disabled_by_default(tmp_path):
+    db = tmp_path / "default-api.db"
+    client = TestClient(create_app(str(db)))
+
+    assert client.get("/swagger").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
 
 
 def test_public_swagger_is_hidden_when_external_user_api_is_disabled(tmp_path):

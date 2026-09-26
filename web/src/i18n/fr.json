@@ -224,7 +224,20 @@
     "appearance": "Apparence",
     "appearanceLight": "Clair",
     "appearanceDark": "Sombre",
-    "appearanceSystem": "Système"
+    "appearanceSystem": "Système",
+    "externalApi": {
+      "eyebrow": "API utilisateur externe",
+      "title": "Accès API global",
+      "description": "Contrôle l’API externe en lecture seule et sa documentation Swagger.",
+      "statusEnabled": "API utilisateur externe : activée",
+      "statusDisabled": "API utilisateur externe : désactivée",
+      "available": "La documentation Swagger est disponible à /swagger.",
+      "unavailable": "Swagger et l’API externe sont indisponibles tant que l’API utilisateur externe n’est pas activée.",
+      "enable": "Activer l’API utilisateur externe",
+      "disable": "Désactiver l’API utilisateur externe",
+      "openDocumentation": "Ouvrir la documentation API",
+      "openSchema": "Schéma OpenAPI"
+    }
   },
   "palette": {
     "title": "Navigation rapide",

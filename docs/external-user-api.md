@@ -1,10 +1,17 @@
 # External user API (read-only)
 
-EARE exposes a separate user API at `/api/v1`. Interactive WebUI traffic remains session-cookie authenticated; a Personal API Token never authenticates `/api/*` routes. Swagger UI is at `/swagger` and its filtered OpenAPI document is at `/openapi.json`.
+EARE exposes a separate user API at `/api/v1`. Interactive WebUI traffic remains session-cookie authenticated; a Personal API Token never authenticates `/api/*` routes. Swagger UI is at `/swagger` and its filtered OpenAPI document is at `/openapi.json`. These paths are served by the WebUI reverse proxy, not the internal backend port.
 
 ## Enable access and create a key
 
 The API is off by default. An administrator must enable **External user API** in **System → Users & permissions**, then enable **API access** on an individual EARE user. These are independent switches. Disabling the global switch suspends keys; disabling a user's API access revokes their keys. After access is enabled, the user signs in to EARE and creates their own key from the account menu. A key is shown once, expires after 90 days, and can be regenerated or revoked by its owner. Administrators can revoke keys but cannot read their secret.
+
+The two Docker WebUI stacks keep separate databases and settings. Use the port of the stack you enabled:
+
+- Standard stack: `http://127.0.0.1:4173/swagger` and `http://127.0.0.1:4173/openapi.json`
+- Aurora stack: `http://127.0.0.1:4175/swagger` and `http://127.0.0.1:4175/openapi.json`
+
+The global switch controls whether the external API and its documentation exist. The per-user **API access** switch only authorizes that account to generate and use a Bearer API key; enabling it does not enable the global API.
 
 Keys have the form `eare_pat_…`; EARE stores only a SHA-256 hash. Roles and authorized domains are loaded from the current user record on every request, not embedded in the key. A role/scope change therefore applies immediately.
 

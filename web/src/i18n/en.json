@@ -224,7 +224,20 @@
     "appearance": "Appearance",
     "appearanceLight": "Light",
     "appearanceDark": "Dark",
-    "appearanceSystem": "System"
+    "appearanceSystem": "System",
+    "externalApi": {
+      "eyebrow": "External User API",
+      "title": "Global API access",
+      "description": "Controls the read-only external API and its Swagger documentation.",
+      "statusEnabled": "External User API: Enabled",
+      "statusDisabled": "External User API: Disabled",
+      "available": "Swagger documentation is available at /swagger.",
+      "unavailable": "Swagger and the external API are unavailable until the External User API is enabled.",
+      "enable": "Enable external user API",
+      "disable": "Disable external user API",
+      "openDocumentation": "Open API documentation",
+      "openSchema": "OpenAPI schema"
+    }
   },
   "palette": {
     "title": "Quick navigation",

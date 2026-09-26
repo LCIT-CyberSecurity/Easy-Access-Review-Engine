@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ActionMenu, ApplicationPicker, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, sourceSupportsAttributeMapping, splitPermissions } from "./App";
+import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, reportBarPercent, sourceSupportsAttributeMapping, splitPermissions } from "./App";
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {
@@ -19,6 +19,32 @@ describe("ActionMenu", () => {
     expect(html).toContain('aria-label="More actions for Alice"');
     expect(html).toContain("Reset password");
     expect(html).toContain("Disable");
+  });
+});
+
+describe("External User API controls", () => {
+  it("keeps documentation links hidden while the global API is disabled", () => {
+    const html = renderToStaticMarkup(createElement(ExternalApiDocumentation, { enabled: false }));
+    expect(html).toContain("External User API: Disabled");
+    expect(html).toContain("Swagger and the external API are unavailable until the External User API is enabled.");
+    expect(html).not.toContain('href="/swagger"');
+  });
+
+  it("shows same-origin Swagger and OpenAPI links only when enabled", () => {
+    const html = renderToStaticMarkup(createElement(ExternalApiDocumentation, { enabled: true }));
+    expect(html).toContain("External User API: Enabled");
+    expect(html).toContain('href="/swagger"');
+    expect(html).toContain('href="/openapi.json"');
+    expect(html).toContain("noopener noreferrer");
+  });
+});
+
+describe("Report statistics", () => {
+  it("calculates bounded percentages without dividing by zero", () => {
+    expect(reportBarPercent(3, 10)).toBe(30);
+    expect(reportBarPercent(15, 10)).toBe(100);
+    expect(reportBarPercent(3, 0)).toBe(0);
+    expect(reportBarPercent(-1, 10)).toBe(0);
   });
 });
 

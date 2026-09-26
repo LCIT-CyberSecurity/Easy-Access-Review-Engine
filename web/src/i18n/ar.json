@@ -224,7 +224,20 @@
     "appearance": "المظهر",
     "appearanceLight": "فاتح",
     "appearanceDark": "داكن",
-    "appearanceSystem": "النظام"
+    "appearanceSystem": "النظام",
+    "externalApi": {
+      "eyebrow": "واجهة المستخدم الخارجية",
+      "title": "الوصول العام إلى API",
+      "description": "يتحكم في واجهة API الخارجية للقراءة فقط ووثائق Swagger.",
+      "statusEnabled": "واجهة المستخدم الخارجية: مفعلة",
+      "statusDisabled": "واجهة المستخدم الخارجية: معطلة",
+      "available": "وثائق Swagger متاحة على /swagger.",
+      "unavailable": "Swagger وواجهة API الخارجية غير متاحين حتى تفعيل واجهة المستخدم الخارجية.",
+      "enable": "تفعيل واجهة المستخدم الخارجية",
+      "disable": "تعطيل واجهة المستخدم الخارجية",
+      "openDocumentation": "فتح وثائق API",
+      "openSchema": "مخطط OpenAPI"
+    }
   },
   "palette": {
     "title": "تنقل سريع",
