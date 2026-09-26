@@ -5986,6 +5986,40 @@ function Confirm({
     </div>
   );
 }
+
+export function ExternalApiDocumentation({ enabled, onToggle, pending = false }: { enabled: boolean; onToggle?: (enabled: boolean) => void; pending?: boolean }) {
+  return (
+    <section className="panel" aria-labelledby="external-user-api-title">
+      <div className="section-heading">
+        <div>
+          <span className="eyebrow">{ui("settings.externalApi.eyebrow")}</span>
+          <h2 id="external-user-api-title">{ui("settings.externalApi.title")}</h2>
+          <p className="muted">{ui("settings.externalApi.description")}</p>
+        </div>
+        <strong>{ui(enabled ? "settings.externalApi.statusEnabled" : "settings.externalApi.statusDisabled")}</strong>
+      </div>
+      <p className="field-note">
+        {ui(enabled ? "settings.externalApi.available" : "settings.externalApi.unavailable")}
+      </p>
+      <div className="button-row">
+        <button className="button subtle" type="button" onClick={() => onToggle?.(!enabled)} disabled={!onToggle || pending}>
+          {ui(enabled ? "settings.externalApi.disable" : "settings.externalApi.enable")}
+        </button>
+        {enabled && (
+          <>
+            <a className="button subtle" href="/swagger" target="_blank" rel="noopener noreferrer">
+              {ui("settings.externalApi.openDocumentation")}
+            </a>
+            <a className="button subtle" href="/openapi.json" target="_blank" rel="noopener noreferrer">
+              {ui("settings.externalApi.openSchema")}
+            </a>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function UsersPage() {
   const c = useQueryClient(),
     q = useQuery({ queryKey: ["system"], queryFn: () => getJson("system") }),
@@ -6106,10 +6140,6 @@ function UsersPage() {
     <>
       <Head title="Users & permissions">
         <div className="button-row">
-          <Status v={q.data?.external_user_api_enabled ? "enabled" : "disabled"} />
-          <button className="button subtle" onClick={() => globalApi.mutate(!q.data?.external_user_api_enabled)} disabled={globalApi.isPending}>
-            {q.data?.external_user_api_enabled ? "Disable external user API" : "Enable external user API"}
-          </button>
           {directories.map((d) => (
             <button className="button subtle" key={s(d.id)} onClick={() => setPicking(d)}>
               + From {s(d.name)}
@@ -6120,6 +6150,11 @@ function UsersPage() {
           </button>
         </div>
       </Head>
+      <ExternalApiDocumentation
+        enabled={Boolean(q.data?.external_user_api_enabled)}
+        onToggle={(enabled) => globalApi.mutate(enabled)}
+        pending={globalApi.isPending}
+      />
       {!directories.length && (
         <p className="muted">
           Only local accounts can sign in today. Configure a directory in Authentication to import accounts
@@ -6140,6 +6175,7 @@ function UsersPage() {
           s(r.role) === "ADMIN" ? "All domains" : s(r.role) === "GROUP_OWNER" ? "Assigned reviews" : s(vals(r.scopes).join(", "), "None"),
           <div>
             <Status v={r.api_access_enabled ? "enabled" : "disabled"} />
+            <small className="field-note">Per-user authorization</small>
             {r.api_token_active ? <small className="field-note">{s(r.api_token_prefix)} · last used {s(r.api_token_last_used_at, "never")}</small> : null}
           </div>,
           Number(r.pending_reviews) > 0 ? s(r.pending_reviews) : "—",
@@ -6386,9 +6422,9 @@ function UsersPage() {
                 checked={Boolean(form.api_access_enabled)}
                 onChange={(e) => setForm({ ...form, api_access_enabled: e.target.checked })}
               />
-              Allow this account to use the external read-only API
+              API access enabled for this user
             </label>
-            <p className="field-note">Disabling API access revokes existing API keys. The user must generate a new key after re-enablement.</p>
+            <p className="field-note">Allows this user to generate an API key when the External User API is globally enabled. Disabling API access revokes existing API keys.</p>
             <h4>STATUS</h4>
             {form.id ? (
               <div className="status-row">
