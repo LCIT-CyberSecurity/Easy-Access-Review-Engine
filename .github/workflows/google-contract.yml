@@ -1,0 +1,31 @@
+name: Google connector contracts
+
+on:
+  push:
+    paths:
+      - "src/access_review_engine/collectors/**"
+      - "src/access_review_engine/importers/**"
+      - "src/access_review_engine/google_artifacts.py"
+      - "src/access_review_engine/snapshot_composition.py"
+      - "tests/test_google_*.py"
+      - ".github/workflows/google-contract.yml"
+  pull_request:
+    paths:
+      - "src/access_review_engine/collectors/**"
+      - "src/access_review_engine/importers/**"
+      - "src/access_review_engine/google_artifacts.py"
+      - "src/access_review_engine/snapshot_composition.py"
+      - "tests/test_google_*.py"
+      - ".github/workflows/google-contract.yml"
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[app,dev,google]"
+      - run: pytest -q tests/test_google_connectors.py tests/test_google_composition.py

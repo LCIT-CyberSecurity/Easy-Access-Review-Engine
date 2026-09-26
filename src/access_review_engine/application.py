@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
-from typing import Iterable
 from zipfile import BadZipFile, ZipFile
 
 from access_review_engine.domain import (
@@ -14,10 +14,11 @@ from access_review_engine.domain import (
     Completeness,
     GoldenSourceVersion,
     Identity,
-    Provider,
     ProviderType,
 )
 from access_review_engine.importers.ad import ImportResult, import_ad_zip
+from access_review_engine.importers.gcp_iam import import_gcp_iam_zip
+from access_review_engine.importers.google_workspace import import_google_workspace_zip
 from access_review_engine.importers.openldap import (
     DEFAULT_OPENLDAP_FILTER,
     _canonical_dn,
@@ -31,9 +32,9 @@ from access_review_engine.storage import (
     hydrate_access,
     hydrate_access_relation,
     hydrate_assignment,
+    hydrate_authentication_posture,
     hydrate_identity,
     hydrate_provider,
-    hydrate_authentication_posture,
 )
 
 
@@ -58,6 +59,22 @@ def import_file_to_repository(
             )
         elif source_type == "openldap":
             result = import_openldap_zip(file_path, source_config=source_config)
+        elif source_type == "google_workspace":
+            result = import_google_workspace_zip(
+                file_path,
+                known_identities=known_identities,
+                known_provider_types={
+                    row["name"]: row["type"] for row in repo.list_payloads("providers")
+                },
+            )
+        elif source_type == "gcp_iam":
+            result = import_gcp_iam_zip(
+                file_path,
+                known_identities=known_identities,
+                known_provider_types={
+                    row["name"]: row["type"] for row in repo.list_payloads("providers")
+                },
+            )
         else:
             raise ValueError(f"Unsupported ZIP source_type: {source_type or 'missing'}")
     else:
@@ -188,6 +205,21 @@ def _is_authoritative_full(result: ImportResult) -> bool:
         and not _matches_openldap_authoritative_scope(scope)
     ):
         return False
+    if result.provider.type in {"google_workspace", "gcp_iam"}:
+        authoritative_scope = scope.get("authoritative_scope")
+        if not isinstance(authoritative_scope, dict):
+            return False
+        required = (
+            {"users", "groups", "memberships", "admin_roles", "admin_role_assignments"}
+            if result.provider.type == "google_workspace"
+            else {"iam_allow_policies", "service_accounts"}
+        )
+        surfaces = set(authoritative_scope.get("surfaces", []))
+        return (
+            surfaces == required
+            and scope.get("completeness") in {None, Completeness.FULL, "full"}
+            and not scope.get("collection_errors")
+        )
     return (
         result.batch.completeness == Completeness.FULL
         and scope.get("completeness") in {None, Completeness.FULL, "full"}
@@ -213,7 +245,33 @@ def _provider_import_scope(
 
     if provider_type == ProviderType.OPENLDAP:
         _apply_openldap_authoritative_scope(source, previous_scopes)
+    elif provider_type in {"google_workspace", "gcp_iam"}:
+        if "authoritative_scope" not in source and source.get("connector_type") in {"google_workspace", "gcp_iam"}:
+            source["authoritative_scope"] = {
+                key: value for key, value in source.items()
+                if key in {"connector_type", "customer_id", "scope", "surfaces"}
+            }
+        _apply_google_authoritative_scope(source, previous_scopes)
     return source
+
+
+def _apply_google_authoritative_scope(scope: dict[str, object], previous_scopes: Iterable[dict[str, object]]) -> None:
+    declared = scope.get("authoritative_scope")
+    if not isinstance(declared, dict):
+        scope["completeness"] = str(Completeness.SCOPED)
+        return
+    canonical = _canonical_google_scope(declared)
+    previous = next((item.get("authoritative_scope") for item in reversed(list(previous_scopes)) if isinstance(item, dict) and isinstance(item.get("authoritative_scope"), dict)), None)
+    scope["authoritative_scope"] = canonical
+    if isinstance(previous, dict) and _canonical_google_scope(previous) != canonical and scope.get("completeness") == str(Completeness.FULL):
+        scope["completeness"] = str(Completeness.SCOPED)
+
+
+def _canonical_google_scope(scope: dict[str, object]) -> dict[str, object]:
+    connector = str(scope.get("connector_type") or "").strip()
+    if connector == "google_workspace":
+        return {"connector_type": connector, "customer_id": str(scope.get("customer_id") or "").strip(), "surfaces": sorted(str(item) for item in scope.get("surfaces", []) if str(item).strip())}
+    return {"connector_type": connector, "scope": str(scope.get("scope") or "").strip(), "surfaces": sorted(str(item) for item in scope.get("surfaces", []) if str(item).strip())}
 
 
 def _apply_openldap_authoritative_scope(
@@ -719,8 +777,19 @@ def _resolve_unresolved_assignments(repo: Repository) -> bool:
     resolver = _assignment_resolver(repo)
     changed = False
     for assignment in _unresolved_assignments_for_resolution(repo):
+        previous_ref = (assignment.identity_provider, assignment.identity_identifier)
         if _resolve_assignment(assignment, resolver):
             repo.upsert("access_assignments", assignment)
+            if previous_ref != (assignment.identity_provider, assignment.identity_identifier):
+                for payload in repo.list_payloads_by_provider("identities", previous_ref[0]):
+                    if payload.get("identifier") != previous_ref[1] or not payload.get("metadata", {}).get("unresolved"):
+                        continue
+                    payload["status"] = "deleted"
+                    payload.setdefault("metadata", {})["resolved_to"] = {
+                        "provider": assignment.identity_provider,
+                        "identifier": assignment.identity_identifier,
+                    }
+                    repo.upsert("identities", hydrate_identity(payload))
             changed = True
     return changed
 
@@ -750,12 +819,40 @@ def _assignment_resolver(repo: Repository) -> tuple[
     dict[str, Identity],
     dict[str, Identity],
     dict[tuple[str, str], Identity],
+    dict[tuple[str, str], Identity | None],
 ]:
     identities = _load_identities(repo)
+    provider_types = {
+        row["name"]: row["type"] for row in repo.list_payloads("providers")
+    }
+    google_candidates: dict[tuple[str, str], dict[tuple[str, str], Identity]] = {}
+    for identity in identities:
+        if isinstance(identity.metadata, dict) and identity.metadata.get("unresolved"):
+            continue
+        if identity.type not in {"user_account", "group", "technical_account"}:
+            continue
+        values = [identity.identifier, identity.email or ""]
+        values.extend(identity.metadata.get("aliases", []) if isinstance(identity.metadata, dict) else [])
+        for value in values:
+            if value:
+                google_candidates.setdefault((identity.type, str(value).casefold()), {})[
+                    (identity.provider, identity.identifier)
+                ] = identity
+    google: dict[tuple[str, str], Identity | None] = {}
+    for key, candidates in google_candidates.items():
+        identity_type, _ = key
+        preferred_type = "gcp_iam" if identity_type == "technical_account" else "google_workspace"
+        preferred = {
+            candidate_key: item
+            for candidate_key, item in candidates.items()
+            if provider_types.get(item.provider) == preferred_type
+        }
+        google[key] = next(iter(preferred.values())) if len(preferred) == 1 else None
     return (
         _unique_identities_by_native_id(identities),
         _unique_identities_by_ldap_dn(identities),
         _unique_identities_by_provider_uid(identities),
+        google,
     )
 
 
@@ -765,11 +862,12 @@ def _resolve_assignment(
         dict[str, Identity],
         dict[str, Identity],
         dict[tuple[str, str], Identity],
+        dict[tuple[str, str], Identity | None],
     ],
 ) -> bool:
     if not assignment.origin.raw.get("unresolved"):
         return False
-    identities_by_sid, identities_by_ldap_dn, identities_by_provider_uid = resolver
+    identities_by_sid, identities_by_ldap_dn, identities_by_provider_uid, identities_by_google = resolver
     identity = None
     sid = assignment.origin.raw.get("member_sid")
     if sid:
@@ -785,6 +883,22 @@ def _resolve_assignment(
     member_uid = assignment.origin.raw.get("member_uid") or assignment.origin.raw.get("memberUid")
     if identity is None and member_uid:
         identity = identities_by_provider_uid.get((assignment.provider, str(member_uid)))
+    principal = assignment.origin.raw.get("principal")
+    if identity is None and principal:
+        raw = str(principal)
+        kind, _, value = raw.partition(":")
+        if raw.startswith("deleted:"):
+            _, kind, value = raw.split(":", 2)
+        identity_type = {"user": "user_account", "group": "group", "domain": "group", "serviceAccount": "technical_account"}.get(kind)
+        if identity_type and value:
+            identity = identities_by_google.get((identity_type, value.casefold()))
+    if identity is not None and assignment.origin.raw.get("principal") and identity.provider == assignment.provider:
+        identity = None
+    if identity is not None and (identity.provider, identity.identifier) == (
+        assignment.identity_provider,
+        assignment.identity_identifier,
+    ):
+        identity = None
     if identity is None:
         return False
     assignment.identity_provider = identity.provider

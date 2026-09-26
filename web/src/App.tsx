@@ -3281,6 +3281,15 @@ function CampaignNew({ principal }: { principal: Principal }) {
         }),
       onSuccess: setPreview,
     }),
+    compose = useMutation({
+      mutationFn: () => postJson("snapshots/compose", { providers: vals(form.providers) }),
+      onSuccess: async (snapshot) => {
+        await snap.refetch();
+        setForm((current) => ({ ...current, snapshot_id: s(snapshot.id) }));
+        toast("ok", ui("source.buildSnapshot"));
+      },
+      onError: (e: unknown) => toast("error", s(e, "Unable to build the snapshot")),
+    }),
     toast = useToast(),
     create = useMutation({
       mutationFn: async (open: boolean) => {
@@ -3403,6 +3412,9 @@ function CampaignNew({ principal }: { principal: Principal }) {
                 ))}
               </select>
               <span className="field-note">Choose at least one provider. Use Ctrl/Cmd to select several.</span>
+              {vals(form.providers).length > 1 ? (
+                <button type="button" className="button subtle" disabled={compose.isPending} onClick={() => compose.mutate()}>{ui("source.buildSnapshot")}</button>
+              ) : null}
             </label>
           ) : null}
           {form.scope_type === "accesses" ? (
@@ -5543,9 +5555,15 @@ function Sources({ principal }: { principal: Principal }) {
             </label>
             <label>
               Type
-              <select value={s(editing.type)} onChange={(e) => update("type", e.target.value)}>
-                <option value="active_directory">Active Directory</option>
-                <option value="openldap">OpenLDAP</option>
+              <select value={s(editing.type)} onChange={(e) => {
+                const next = e.target.value;
+                update("type", next);
+                update("business_mapping", ["active_directory", "openldap"].includes(next) ? Object.fromEntries(["display_name", "description", "application", "business_permission", "resource", "owner"].map((field) => [field, { mode: "default" }])) : {});
+              }}>
+            <option value="active_directory">Active Directory</option>
+            <option value="openldap">OpenLDAP</option>
+            <option value="google_workspace">Google Workspace</option>
+            <option value="gcp_iam">Google Cloud IAM</option>
               </select>
             </label>
             <h4>CONNECTION</h4>
@@ -5558,6 +5576,17 @@ function Sources({ principal }: { principal: Principal }) {
                   onChange={(e) => updateNested("connection", "server", e.target.value)}
                 />
               </label>
+            ) : editing.type === "google_workspace" ? (
+              <>
+                <label>Customer ID<input required value={s((editing.connection as Row | undefined)?.customer_id, "")} onChange={(e) => updateNested("connection", "customer_id", e.target.value)} /></label>
+                <label>Delegated administrator<input required type="email" value={s((editing.connection as Row | undefined)?.delegated_admin, "")} onChange={(e) => updateNested("connection", "delegated_admin", e.target.value)} /></label>
+                <p className="field-note">The credential environment variable must point to a readable service-account file. Private key contents are never stored in EARE.</p>
+              </>
+            ) : editing.type === "gcp_iam" ? (
+              <>
+                <label>Project scope<input required pattern="projects/[a-z0-9-]+" value={s((editing.connection as Row | undefined)?.scope, "")} onChange={(e) => updateNested("connection", "scope", e.target.value)} /></label>
+                <p className="field-note">Application Default Credentials are preferred. The collector requests IAM read-only data only.</p>
+              </>
             ) : (
               <>
                 <label>
@@ -5594,6 +5623,29 @@ function Sources({ principal }: { principal: Principal }) {
                 <p className="field-note">Only enable this when the directory intentionally permits anonymous read access. Authenticated collection should use LDAPS or StartTLS.</p>
               </>
             )}
+            {editing.type === "google_workspace" ? (
+              <section className="source-coverage">
+                <h4>{ui("source.coverageTitle")}</h4>
+                {[["users", "source.users"], ["groups", "source.groups"], ["memberships", "source.memberships"], ["admin_roles", "source.adminRoles"]].map(([key, label]) => (
+                  <label className="checkbox-label" key={key}>
+                    <input type="checkbox" checked={(editing.collection as Row | undefined)?.[key] !== false} onChange={(e) => updateNested("collection", key, e.target.checked)} />
+                    {ui(label)}
+                  </label>
+                ))}
+                <p className="field-note">{ui("source.readOnlyGoogle")}</p>
+              </section>
+            ) : editing.type === "gcp_iam" ? (
+              <section className="source-coverage">
+                <h4>{ui("source.coverageTitle")}</h4>
+                {[['iam_allow_policies', 'source.iamAllowPolicies'], ['service_accounts', 'source.serviceAccounts']].map(([key, label]) => (
+                  <label className="checkbox-label" key={key}>
+                    <input type="checkbox" checked={(editing.collection as Row | undefined)?.[key] !== false} onChange={(e) => updateNested("collection", key, e.target.checked)} />
+                    {ui(label)}
+                  </label>
+                ))}
+                <p className="field-note">{ui("source.readOnlyGoogle")}</p>
+              </section>
+            ) : null}
             <h4>COLLECTION ACCOUNT</h4>
             <label className="checkbox-label" data-guide-target="read-only-account">
               <input
@@ -5641,6 +5693,11 @@ function Sources({ principal }: { principal: Principal }) {
                 {Object.entries((sourceFields.data?.attributes ?? {}) as Row).filter(([, info]) => (info as Row).mappable !== false).map(([name]) => <option value={name} key={name} />)}
               </datalist>
             </> : null}
+            {editing.type === "google_workspace" || editing.type === "gcp_iam" ? <>
+              <h4>GOOGLE CREDENTIAL REFERENCE</h4>
+              <label>Service-account file environment variable<input placeholder="EARE_WORKSPACE_CREDENTIALS_FILE" value={s((editing.credentials as Row | undefined)?.service_account_file_env, "")} onChange={(e) => updateNested("credentials", "service_account_file_env", e.target.value || undefined)} /></label>
+              {editing.type === "gcp_iam" ? <label className="checkbox-label"><input type="checkbox" checked={(editing.credentials as Row | undefined)?.application_default !== false} onChange={(e) => updateNested("credentials", "application_default", e.target.checked)} />Use Application Default Credentials</label> : null}
+            </> : <>
             <h4>SECRET REFERENCES</h4>
             <label>
               Username environment variable
@@ -5658,6 +5715,7 @@ function Sources({ principal }: { principal: Principal }) {
                 onChange={(e) => updateNested("credentials", "password_env", e.target.value || undefined)}
               />
             </label>
+            </>}
             {testResult ? (
               <section className="mapping-diagnostics">
                 <p className="form-success">Connection: {s((testResult.connection as Row | undefined)?.status, "success")}</p>

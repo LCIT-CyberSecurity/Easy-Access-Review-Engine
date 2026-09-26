@@ -190,6 +190,19 @@ def test_public_swagger_is_read_only_and_hides_internal_routes(tmp_path):
     assert "/api/review-items/{review_item_id}/decision" not in schema["paths"]
     assert all(set(operations) <= {"get"} for operations in schema["paths"].values())
     assert "BearerToken" in schema["components"]["securitySchemes"]
+    swagger_html = client.get("/swagger").text
+    assert 'src="/swagger-ui-bundle.js"' in swagger_html
+    assert 'href="/swagger-ui.css"' in swagger_html
+
+
+def test_public_swagger_is_hidden_when_external_user_api_is_disabled(tmp_path):
+    client, db = _setup(tmp_path)
+    conn = sqlite3.connect(db)
+    set_external_user_api_enabled(conn, False)
+    conn.close()
+
+    assert client.get("/swagger").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
 
 
 

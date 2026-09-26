@@ -201,7 +201,16 @@
     "notConfigured": "Non configuré",
     "warning": "Avertissement",
     "source": "Source",
-    "application": "Source / application"
+    "application": "Source / application",
+    "coverageTitle": "Couverture de collecte Google",
+    "users": "Utilisateurs",
+    "groups": "Groupes",
+    "memberships": "Appartenances",
+    "adminRoles": "Rôles administrateur et affectations",
+    "iamAllowPolicies": "Politiques IAM d’autorisation",
+    "serviceAccounts": "Comptes de service",
+    "buildSnapshot": "Construire l’instantané actuel",
+    "readOnlyGoogle": "Les identifiants Google doivent disposer de rôles ou portées en lecture seule ; la délégation à l’échelle du domaine ne rend pas un compte intrinsèquement non modifiable."
   },
   "settings": {
     "settings": "Paramètres",

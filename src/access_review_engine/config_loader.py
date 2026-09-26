@@ -9,7 +9,7 @@ from access_review_engine.source_mapping import validate_business_mapping
 class ConfigError(ValueError):
     pass
 
-SUPPORTED_TYPES = {"active_directory", "openldap"}
+SUPPORTED_TYPES = {"active_directory", "openldap", "google_workspace", "gcp_iam"}
 SENSITIVE_KEY_PARTS = ("password", "secret", "token", "private_key")
 ALLOWED_SECRET_REFERENCE_KEYS = {
     "username_env",
@@ -38,10 +38,19 @@ def validate_connector(data: Any, expected_name: str | None = None) -> None:
     connection = data.get("connection")
     if not isinstance(connection, dict):
         raise ConfigError("Connector configuration requires connection settings")
-    required = ("server",) if kind == "active_directory" else ("uri", "base_dn")
+    if kind == "active_directory":
+        required = ("server",)
+    elif kind == "openldap":
+        required = ("uri", "base_dn")
+    elif kind == "google_workspace":
+        required = ("customer_id", "delegated_admin")
+    else:
+        required = ("scope",)
     missing = [key for key in required if not connection.get(key)]
     if missing:
         raise ConfigError("Missing connection settings: " + ", ".join(missing))
+    if kind == "gcp_iam" and (not str(connection.get("scope", "")).startswith("projects/") or not str(connection.get("scope", "")).removeprefix("projects/")):
+        raise ConfigError("GCP V1 supports only scope projects/<project>")
     collection = data.get("collection", {})
     if not isinstance(collection, dict):
         raise ConfigError("Connector collection settings must be a mapping")
@@ -49,10 +58,21 @@ def validate_connector(data: Any, expected_name: str | None = None) -> None:
         raise ConfigError("collection.allow_anonymous must be a boolean")
     if "read_only_account" in collection and not isinstance(collection["read_only_account"], bool):
         raise ConfigError("collection.read_only_account must be a boolean")
-    try:
-        data["business_mapping"] = validate_business_mapping(kind, data.get("business_mapping"))
-    except ValueError as exc:
-        raise ConfigError(str(exc)) from exc
+    if (
+        kind == "google_workspace"
+        and collection.get("memberships", True)
+        and not collection.get("groups", True)
+    ):
+        raise ConfigError(
+            "Google Workspace memberships collection requires groups collection to be enabled"
+        )
+    if kind in {"active_directory", "openldap"}:
+        try:
+            data["business_mapping"] = validate_business_mapping(kind, data.get("business_mapping"))
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+    elif data.get("business_mapping") not in (None, {}):
+        raise ConfigError(f"Connector type {kind} does not support business_mapping")
     validate_no_plaintext_secrets(data)
 
 def validate_no_plaintext_secrets(data: Any, path: str = "") -> None:
@@ -98,4 +118,8 @@ def template(provider: str, kind: str) -> dict[str, Any]:
         return {"provider": provider, "type": kind, "connection": {"server": ""}, "collection": {"timeout": 300, "allow_partial": False, "read_only_account": False}, "business_mapping": validate_business_mapping(kind, None)}
     if kind == "openldap":
         return {"provider": provider, "type": kind, "connection": {"uri": "ldaps://", "base_dn": "", "bind_dn": ""}, "collection": {"search_scope": "sub", "page_size": 1000, "connection_timeout": 10, "search_timeout": 120, "command_timeout": 180, "allow_partial": False, "allow_anonymous": False, "read_only_account": False}, "business_mapping": validate_business_mapping(kind, None)}
+    if kind == "google_workspace":
+        return {"provider": provider, "type": kind, "connection": {"customer_id": "my_customer", "delegated_admin": ""}, "credentials": {"service_account_file_env": "EARE_WORKSPACE_CREDENTIALS_FILE"}, "collection": {"users": True, "groups": True, "memberships": True, "admin_roles": True, "admin_role_assignments": True, "page_size": 200, "allow_partial": False, "read_only_account": True}}
+    if kind == "gcp_iam":
+        return {"provider": provider, "type": kind, "connection": {"scope": "projects/"}, "credentials": {"application_default": True}, "collection": {"iam_allow_policies": True, "service_accounts": True, "allow_partial": False, "read_only_account": True}}
     raise ConfigError(f"Unsupported connector type: {kind}")

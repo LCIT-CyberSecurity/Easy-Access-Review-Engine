@@ -1,8 +1,11 @@
 from __future__ import annotations
 import os
 import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+import yaml
 from .config_loader import secret_environment
 from .source_mapping import required_mapping_attributes
 
@@ -55,11 +58,24 @@ def build_command(config: dict[str, object], output: Path, root: str | Path | No
         if collection.get("allow_anonymous") is True: env["ALLOW_ANONYMOUS"] = "1"
         if config.get("_check_only"): env["CHECK_ONLY"] = "1"
         return ["bash", str(base / "exporters/openldap/export-openldap.sh"), str(output)], env
+    if kind in {"google_workspace", "gcp_iam"}:
+        return [sys.executable, "-m", f"access_review_engine.collectors.{kind}", "--config", str(config.get("_path", "")), "--output", str(output)], os.environ.copy()
     raise ValueError(f"Unsupported connector type: {kind}")
 
 def run_exporter(config: dict[str, object], output: str | Path, root: str | Path | None = None, timeout: int | None = None) -> RunnerResult:
     path = Path(output).resolve()
-    command, env = build_command(config, path, root)
+    temporary_config: Path | None = None
+    effective_config = config
+    if str(config.get("type")) in {"google_workspace", "gcp_iam"} and not config.get("_path"):
+        handle = tempfile.NamedTemporaryFile(prefix="eare-google-check-", suffix=".yaml", mode="w", encoding="utf-8", delete=False)
+        temporary_config = Path(handle.name)
+        try:
+            yaml.safe_dump({key: value for key, value in config.items() if key != "_path"}, handle, sort_keys=False)
+        finally:
+            handle.close()
+        effective_config = dict(config)
+        effective_config["_path"] = str(temporary_config)
+    command, env = build_command(effective_config, path, root)
     secrets = secret_environment(config)
     if secrets.get("password"):
         env["LDAP_PASSWORD"] = secrets["password"]
@@ -73,4 +89,7 @@ def run_exporter(config: dict[str, object], output: str | Path, root: str | Path
         raise RunnerError(f"Required collector runtime is not installed: {command[0]}") from exc
     except subprocess.TimeoutExpired as exc:
         raise RunnerError(f"Collector timed out after {timeout or int(default_timeout)} seconds") from exc
+    finally:
+        if temporary_config is not None:
+            temporary_config.unlink(missing_ok=True)
     return RunnerResult(command, path, completed.returncode, completed.stdout, completed.stderr)

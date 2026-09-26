@@ -1,0 +1,21 @@
+# Non-secret, read-only verification expectations for a dedicated test tenant.
+workspace:
+  users:
+    - {id: alice, primaryEmail: alice@example.com}
+    - {id: bob, primaryEmail: bob@example.com}
+  groups:
+    - {id: developers, email: developers@example.com}
+    - {id: cloud-admins, email: cloud-admins@example.com}
+  memberships:
+    - {group_id: developers, member_id: alice, role: MEMBER}
+    - {group_id: cloud-admins, member_id: developers, role: MEMBER}
+    - {group_id: cloud-admins, member_id: bob, role: OWNER}
+  admin_roles:
+    - {roleId: help-desk, roleName: Help Desk}
+gcp:
+  project: projects/example-test
+  bindings:
+    - {resource: projects/example-test, role: roles/editor, members: [group:cloud-admins@example.com]}
+    - {resource: projects/example-test, role: roles/viewer, members: [user:alice@example.com]}
+  service_accounts:
+    - {email: backup@example-test.iam.gserviceaccount.com, uniqueId: backup}
