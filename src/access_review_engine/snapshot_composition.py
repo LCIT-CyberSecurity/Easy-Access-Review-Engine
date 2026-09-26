@@ -95,7 +95,7 @@ def compose_snapshots(
             resolved.origin_fingerprint,
         ): resolved
         for item in assignments.values()
-        for resolved in [_resolve_composite_assignment(item, identities.values())]
+        for resolved in [_resolve_composite_assignment(item, identities.values(), providers.values())]
     }
     # A provider-local group membership access grants a cross-provider access only
     # when the direct cloud assignment resolved to that exact Workspace group.
@@ -157,7 +157,7 @@ def compose_snapshots(
 
 
 def _resolve_composite_assignment(
-    assignment: AccessAssignment, identities: Iterable
+    assignment: AccessAssignment, identities: Iterable, providers: Iterable = ()
 ) -> AccessAssignment:
     """Resolve an old provider-local Google principal against identities in the composite.
 
@@ -169,13 +169,15 @@ def _resolve_composite_assignment(
     if not assignment.origin.raw.get("unresolved") or not isinstance(principal, str):
         return assignment
     kind, separator, identifier = principal.partition(":")
-    if not separator or kind not in {"user", "group"}:
+    if not separator or kind not in {"user", "group", "serviceAccount"}:
         return assignment
     identity_type = {
         "user": IdentityType.USER_ACCOUNT,
         "group": IdentityType.GROUP,
+        "serviceAccount": IdentityType.TECHNICAL_ACCOUNT,
     }[kind]
     wanted = identifier.casefold()
+    candidates = []
     for identity in identities:
         if isinstance(identity.metadata, dict) and identity.metadata.get("unresolved"):
             continue
@@ -185,10 +187,23 @@ def _resolve_composite_assignment(
         if isinstance(identity.metadata, dict):
             values.extend(identity.metadata.get("aliases", []))
         if any(str(value or "").casefold() == wanted for value in values):
+            candidates.append(identity)
+    provider_types = {provider.name: provider.type for provider in providers}
+    preferred_types = {"google_workspace"} if kind in {"user", "group"} else {"gcp_iam"}
+    preferred = [item for item in candidates if provider_types.get(item.provider) in preferred_types]
+    if preferred:
+        candidates = preferred
+    unique = {(item.provider, item.identifier): item for item in candidates}
+    if len(unique) != 1:
+        if len(unique) > 1:
             updated = deepcopy(assignment)
-            updated.identity_provider = identity.provider
-            updated.identity_identifier = identity.identifier
-            updated.origin.raw["composite_resolved"] = True
-            updated.origin.raw["cross_domain_resolved"] = identity.provider != assignment.provider
+            updated.origin.raw["ambiguous"] = True
             return updated
-    return assignment
+        return assignment
+    identity = next(iter(unique.values()))
+    updated = deepcopy(assignment)
+    updated.identity_provider = identity.provider
+    updated.identity_identifier = identity.identifier
+    updated.origin.raw["composite_resolved"] = True
+    updated.origin.raw["cross_domain_resolved"] = identity.provider != assignment.provider
+    return updated

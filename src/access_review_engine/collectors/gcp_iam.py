@@ -18,6 +18,13 @@ MAX_RETRIES = 3
 GCP_REQUIRED_SURFACES = frozenset({"iam_allow_policies", "service_accounts"})
 
 
+def _search_all_iam_policies(asset: Any, scope: str, page_token: str | None) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"scope": scope}
+    if page_token:
+        kwargs["pageToken"] = page_token
+    return asset.v1().searchAllIamPolicies(**kwargs).execute(num_retries=0)
+
+
 class GcpClient(Protocol):
     def list_bindings(self, scope: str, page_token: str | None) -> dict[str, Any]: ...
     def list_service_accounts(self, scope: str, page_token: str | None) -> dict[str, Any]: ...
@@ -212,10 +219,7 @@ def _build_client(config: dict[str, Any]) -> GcpClient:
 
     class Adapter:
         def list_bindings(self, scope: str, page_token: str | None) -> dict[str, Any]:
-            kwargs = {"scope": scope, "query": "policy:"}
-            if page_token:
-                kwargs["pageToken"] = page_token
-            return asset.v1().searchAllIamPolicies(**kwargs).execute(num_retries=0)
+            return _search_all_iam_policies(asset, scope, page_token)
 
         def list_service_accounts(self, scope: str, page_token: str | None) -> dict[str, Any]:
             project = scope.removeprefix("projects/")

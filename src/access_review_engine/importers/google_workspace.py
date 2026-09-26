@@ -21,6 +21,7 @@ from access_review_engine.domain import (
     Provider,
     Target,
     now_utc,
+    stable_json,
     stable_checksum,
 )
 from access_review_engine.google_artifacts import read_artifact
@@ -66,6 +67,18 @@ def import_google_workspace_zip(
     identities: list[Identity] = []
     by_native: dict[str, Identity] = {}
     by_email: dict[str, Identity] = {}
+    known_by_native: dict[str, list[Identity]] = {}
+    known_by_email: dict[str, list[Identity]] = {}
+    for identity in known_identities or []:
+        if identity.native_id:
+            known_by_native.setdefault(identity.native_id, []).append(identity)
+        for value in (identity.identifier, identity.email or ""):
+            if value:
+                known_by_email.setdefault(str(value).casefold(), []).append(identity)
+
+    def unique_known(values: list[Identity]) -> Identity | None:
+        unique = {(item.provider, item.identifier): item for item in values}
+        return next(iter(unique.values())) if len(unique) == 1 else None
     for row in records["users.jsonl"]:
         email = str(row.get("primaryEmail") or row.get("email") or "").strip().lower()
         native = str(row.get("id") or row.get("native_id") or "").strip() or None
@@ -240,7 +253,14 @@ def import_google_workspace_zip(
             continue
         role_definition = role_definitions.get(role_id, {})
         condition = row.get("condition") or row.get("conditionExpression") or ""
-        semantic = f"{role_id}|{scope_type}|{scope_id}|{condition}"
+        semantic = stable_json(
+            {
+                "role_id": role_id,
+                "scope_type": scope_type,
+                "scope_id": scope_id,
+                "condition": condition,
+            }
+        )
         name = f"google-admin:{_id('workspace-admin', semantic)}"
         if name not in access_by_name:
             access = Access(
@@ -275,9 +295,18 @@ def import_google_workspace_zip(
             )
             accesses.append(access)
             access_by_name[name] = access
-        assignee = by_native.get(
-            str(row.get("assignedTo") or row.get("assignee_id"))
-        ) or by_email.get(str(row.get("assignedToEmail") or row.get("assignee") or "").lower())
+        assigned_to = str(row.get("assignedTo") or row.get("assignee_id") or "").strip()
+        assignee = by_native.get(assigned_to)
+        if assignee is None and assigned_to:
+            assignee = unique_known(known_by_native.get(assigned_to, []))
+        if assignee is None:
+            assigned_email = str(
+                row.get("assignedToEmail") or row.get("assigneeEmail") or ""
+            ).strip().casefold()
+            if assigned_email:
+                assignee = by_email.get(assigned_email) or unique_known(
+                    known_by_email.get(assigned_email, [])
+                )
         if assignee:
             assignments.append(
                 AccessAssignment(

@@ -62,7 +62,13 @@ def import_file_to_repository(
         elif source_type == "google_workspace":
             result = import_google_workspace_zip(file_path, known_identities=known_identities)
         elif source_type == "gcp_iam":
-            result = import_gcp_iam_zip(file_path, known_identities=known_identities)
+            result = import_gcp_iam_zip(
+                file_path,
+                known_identities=known_identities,
+                known_provider_types={
+                    row["name"]: row["type"] for row in repo.list_payloads("providers")
+                },
+            )
         else:
             raise ValueError(f"Unsupported ZIP source_type: {source_type or 'missing'}")
     else:
@@ -807,10 +813,13 @@ def _assignment_resolver(repo: Repository) -> tuple[
     dict[str, Identity],
     dict[str, Identity],
     dict[tuple[str, str], Identity],
-    dict[tuple[str, str], Identity],
+    dict[tuple[str, str], Identity | None],
 ]:
     identities = _load_identities(repo)
-    google: dict[tuple[str, str], Identity] = {}
+    provider_types = {
+        row["name"]: row["type"] for row in repo.list_payloads("providers")
+    }
+    google_candidates: dict[tuple[str, str], dict[tuple[str, str], Identity]] = {}
     for identity in identities:
         if isinstance(identity.metadata, dict) and identity.metadata.get("unresolved"):
             continue
@@ -820,7 +829,20 @@ def _assignment_resolver(repo: Repository) -> tuple[
         values.extend(identity.metadata.get("aliases", []) if isinstance(identity.metadata, dict) else [])
         for value in values:
             if value:
-                google[(identity.type, str(value).casefold())] = identity
+                google_candidates.setdefault((identity.type, str(value).casefold()), {})[
+                    (identity.provider, identity.identifier)
+                ] = identity
+    google: dict[tuple[str, str], Identity | None] = {}
+    for key, candidates in google_candidates.items():
+        identity_type, _ = key
+        preferred_type = "gcp_iam" if identity_type == "technical_account" else "google_workspace"
+        preferred = {
+            candidate_key: item
+            for candidate_key, item in candidates.items()
+            if provider_types.get(item.provider) == preferred_type
+        }
+        selected = preferred or candidates
+        google[key] = next(iter(selected.values())) if len(selected) == 1 else None
     return (
         _unique_identities_by_native_id(identities),
         _unique_identities_by_ldap_dn(identities),

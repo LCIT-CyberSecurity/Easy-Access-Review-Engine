@@ -5,6 +5,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from access_review_engine.application import persist_import_result
+from access_review_engine.config_loader import ConfigError, validate_connector
 from access_review_engine.collectors.gcp_iam import collect as collect_gcp
 from access_review_engine.collectors.google_workspace import collect as collect_workspace
 from access_review_engine.google_artifacts import read_artifact
@@ -164,6 +165,117 @@ def test_gcp_conditions_and_special_principals_are_preserved(tmp_path):
     result = import_gcp_iam_zip(output)
     assert result.accesses[0].permission.identifier == "roles/editor"
     assert result.accesses[0].metadata["condition"]["expression"].startswith("request.time")
+
+
+def test_gcp_special_principals_are_builtin_and_not_unresolved(tmp_path):
+    path = tmp_path / "special-principals.zip"
+    _artifact(
+        path,
+        {"source_type": "gcp_iam", "provider": "g", "completeness": "full"},
+        {
+            "iam-bindings.jsonl": [
+                {
+                    "resource": "projects/p",
+                    "role": "roles/viewer",
+                    "members": ["allUsers", "allAuthenticatedUsers"],
+                }
+            ],
+            "service-accounts.jsonl": [],
+            "resource-hierarchy.jsonl": [],
+            "collection-errors.json": [],
+        },
+    )
+    result = import_gcp_iam_zip(path)
+    for special in ("allUsers", "allAuthenticatedUsers"):
+        identity = next(item for item in result.identities if item.identifier == special)
+        assert identity.type == "group"
+        assert identity.built_in is True
+        assert identity.metadata.get("unresolved") is not True
+        assignment = next(
+            item for item in result.assignments if item.identity_identifier == special
+        )
+        assert assignment.origin.raw.get("unresolved") is not True
+        assert "unresolved_foreign_principal" not in assignment.origin.raw
+
+
+def test_workspace_admin_role_resolves_known_gcp_service_account(tmp_path):
+    path = tmp_path / "workspace-service-account-role.zip"
+    _artifact(
+        path,
+        {"source_type": "google_workspace", "provider": "workspace", "completeness": "full"},
+        {
+            "users.jsonl": [],
+            "groups.jsonl": [],
+            "memberships.jsonl": [],
+            "admin-roles.jsonl": [{"roleId": "r1", "roleName": "Help Desk"}],
+            "admin-role-assignments.jsonl": [
+                {"roleId": "r1", "assignedTo": "sa-unique-id", "scopeType": "CUSTOMER"}
+            ],
+            "collection-errors.json": [],
+        },
+    )
+    from access_review_engine.domain import Identity, IdentityType
+
+    service_account = Identity(
+        "gcp", "eare-admin@project.iam.gserviceaccount.com", IdentityType.TECHNICAL_ACCOUNT,
+        "active", native_id="sa-unique-id", email="eare-admin@project.iam.gserviceaccount.com",
+    )
+    result = import_google_workspace_zip(path, known_identities=[service_account])
+    assert len(result.identities) == 0
+    assert len(result.assignments) == 1
+    assert result.assignments[0].identity_provider == "gcp"
+    assert result.assignments[0].identity_identifier == service_account.identifier
+
+
+def test_workspace_memberships_require_groups():
+    config = {
+        "provider": "workspace",
+        "type": "google_workspace",
+        "connection": {"customer_id": "my_customer", "delegated_admin": "admin@example.com"},
+        "collection": {"groups": False, "memberships": True},
+    }
+    try:
+        validate_connector(config)
+    except ConfigError as exc:
+        assert "memberships collection requires groups" in str(exc)
+    else:
+        raise AssertionError("expected memberships/groups validation failure")
+
+
+def test_workspace_memberships_with_groups_are_valid():
+    validate_connector(
+        {
+            "provider": "workspace",
+            "type": "google_workspace",
+            "connection": {
+                "customer_id": "my_customer",
+                "delegated_admin": "admin@example.com",
+            },
+            "collection": {"groups": True, "memberships": True},
+        }
+    )
+
+
+def test_cloud_asset_search_uses_only_scope_and_page_token():
+    from access_review_engine.collectors.gcp_iam import _search_all_iam_policies
+
+    calls = []
+
+    class Request:
+        def execute(self, num_retries):
+            return {"results": []}
+
+    class Asset:
+        def v1(self):
+            return self
+
+        def searchAllIamPolicies(self, **kwargs):
+            calls.append(kwargs)
+            return Request()
+
+    _search_all_iam_policies(Asset(), "projects/prod", None)
+    _search_all_iam_policies(Asset(), "projects/prod", "next")
+    assert calls == [{"scope": "projects/prod"}, {"scope": "projects/prod", "pageToken": "next"}]
 
 
 def test_gcp_service_accounts_use_official_accounts_response_key(tmp_path):
@@ -793,3 +905,54 @@ def test_gcp_assignment_resolves_after_workspace_import_and_alias(tmp_path):
             item["status"] == "active" and item.get("metadata", {}).get("unresolved")
             for item in repo.list_payloads("identities")
         )
+
+
+def test_gcp_known_principal_prefers_workspace_provider_over_same_email_other_idp(tmp_path):
+    path = tmp_path / "multi-idp-gcp.zip"
+    _artifact(
+        path,
+        {"source_type": "gcp_iam", "provider": "gcp", "completeness": "full"},
+        {
+            "iam-bindings.jsonl": [
+                {"resource": "projects/p", "role": "roles/viewer", "members": ["user:alice@example.com"]}
+            ],
+            "service-accounts.jsonl": [],
+            "resource-hierarchy.jsonl": [],
+            "collection-errors.json": [],
+        },
+    )
+    from access_review_engine.domain import Identity, IdentityType
+
+    result = import_gcp_iam_zip(
+        path,
+        known_identities=[
+            Identity("ad", "alice@example.com", IdentityType.USER_ACCOUNT, "active"),
+            Identity("workspace", "alice@example.com", IdentityType.USER_ACCOUNT, "active"),
+        ],
+        known_provider_types={"ad": "active_directory", "workspace": "google_workspace"},
+    )
+    assert result.assignments[0].identity_provider == "workspace"
+
+
+def test_workspace_admin_condition_key_order_does_not_change_access_identity(tmp_path):
+    def make(name, condition):
+        path = tmp_path / f"{name}.zip"
+        _artifact(
+            path,
+            {"source_type": "google_workspace", "provider": "w", "completeness": "full"},
+            {
+                "users.jsonl": [],
+                "groups.jsonl": [],
+                "memberships.jsonl": [],
+                "admin-roles.jsonl": [{"roleId": "r1", "roleName": "Help Desk"}],
+                "admin-role-assignments.jsonl": [
+                    {"roleId": "r1", "scopeType": "CUSTOMER", "condition": condition}
+                ],
+                "collection-errors.json": [],
+            },
+        )
+        return import_google_workspace_zip(path).accesses[0].name
+
+    assert make("one", {"expression": "x", "title": "t"}) == make(
+        "two", {"title": "t", "expression": "x"}
+    )

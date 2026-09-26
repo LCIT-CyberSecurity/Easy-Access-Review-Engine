@@ -110,6 +110,10 @@ def collect(
     config: dict[str, Any], output: str | Path, client: WorkspaceClient | None = None
 ) -> dict[str, Any]:
     collection = config.get("collection") or {}
+    if collection.get("memberships", True) and not collection.get("groups", True):
+        raise ValueError(
+            "Google Workspace memberships collection requires groups collection to be enabled"
+        )
     requested = [name for name in ("users", "groups", "memberships") if collection.get(name, True)]
     if collection.get("admin_roles", False):
         requested.extend(("admin_roles", "admin_role_assignments"))

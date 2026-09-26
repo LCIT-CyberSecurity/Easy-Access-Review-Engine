@@ -188,3 +188,52 @@ def test_composition_resolves_old_gcp_principal_after_workspace_import():
         item.identity_identifier == "alice@example.com" and item.access_name == editor.name
         for item in composed.access_assignments
     )
+    assert gcp_snapshot.access_assignments[0].origin.raw.get("unresolved") is True
+    assert "composite_resolved" not in gcp_snapshot.access_assignments[0].origin.raw
+
+
+def test_composition_prefers_workspace_identity_over_other_idps():
+    ad = Provider("ad", "active_directory")
+    workspace = Provider("workspace", "google_workspace")
+    gcp = Provider("gcp", "gcp_iam")
+    identities = [
+        Identity("ad", "alice@example.com", IdentityType.USER_ACCOUNT, "active"),
+        Identity("workspace", "alice@example.com", IdentityType.USER_ACCOUNT, "active"),
+    ]
+    assignment = AccessAssignment(
+        "gcp",
+        "gcp-access",
+        "gcp",
+        "alice@example.com",
+        Origin("policy", True, False, "projects/p", {"principal": "user:alice@example.com", "unresolved": True}),
+    )
+    from access_review_engine.snapshot_composition import _resolve_composite_assignment
+
+    resolved = _resolve_composite_assignment(
+        assignment, identities, [ad, workspace, gcp]
+    )
+    assert resolved.identity_provider == "workspace"
+
+
+def test_composition_keeps_ambiguous_workspace_principal_unresolved():
+    workspace_a = Provider("workspace-a", "google_workspace")
+    workspace_b = Provider("workspace-b", "google_workspace")
+    assignment = AccessAssignment(
+        "gcp",
+        "gcp-access",
+        "gcp",
+        "alice@example.com",
+        Origin("policy", True, False, "projects/p", {"principal": "user:alice@example.com", "unresolved": True}),
+    )
+    identities = [
+        Identity("workspace-a", "alice@example.com", IdentityType.USER_ACCOUNT, "active"),
+        Identity("workspace-b", "alice@example.com", IdentityType.USER_ACCOUNT, "active"),
+    ]
+    from access_review_engine.snapshot_composition import _resolve_composite_assignment
+
+    resolved = _resolve_composite_assignment(
+        assignment, identities, [workspace_a, workspace_b]
+    )
+    assert resolved.identity_provider == "gcp"
+    assert resolved.origin.raw.get("unresolved") is True
+    assert resolved.origin.raw.get("ambiguous") is True

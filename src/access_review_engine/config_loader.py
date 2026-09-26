@@ -58,6 +58,14 @@ def validate_connector(data: Any, expected_name: str | None = None) -> None:
         raise ConfigError("collection.allow_anonymous must be a boolean")
     if "read_only_account" in collection and not isinstance(collection["read_only_account"], bool):
         raise ConfigError("collection.read_only_account must be a boolean")
+    if (
+        kind == "google_workspace"
+        and collection.get("memberships", True)
+        and not collection.get("groups", True)
+    ):
+        raise ConfigError(
+            "Google Workspace memberships collection requires groups collection to be enabled"
+        )
     if kind in {"active_directory", "openldap"}:
         try:
             data["business_mapping"] = validate_business_mapping(kind, data.get("business_mapping"))

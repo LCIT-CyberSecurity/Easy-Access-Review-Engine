@@ -65,17 +65,34 @@ def _principal(value: str) -> tuple[str, str, str, dict[str, object]]:
     return IdentityType.TECHNICAL_ACCOUNT, raw, "unknown", {"unresolved": True}
 
 
-def import_gcp_iam_zip(path: str, known_identities: list[Identity] | None = None) -> ImportResult:
+def import_gcp_iam_zip(
+    path: str,
+    known_identities: list[Identity] | None = None,
+    known_provider_types: dict[str, str] | None = None,
+) -> ImportResult:
     manifest, records = read_artifact(path, "gcp_iam", FILES)
     provider_name = str(manifest["provider"])
     provider = Provider(provider_name, "gcp_iam", manifest.get("display_name") or provider_name)
-    known: dict[tuple[str, str], Identity] = {}
+    known: dict[tuple[str, str], list[Identity]] = {}
     for identity in known_identities or []:
-        known[(identity.identifier.lower(), identity.type)] = identity
+        known.setdefault((identity.identifier.lower(), identity.type), []).append(identity)
         for alias in (
             identity.metadata.get("aliases", []) if isinstance(identity.metadata, dict) else []
         ):
-            known[(str(alias).lower(), identity.type)] = identity
+            known.setdefault((str(alias).lower(), identity.type), []).append(identity)
+
+    def resolve_known(identifier: str, identity_type: str, preferred_type: str) -> Identity | None:
+        candidates = {
+            (item.provider, item.identifier): item
+            for item in known.get((identifier.lower(), identity_type), [])
+        }
+        preferred = {
+            key: item
+            for key, item in candidates.items()
+            if (known_provider_types or {}).get(item.provider) == preferred_type
+        }
+        candidates = preferred or candidates
+        return next(iter(candidates.values())) if len(candidates) == 1 else None
     identities: list[Identity] = []
     service_accounts: dict[str, Identity] = {}
     for row in records["service-accounts.jsonl"]:
@@ -147,11 +164,12 @@ def import_gcp_iam_zip(path: str, known_identities: list[Identity] | None = None
             kind, identifier, prefix, principal_metadata = _principal(member)
             resolved: Identity | None = None
             if prefix == "serviceAccount":
-                resolved = service_accounts.get(identifier) or known.get(
-                    (identifier, IdentityType.TECHNICAL_ACCOUNT)
+                resolved = service_accounts.get(identifier) or resolve_known(
+                    identifier, IdentityType.TECHNICAL_ACCOUNT, "gcp_iam"
                 )
             elif prefix in {"user", "group", "domain"}:
-                resolved = known.get((identifier, kind))
+                resolved = resolve_known(identifier, kind, "google_workspace")
+            unresolved = resolved is None and not bool(principal_metadata.get("built_in"))
             if resolved:
                 identity_provider, identity_identifier = resolved.provider, resolved.identifier
             else:
@@ -166,10 +184,12 @@ def import_gcp_iam_zip(path: str, known_identities: list[Identity] | None = None
                             kind,
                             IdentityStatus.DELETED
                             if principal_metadata.get("deleted")
+                            else IdentityStatus.ACTIVE
+                            if principal_metadata.get("built_in")
                             else IdentityStatus.UNKNOWN,
                             built_in=bool(principal_metadata.get("built_in")),
                             metadata={
-                                "unresolved": True,
+                                **({"unresolved": True} if unresolved else {}),
                                 "principal": member,
                                 "principal_type": prefix,
                                 **principal_metadata,
@@ -189,7 +209,7 @@ def import_gcp_iam_zip(path: str, known_identities: list[Identity] | None = None
                         resource,
                         {
                             "principal": member,
-                            "unresolved": resolved is None,
+                            "unresolved": unresolved,
                             "condition": condition,
                         },
                     ),
