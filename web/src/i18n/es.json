@@ -34,16 +34,16 @@
     "overview": "Resumen",
     "myReviews": "Mis revisiones",
     "myActions": "Mis acciones",
-    "accessReference": "ACCESO Y REFERENCIA",
+    "accessReference": "Acceso y referencia",
     "identities": "Identidades",
     "access": "Acceso",
     "golden": "Fuente de referencia",
-    "audit": "AUDITORÍA",
+    "audit": "Auditoría",
     "campaigns": "Campañas",
     "findings": "Hallazgos",
     "actions": "Acciones",
     "reports": "Informes",
-    "system": "SISTEMA",
+    "system": "Sistema",
     "sources": "Fuentes e IdP",
     "usersPermissions": "Usuarios y permisos",
     "authentication": "Autenticación",
@@ -211,7 +211,18 @@
     "users": "Usuarios",
     "role": "Rol",
     "status": "Estado",
-    "permissions": "Permisos"
+    "permissions": "Permisos",
+    "appearance": "Apariencia",
+    "appearanceLight": "Claro",
+    "appearanceDark": "Oscuro",
+    "appearanceSystem": "Sistema"
+  },
+  "palette": {
+    "title": "Navegación rápida",
+    "placeholder": "Ir a una página…",
+    "empty": "Ninguna página coincide con esta búsqueda.",
+    "navigate": "Desplazarse",
+    "select": "Abrir"
   },
   "capability": {
     "read": "Lectura",
@@ -256,28 +267,327 @@
     "tryAgain": "Try again"
   },
   "labels": {
-    "campaign": "Campaña", "scope": "Ámbito", "status": "Estado", "progress": "Progreso", "pending": "Pendiente", "dueDate": "Fecha límite",
-    "identity": "Identidad", "access": "Acceso", "application": "Aplicación", "permission": "Permiso", "businessPermission": "Permiso de negocio", "businessContext": "Contexto de negocio", "technicalEntitlement": "Derecho técnico", "nativePermission": "Permiso nativo", "grantMechanism": "Mecanismo de concesión", "holders": "Titulares", "viewHolders": "Ver titulares", "manual": "Manual", "state": "Estado", "decision": "Decisión",
-    "reason": "Motivo", "reviewer": "Revisor", "source": "Fuente", "provider": "Proveedor", "target": "Destino", "findings": "Hallazgos",
-    "reviews": "Revisiones", "decided": "Decididas", "stillWaiting": "Aún pendientes", "reviewItems": "Elementos a revisar", "observedSnapshot": "Instantánea observada",
-    "expectedState": "Estado esperado", "openCampaign": "Abrir campaña", "closeCampaign": "Cerrar campaña", "prepare": "Preparar", "review": "Revisión", "closed": "Cerrada", "remediation": "Remediación", "report": "Informe", "updateBaseline": "Actualizar referencia", "classification": "Clasificación", "observed": "Observado", "expected": "Esperado", "requestedAction": "Acción solicitada", "accessApplication": "Acceso / aplicación", "action": "Acción", "accesses": "Accesos", "sourceIdp": "Fuente / IdP", "mode": "Modo", "directEffective": "Directo / efectivo", "why": "Por qué", "latestDecision": "Última decisión", "decide": "Decidir", "finding": "Hallazgo", "change": "Cambio", "goldenComment": "Comentario Golden", "control": "Control", "assessment": "Evaluación", "goldenUsage": "Uso de Golden", "version": "Versión", "origin": "Origen", "created": "Creado", "when": "Cuándo", "actor": "Actor", "event": "Evento", "object": "Objeto", "details": "Detalles", "user": "Usuario", "username": "Usuario", "signsInWith": "Inicia sesión con", "role": "Rol", "authorizedDomains": "Dominios autorizados", "apiAccess": "Acceso API", "pendingReviews": "Revisiones pendientes", "actions": "Acciones", "person": "Persona", "login": "Inicio de sesión", "email": "Correo electrónico"
+    "campaign": "Campaña",
+    "scope": "Ámbito",
+    "status": "Estado",
+    "progress": "Progreso",
+    "pending": "Pendiente",
+    "dueDate": "Fecha límite",
+    "identity": "Identidad",
+    "access": "Acceso",
+    "application": "Aplicación",
+    "permission": "Permiso",
+    "businessPermission": "Permiso de negocio",
+    "businessContext": "Contexto de negocio",
+    "technicalEntitlement": "Derecho técnico",
+    "nativePermission": "Permiso nativo",
+    "grantMechanism": "Mecanismo de concesión",
+    "holders": "Titulares",
+    "viewHolders": "Ver titulares",
+    "manual": "Manual",
+    "state": "Estado",
+    "decision": "Decisión",
+    "reason": "Motivo",
+    "reviewer": "Revisor",
+    "source": "Fuente",
+    "provider": "Proveedor",
+    "target": "Destino",
+    "findings": "Hallazgos",
+    "reviews": "Revisiones",
+    "decided": "Decididas",
+    "stillWaiting": "Aún pendientes",
+    "reviewItems": "Elementos a revisar",
+    "observedSnapshot": "Instantánea observada",
+    "expectedState": "Estado esperado",
+    "openCampaign": "Abrir campaña",
+    "closeCampaign": "Cerrar campaña",
+    "prepare": "Preparar",
+    "review": "Revisión",
+    "closed": "Cerrada",
+    "remediation": "Remediación",
+    "report": "Informe",
+    "updateBaseline": "Actualizar referencia",
+    "classification": "Clasificación",
+    "observed": "Observado",
+    "expected": "Esperado",
+    "requestedAction": "Acción solicitada",
+    "accessApplication": "Acceso / aplicación",
+    "action": "Acción",
+    "accesses": "Accesos",
+    "sourceIdp": "Fuente / IdP",
+    "mode": "Modo",
+    "directEffective": "Directo / efectivo",
+    "why": "Por qué",
+    "latestDecision": "Última decisión",
+    "decide": "Decidir",
+    "finding": "Hallazgo",
+    "change": "Cambio",
+    "goldenComment": "Comentario Golden",
+    "control": "Control",
+    "assessment": "Evaluación",
+    "goldenUsage": "Uso de Golden",
+    "version": "Versión",
+    "origin": "Origen",
+    "created": "Creado",
+    "when": "Cuándo",
+    "actor": "Actor",
+    "event": "Evento",
+    "object": "Objeto",
+    "details": "Detalles",
+    "user": "Usuario",
+    "username": "Usuario",
+    "signsInWith": "Inicia sesión con",
+    "role": "Rol",
+    "authorizedDomains": "Dominios autorizados",
+    "apiAccess": "Acceso API",
+    "pendingReviews": "Revisiones pendientes",
+    "actions": "Acciones",
+    "person": "Persona",
+    "login": "Inicio de sesión",
+    "email": "Correo electrónico"
   },
   "ui": {
-    "noCampaignYet": "Aún no hay campañas", "createCampaign": "Crear una campaña", "hideReport": "Ocultar informe", "viewReport": "Ver informe",
-    "downloadHtml": "Descargar HTML", "downloadCsv": "Descargar CSV", "downloadJson": "Descargar JSON", "downloadPdf": "Descargar PDF",
-    "openFullReport": "Abrir informe completo", "finalCampaignReport": "Informe final de campaña", "governanceEvidence": "Evidencia de gobierno",
-    "actionsToImplement": "Acciones a implementar", "operationalFollowUp": "Seguimiento operativo", "noReviewsAssigned": "No hay revisiones asignadas", "noCampaignOpen": "No hay ninguna campaña abierta", "reportExplain": "Un informe describe las decisiones de una campaña. Ejecute una primero.", "reportDisplayed": "El informe se muestra aquí como un documento completo. Use las descargas anteriores para distribuirlo.", "remediationReadonly": "Son instrucciones para administradores. EARE no modifica AD, LDAP, la nube ni las aplicaciones.", "actionCount_one": "acción", "actionCount_other": "acciones"
+    "noCampaignYet": "Aún no hay campañas",
+    "createCampaign": "Crear una campaña",
+    "hideReport": "Ocultar informe",
+    "viewReport": "Ver informe",
+    "downloadHtml": "Descargar HTML",
+    "downloadCsv": "Descargar CSV",
+    "downloadJson": "Descargar JSON",
+    "downloadPdf": "Descargar PDF",
+    "openFullReport": "Abrir informe completo",
+    "finalCampaignReport": "Informe final de campaña",
+    "governanceEvidence": "Evidencia de gobierno",
+    "actionsToImplement": "Acciones a implementar",
+    "operationalFollowUp": "Seguimiento operativo",
+    "noReviewsAssigned": "No hay revisiones asignadas",
+    "noCampaignOpen": "No hay ninguna campaña abierta",
+    "reportExplain": "Un informe describe las decisiones de una campaña. Ejecute una primero.",
+    "reportDisplayed": "El informe se muestra aquí como un documento completo. Use las descargas anteriores para distribuirlo.",
+    "remediationReadonly": "Son instrucciones para administradores. EARE no modifica AD, LDAP, la nube ni las aplicaciones.",
+    "actionCount_one": "acción",
+    "actionCount_other": "acciones"
   },
   "guide": {
-    "loading": "Cargando su situación actual…", "loadError": "No se pudo cargar la Guía EARE.", "setupTitle": "Configuración inicial", "readinessTitle": "Preparación de la campaña", "scopeDefined": "Ámbito definido", "scopeRequired": "Ámbito requerido", "snapshotSelected": "Snapshot seleccionado", "snapshotRequired": "Snapshot requerido", "expectedSelected": "Estado esperado seleccionado", "expectedRequired": "Estado esperado requerido", "pilotSelected": "Piloto", "pilotRequired": "Piloto requerido", "unresolvedReviewers": "revisores sin resolver", "reviewersResolved": "Revisores resueltos", "unresolvedReviewersBypassed": "La campaña puede abrirse porque está habilitado el bypass de revisores sin resolver.",
-    "answer": { "next": "Revise la recomendación principal y confirme los datos necesarios antes de actuar.", "readiness": "La preparación se basa en las fuentes autorizadas, el Snapshot, el estado esperado y el trabajo visible para su rol.", "snapshot": "Preview evalúa el impacto esperado; Synchronize recopila un Snapshot inmutable.", "goldenMeaning": "Golden Source representa los accesos esperados. Los datos observados permanecen separados y nunca se sobrescriben.", "campaignReadiness": "Una campaña está bloqueada solo cuando una regla existente indica un requisito sin resolver.", "reviewDecision": "Revise la identidad, el acceso, las evidencias y el contexto de negocio antes de decidir.", "remediation": "Exported significa enviado para trabajo operativo; solo Completed confirma la corrección.", "reportMeaning": "Los informes resumen decisiones y evidencias; el plan de remediación describe el seguimiento solicitado." },
-    "title": "EARE Guide", "open": "Abrir EARE Guide", "close": "Cerrar EARE Guide", "role": "Su rol", "currentSituation": "Situación actual", "next": "Siguiente acción recomendada", "why": "¿Por qué este paso?", "pageHelp": "Acerca de esta página", "otherSuggestions": "Otras sugerencias", "readOnly": "Solo orientación: EARE Guide nunca realiza acciones de negocio.", "disable": "Desactivar la guía", "enable": "Activar la guía", "onboardingTitle": "Bienvenido a EARE", "onboardingIntro": "EARE Guide muestra lo que está listo y lo que debe hacer a continuación.", "startSetup": "Iniciar la configuración guiada", "explore": "Explorar EARE por mi cuenta", "skip": "Omitir la introducción", "enabled": "Activada", "disabled": "Desactivada", "questions": "Temas de ayuda", "authorizationRequired": "Esta acción requiere un permiso o ámbito al que no tiene acceso.",
-    "setupShort": {"sources": "Fuente configurada", "initialCollection": "Snapshot inicial recopilado", "users": "Usuarios EARE configurados", "operatorCoverage": "Cobertura de Operadores", "expectedState": "Estado esperado definido"},
-    "setup": { "sources": "Configurar una fuente de recopilación", "initialCollection": "Recopilar el Snapshot inicial", "users": "Configurar los usuarios de EARE", "operatorCoverage": "Establecer la cobertura de Operadores", "operatorCoverageIncomplete": "Algunos proveedores configurados no están cubiertos por un Operador activo.", "expectedState": "Definir el estado esperado" },
-    "reviewRemediation": { "title": "Revisar el progreso de remediación", "description": "Las acciones de remediación están disponibles para seguimiento empresarial.", "reason": "Los administradores de negocio pueden revisar el progreso, pero no aplicar correcciones operativas." },
-    "action": { "manageSources": "Gestionar fuentes", "openSources": "Abrir fuentes", "openGolden": "Abrir Golden Source", "viewUsers": "Ver usuarios", "createOperator": "Crear Operador", "prepareCampaign": "Preparar una campaña", "openCampaign": "Abrir campaña", "openReviews": "Abrir mis revisiones", "openActions": "Abrir acciones", "openFindings": "Abrir hallazgos" },
-    "rec": { "operatorCoverage": {"title": "Completar la cobertura de Operadores", "description": "Algunos dominios de origen configurados aún no están cubiertos por un Operador habilitado.", "reason": "Cada dominio de origen autorizado necesita un Operador habilitado antes de iniciar la gobernanza de campañas."}, "configureSources": { "title": "Configure your first source", "description": "No source is configured for EARE yet.", "reason": "EARE needs an authorized source connection before it can collect access data." }, "collectSnapshot": { "title": "Collect an initial Snapshot", "description": "Sources are configured, but no collected Snapshot is available.", "reason": "A Snapshot records what the sources actually reported at a point in time." }, "defineExpected": { "title": "Define the expected access state", "description": "A Snapshot is available, but no Golden Source is active.", "reason": "The Golden Source provides the expected state used for comparison." }, "handoff": { "title": "Hand access governance to an Operator", "description": "The environment is ready and an Operator account is available.", "reason": "Operators normally prepare and run access review campaigns." }, "adminCampaign": { "title": "Prepare a campaign yourself", "description": "Administrators can also prepare an authorized campaign.", "reason": "This is an optional administrator path, not a required setup step." }, "createOperator": { "title": "Create an Operator account", "description": "The environment is ready, but no Operator account is configured.", "reason": "An Operator normally pilots campaign preparation and execution." }, "adminContinue": { "title": "Continue governance as Administrator", "description": "You can prepare a campaign with your administrator permissions.", "reason": "EARE does not prevent an Administrator from operating a campaign." }, "operatorSource": { "title": "Make a source available", "description": "No authorized source is available to this Operator.", "reason": "Campaign preparation depends on collected source data." }, "operatorSnapshot": { "title": "Verify the initial collection", "description": "No authorized Snapshot is available yet.", "reason": "The Operator can continue after source data has been collected." }, "operatorGolden": { "title": "Define the expected access state", "description": "No authorized Golden Source is available yet.", "reason": "A campaign needs an expected state for a complete comparison." }, "prepareCampaign": { "title": "Prepare an access review campaign", "description": "Sources, a Snapshot, and a Golden Source are available.", "reason": "The next governance step is to prepare and validate a campaign." }, "continueCampaign": { "title": "Continue the active campaign", "description": "An authorized campaign still has reviews waiting for decisions.", "reason": "The campaign cannot progress until the remaining review work is addressed." }, "campaignBlocked": { "title": "Campaign scope needs attention", "description": "The active campaign is outside the currently authorized scope.", "reason": "EARE does not expose campaign details or actions outside your authorized domains." }, "assignedReviews": { "title": "Complete your assigned reviews", "description": "You have assigned access reviews waiting for a decision.", "reason": "Group owners decide whether their assigned access should remain." }, "noReviews": { "title": "No review currently requires your decision", "description": "Your assigned review queue is currently complete.", "reason": "EARE shows only review items assigned to you." }, "remediation": { "title": "Process remediation actions", "description": "Remediation actions are waiting for operational follow-up.", "reason": "EARE records the requested outcome but does not modify the source system." }, "noActions": { "title": "No remediation action requires attention", "description": "There are no visible pending remediation actions.", "reason": "EARE shows actions only for your authorized domains." }, "unresolvedReviewers": { "title": "Resolve reviewer issues", "description": "Some review items do not have a resolved reviewer.", "reason": "A campaign should have actionable reviewers before it is opened." }, "findings": { "title": "Review findings", "description": "Some authorized review items contain findings.", "reason": "Findings explain observed differences that may need governance attention." } },
-    "page": { "overview": { "title": "Overview", "description": "This page summarizes the current EARE state and work waiting for you." }, "sources": { "title": "Sources and IdPs", "description": "Sources provide the observed identities, accesses, and collection status used by EARE." }, "golden": { "title": "Golden Source", "description": "The Golden Source defines the expected access state; it does not overwrite source observations." }, "campaigns": { "title": "Campaigns", "description": "Campaigns organize review decisions against a collected Snapshot and expected state." }, "reviews": { "title": "My Reviews", "description": "This page contains review decisions assigned to the current user." }, "actions": { "title": "Actions", "description": "Actions record operational remediation follow-up; EARE does not change source systems." }, "reports": { "title": "Reports", "description": "Reports summarize campaign decisions and remediation information." } },
-    "question": { "next": "What should I do next?", "readiness": "Am I ready to proceed?", "sourceSync": "What is a Snapshot?", "goldenMeaning": "What is a Golden Source?", "campaignReadiness": "Why is this campaign blocked?", "reviewDecision": "What does this review mean?", "remediation": "Why does this action exist?", "reportMeaning": "What does this report contain?" }
+    "loading": "Cargando su situación actual…",
+    "loadError": "No se pudo cargar la Guía EARE.",
+    "setupTitle": "Configuración inicial",
+    "readinessTitle": "Preparación de la campaña",
+    "scopeDefined": "Ámbito definido",
+    "scopeRequired": "Ámbito requerido",
+    "snapshotSelected": "Snapshot seleccionado",
+    "snapshotRequired": "Snapshot requerido",
+    "expectedSelected": "Estado esperado seleccionado",
+    "expectedRequired": "Estado esperado requerido",
+    "pilotSelected": "Piloto",
+    "pilotRequired": "Piloto requerido",
+    "unresolvedReviewers": "revisores sin resolver",
+    "reviewersResolved": "Revisores resueltos",
+    "unresolvedReviewersBypassed": "La campaña puede abrirse porque está habilitado el bypass de revisores sin resolver.",
+    "answer": {
+      "next": "Revise la recomendación principal y confirme los datos necesarios antes de actuar.",
+      "readiness": "La preparación se basa en las fuentes autorizadas, el Snapshot, el estado esperado y el trabajo visible para su rol.",
+      "snapshot": "Preview evalúa el impacto esperado; Synchronize recopila un Snapshot inmutable.",
+      "goldenMeaning": "Golden Source representa los accesos esperados. Los datos observados permanecen separados y nunca se sobrescriben.",
+      "campaignReadiness": "Una campaña está bloqueada solo cuando una regla existente indica un requisito sin resolver.",
+      "reviewDecision": "Revise la identidad, el acceso, las evidencias y el contexto de negocio antes de decidir.",
+      "remediation": "Exported significa enviado para trabajo operativo; solo Completed confirma la corrección.",
+      "reportMeaning": "Los informes resumen decisiones y evidencias; el plan de remediación describe el seguimiento solicitado."
+    },
+    "title": "EARE Guide",
+    "open": "Abrir EARE Guide",
+    "close": "Cerrar EARE Guide",
+    "role": "Su rol",
+    "currentSituation": "Situación actual",
+    "next": "Siguiente acción recomendada",
+    "why": "¿Por qué este paso?",
+    "pageHelp": "Acerca de esta página",
+    "otherSuggestions": "Otras sugerencias",
+    "readOnly": "Solo orientación: EARE Guide nunca realiza acciones de negocio.",
+    "disable": "Desactivar la guía",
+    "enable": "Activar la guía",
+    "onboardingTitle": "Bienvenido a EARE",
+    "onboardingIntro": "EARE Guide muestra lo que está listo y lo que debe hacer a continuación.",
+    "startSetup": "Iniciar la configuración guiada",
+    "explore": "Explorar EARE por mi cuenta",
+    "skip": "Omitir la introducción",
+    "enabled": "Activada",
+    "disabled": "Desactivada",
+    "questions": "Temas de ayuda",
+    "authorizationRequired": "Esta acción requiere un permiso o ámbito al que no tiene acceso.",
+    "setupShort": {
+      "sources": "Fuente configurada",
+      "initialCollection": "Snapshot inicial recopilado",
+      "users": "Usuarios EARE configurados",
+      "operatorCoverage": "Cobertura de Operadores",
+      "expectedState": "Estado esperado definido"
+    },
+    "setup": {
+      "sources": "Configurar una fuente de recopilación",
+      "initialCollection": "Recopilar el Snapshot inicial",
+      "users": "Configurar los usuarios de EARE",
+      "operatorCoverage": "Establecer la cobertura de Operadores",
+      "operatorCoverageIncomplete": "Algunos proveedores configurados no están cubiertos por un Operador activo.",
+      "expectedState": "Definir el estado esperado"
+    },
+    "reviewRemediation": {
+      "title": "Revisar el progreso de remediación",
+      "description": "Las acciones de remediación están disponibles para seguimiento empresarial.",
+      "reason": "Los administradores de negocio pueden revisar el progreso, pero no aplicar correcciones operativas."
+    },
+    "action": {
+      "manageSources": "Gestionar fuentes",
+      "openSources": "Abrir fuentes",
+      "openGolden": "Abrir Golden Source",
+      "viewUsers": "Ver usuarios",
+      "createOperator": "Crear Operador",
+      "prepareCampaign": "Preparar una campaña",
+      "openCampaign": "Abrir campaña",
+      "openReviews": "Abrir mis revisiones",
+      "openActions": "Abrir acciones",
+      "openFindings": "Abrir hallazgos"
+    },
+    "rec": {
+      "operatorCoverage": {
+        "title": "Completar la cobertura de Operadores",
+        "description": "Algunos dominios de origen configurados aún no están cubiertos por un Operador habilitado.",
+        "reason": "Cada dominio de origen autorizado necesita un Operador habilitado antes de iniciar la gobernanza de campañas."
+      },
+      "configureSources": {
+        "title": "Configure your first source",
+        "description": "No source is configured for EARE yet.",
+        "reason": "EARE needs an authorized source connection before it can collect access data."
+      },
+      "collectSnapshot": {
+        "title": "Collect an initial Snapshot",
+        "description": "Sources are configured, but no collected Snapshot is available.",
+        "reason": "A Snapshot records what the sources actually reported at a point in time."
+      },
+      "defineExpected": {
+        "title": "Define the expected access state",
+        "description": "A Snapshot is available, but no Golden Source is active.",
+        "reason": "The Golden Source provides the expected state used for comparison."
+      },
+      "handoff": {
+        "title": "Hand access governance to an Operator",
+        "description": "The environment is ready and an Operator account is available.",
+        "reason": "Operators normally prepare and run access review campaigns."
+      },
+      "adminCampaign": {
+        "title": "Prepare a campaign yourself",
+        "description": "Administrators can also prepare an authorized campaign.",
+        "reason": "This is an optional administrator path, not a required setup step."
+      },
+      "createOperator": {
+        "title": "Create an Operator account",
+        "description": "The environment is ready, but no Operator account is configured.",
+        "reason": "An Operator normally pilots campaign preparation and execution."
+      },
+      "adminContinue": {
+        "title": "Continue governance as Administrator",
+        "description": "You can prepare a campaign with your administrator permissions.",
+        "reason": "EARE does not prevent an Administrator from operating a campaign."
+      },
+      "operatorSource": {
+        "title": "Make a source available",
+        "description": "No authorized source is available to this Operator.",
+        "reason": "Campaign preparation depends on collected source data."
+      },
+      "operatorSnapshot": {
+        "title": "Verify the initial collection",
+        "description": "No authorized Snapshot is available yet.",
+        "reason": "The Operator can continue after source data has been collected."
+      },
+      "operatorGolden": {
+        "title": "Define the expected access state",
+        "description": "No authorized Golden Source is available yet.",
+        "reason": "A campaign needs an expected state for a complete comparison."
+      },
+      "prepareCampaign": {
+        "title": "Prepare an access review campaign",
+        "description": "Sources, a Snapshot, and a Golden Source are available.",
+        "reason": "The next governance step is to prepare and validate a campaign."
+      },
+      "continueCampaign": {
+        "title": "Continue the active campaign",
+        "description": "An authorized campaign still has reviews waiting for decisions.",
+        "reason": "The campaign cannot progress until the remaining review work is addressed."
+      },
+      "campaignBlocked": {
+        "title": "Campaign scope needs attention",
+        "description": "The active campaign is outside the currently authorized scope.",
+        "reason": "EARE does not expose campaign details or actions outside your authorized domains."
+      },
+      "assignedReviews": {
+        "title": "Complete your assigned reviews",
+        "description": "You have assigned access reviews waiting for a decision.",
+        "reason": "Group owners decide whether their assigned access should remain."
+      },
+      "noReviews": {
+        "title": "No review currently requires your decision",
+        "description": "Your assigned review queue is currently complete.",
+        "reason": "EARE shows only review items assigned to you."
+      },
+      "remediation": {
+        "title": "Process remediation actions",
+        "description": "Remediation actions are waiting for operational follow-up.",
+        "reason": "EARE records the requested outcome but does not modify the source system."
+      },
+      "noActions": {
+        "title": "No remediation action requires attention",
+        "description": "There are no visible pending remediation actions.",
+        "reason": "EARE shows actions only for your authorized domains."
+      },
+      "unresolvedReviewers": {
+        "title": "Resolve reviewer issues",
+        "description": "Some review items do not have a resolved reviewer.",
+        "reason": "A campaign should have actionable reviewers before it is opened."
+      },
+      "findings": {
+        "title": "Review findings",
+        "description": "Some authorized review items contain findings.",
+        "reason": "Findings explain observed differences that may need governance attention."
+      }
+    },
+    "page": {
+      "overview": {
+        "title": "Overview",
+        "description": "This page summarizes the current EARE state and work waiting for you."
+      },
+      "sources": {
+        "title": "Sources and IdPs",
+        "description": "Sources provide the observed identities, accesses, and collection status used by EARE."
+      },
+      "golden": {
+        "title": "Golden Source",
+        "description": "The Golden Source defines the expected access state; it does not overwrite source observations."
+      },
+      "campaigns": {
+        "title": "Campaigns",
+        "description": "Campaigns organize review decisions against a collected Snapshot and expected state."
+      },
+      "reviews": {
+        "title": "My Reviews",
+        "description": "This page contains review decisions assigned to the current user."
+      },
+      "actions": {
+        "title": "Actions",
+        "description": "Actions record operational remediation follow-up; EARE does not change source systems."
+      },
+      "reports": {
+        "title": "Reports",
+        "description": "Reports summarize campaign decisions and remediation information."
+      }
+    },
+    "question": {
+      "next": "What should I do next?",
+      "readiness": "Am I ready to proceed?",
+      "sourceSync": "What is a Snapshot?",
+      "goldenMeaning": "What is a Golden Source?",
+      "campaignReadiness": "Why is this campaign blocked?",
+      "reviewDecision": "What does this review mean?",
+      "remediation": "Why does this action exist?",
+      "reportMeaning": "What does this report contain?"
+    }
   }
 }

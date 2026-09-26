@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ActionMenu, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, sourceSupportsAttributeMapping } from "./App";
+import { ActionMenu, ApplicationPicker, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, sourceSupportsAttributeMapping, splitPermissions } from "./App";
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {
@@ -102,5 +102,27 @@ describe("Guide and Access density contracts", () => {
     expect(accessDrawerTitle(access)).toBe("CRM Admin");
     expect(accessDrawerTechnicalIdentifier(access)).toBe("crm-admin:member");
     expect(accessDrawerBusinessContextOrder).toEqual(["application", "business_permission", "owner", "description"]);
+  });
+});
+
+describe("business permissions", () => {
+  it("reads a combined permission as distinct rights and writes it back as one list", () => {
+    expect(splitPermissions("read, write;execute | read")).toEqual(["read", "write", "execute"]);
+    expect(splitPermissions("")).toEqual([]);
+    expect(joinPermissions(["read", "write", "execute"])).toBe("read, write, execute");
+  });
+});
+
+describe("applications", () => {
+  it("shows each chosen application as a removable chip", () => {
+    const html = renderToStaticMarkup(createElement(ApplicationPicker, { value: "CRM, ERP", options: ["CRM", "ERP", "Payroll"], onChange: () => undefined }));
+    expect(html).toContain('aria-label="Remove CRM"');
+    expect(html).toContain('aria-label="Remove ERP"');
+    expect(html).toContain('role="combobox"');
+  });
+
+  it("keeps a long list of applications to one line when read", () => {
+    expect(applicationSummary("CRM")).toBe("CRM");
+    expect(applicationSummary("CRM, ERP, Payroll, HR")).toBe("CRM, ERP +2");
   });
 });

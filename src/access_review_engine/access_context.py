@@ -10,6 +10,27 @@ from access_review_engine.storage import Repository
 
 ENRICHMENT_FIELDS = ("application", "business_permission", "resource", "description", "owner")
 MAX_ENRICHMENT_LENGTH = 1000
+MULTI_VALUE_SEPARATORS = ",;|"
+
+
+def split_multi_value(value: object) -> list[str]:
+    """Read a field that may list several values ("CRM, ERP") as distinct entries.
+
+    Applications and business permissions are stored as one string so the API
+    shape does not change; every reader that compares or counts them splits
+    them here first.
+    """
+    if value is None:
+        return []
+    text = str(value)
+    for separator in MULTI_VALUE_SEPARATORS[1:]:
+        text = text.replace(separator, MULTI_VALUE_SEPARATORS[0])
+    seen: dict[str, None] = {}
+    for part in text.split(MULTI_VALUE_SEPARATORS[0]):
+        part = part.strip()
+        if part:
+            seen.setdefault(part, None)
+    return list(seen)
 
 
 def access_enrichment(repo: Repository, access_id: str) -> dict[str, Any] | None:

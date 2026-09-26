@@ -8,6 +8,7 @@ from access_review_engine.access_context import (
     access_context_for_payload,
     access_enrichment,
     save_access_enrichment,
+    split_multi_value,
 )
 from access_review_engine.domain import (
     Access,
@@ -151,3 +152,9 @@ def test_golden_comment_input_is_normalized_and_bounded_before_persistence() -> 
         normalize_assignment_comment({"comment": "not text"})
     with pytest.raises(ValueError):
         normalize_assignment_comment("x" * 4001)
+
+
+def test_split_multi_value_reads_each_application_once():
+    assert split_multi_value("CRM, ERP;Payroll | CRM") == ["CRM", "ERP", "Payroll"]
+    assert split_multi_value("  ") == []
+    assert split_multi_value(None) == []

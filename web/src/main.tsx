@@ -6,10 +6,12 @@ import App from "./App";
 import "./i18n";
 import "@fontsource-variable/inter";
 import "./styles.css";
-import { applyTheme, readTheme } from "./theme";
+import { applyAppearance, applyTheme, readAppearance, readTheme } from "./theme";
 
-// Applied before the first render so a stored theme never flashes the default one.
+// Applied before the first render so a stored style or appearance never flashes
+// the default one first.
 applyTheme(readTheme());
+applyAppearance(readAppearance());
 
 const queryClient = new QueryClient();
 createRoot(document.getElementById("root")!).render(

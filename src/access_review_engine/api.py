@@ -13,6 +13,7 @@ import os
 import secrets
 import sqlite3
 import tempfile
+import threading
 import time
 import yaml
 from pathlib import Path
@@ -29,7 +30,7 @@ except ModuleNotFoundError:  # pragma: no cover
     get_swagger_ui_html = HTTPAuthorizationCredentials = HTTPBearer = None  # type: ignore[assignment,misc]
 
 from access_review_engine.application import import_file_to_repository
-from access_review_engine.access_context import access_context_for_payload, access_enrichment, capture_campaign_access_contexts, save_access_enrichment
+from access_review_engine.access_context import access_context_for_payload, access_enrichment, capture_campaign_access_contexts, save_access_enrichment, split_multi_value
 from access_review_engine.campaign_authorization import CampaignScopeError, campaign_required_providers, can_access_campaign, normalize_campaign_scope
 from access_review_engine.authentication import compare_authentication_posture
 from access_review_engine.collector_runner import RunnerError, run_exporter
@@ -161,13 +162,52 @@ def _finding_tracking_key(campaign_id: str | None, row: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
+def _context_value(row: dict[str, Any], field: str, origin: str) -> Any:
+    """Read business_context.fields[field][origin].value, tolerating any level being null."""
+    context = row.get("business_context")
+    fields = context.get("fields") if isinstance(context, dict) else None
+    values = fields.get(field) if isinstance(fields, dict) else None
+    entry = values.get(origin) if isinstance(values, dict) else None
+    return entry.get("value") if isinstance(entry, dict) else None
+
+
+class _PerThreadConnection:
+    """Hand each worker thread its own SQLite connection to the system database.
+
+    FastAPI runs synchronous endpoints in a thread pool. One connection shared by
+    those threads interleaves cursors, and a concurrent read then returns rows with
+    missing columns (seen as random 500s and sign-outs under parallel requests).
+    Attribute access is forwarded, so callers keep using it like a connection.
+    """
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        self._local = threading.local()
+
+    def _connection(self) -> sqlite3.Connection:
+        connection = getattr(self._local, "connection", None)
+        if connection is None:
+            connection = sqlite3.connect(self._db_path, timeout=30)
+            connection.row_factory = sqlite3.Row
+            self._local.connection = connection
+        return connection
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection(), name)
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self._connection().__enter__()
+
+    def __exit__(self, *exc_info: Any) -> Any:
+        return self._connection().__exit__(*exc_info)
+
+
 def create_app(db_path: str | None = None):
     if FastAPI is None:
         raise RuntimeError("Install the 'app' extra to use the REST API")
     db_path = db_path or os.environ.get("EARE_DB_PATH", "access-review.db")
     app = FastAPI(title="Easy Access Review Engine", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
-    system_conn = sqlite3.connect(db_path, timeout=30, check_same_thread=False)
-    system_conn.row_factory = sqlite3.Row
+    system_conn: Any = _PerThreadConnection(db_path)
     init_system(system_conn)
     ensure_bootstrap_user(system_conn)
     session_secret = os.environ.get("EARE_SESSION_SECRET", "").encode() or secrets.token_bytes(32)
@@ -948,10 +988,10 @@ def create_app(db_path: str | None = None):
                 rows.append(row)
             covered = sorted({str(item.access_provider) for item in active.assignments})
             applications = {
-                str(row.get("business_context", {}).get("fields", {}).get("application", {}).get(origin, {}).get("value"))
+                application
                 for row in rows
                 for origin in ("manual", "source")
-                if row.get("business_context", {}).get("fields", {}).get("application", {}).get(origin, {}).get("value")
+                for application in split_multi_value(_context_value(row, "application", origin))
             }
             expected_identities = {
                 (str(item.identity_provider), str(item.identity_identifier))
@@ -1106,10 +1146,10 @@ def create_app(db_path: str | None = None):
             for row in rows:
                 row["identities"].sort(key=lambda entry: str(entry["identity_display_name"]).casefold())
             application_options = sorted({
-                str(context.get("value"))
+                application
                 for row in rows
-                for context in (row.get("business_context", {}).get("fields", {}).get("application", {}).values() if isinstance(row.get("business_context"), dict) else [])
-                if isinstance(context, dict) and context.get("value") not in {None, ""}
+                for origin in ("manual", "source")
+                for application in split_multi_value(_context_value(row, "application", origin))
             }, key=str.casefold)
             permission_options = sorted({
                 value
@@ -1690,7 +1730,7 @@ def create_app(db_path: str | None = None):
                 },
                 "owned_accesses": owned[:12],
                 "owned_total": len(owned),
-                "applications": sorted({str(row["application"]) for row in owned if row["application"]}),
+                "applications": sorted({application for row in owned for application in split_multi_value(row["application"])}),
             },
             "campaigns": [
                 {"id": row.get("id"), "name": row.get("name"), "status": row.get("status"), "due_at": row.get("due_at"), "review_items": len([item for item in items if item.get("campaign_id") == row.get("id")]), "pending": len([item for item in items if item.get("campaign_id") == row.get("id") and str(item.get("id")) not in decided])}
@@ -2390,7 +2430,8 @@ def create_app(db_path: str | None = None):
                     source_application.get("value") if isinstance(source_application, dict) else None,
                     manual_application.get("value") if isinstance(manual_application, dict) else None,
                 ])
-                if not any(key(candidate) == wanted for candidate in candidates):
+                # An access may name several applications; any one of them counts as a use.
+                if not any(key(part) == wanted for candidate in candidates for part in split_multi_value(candidate)):
                     continue
                 usage_key = (str(version.get("id")), f"{provider}/{access_name}")
                 if usage_key in seen:
