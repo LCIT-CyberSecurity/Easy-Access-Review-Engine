@@ -3240,6 +3240,11 @@ def create_app(db_path: str | None = None):
     def swagger():
         if not external_user_api_enabled(system_conn):
             raise HTTPException(status_code=404, detail="Not found")
-        return get_swagger_ui_html(openapi_url="/openapi.json", title="EARE External User API")
+        return get_swagger_ui_html(
+            openapi_url="/openapi.json",
+            title="EARE External User API",
+            swagger_js_url="/swagger-ui-bundle.js",
+            swagger_css_url="/swagger-ui.css",
+        )
 
     return app
