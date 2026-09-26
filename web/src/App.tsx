@@ -518,7 +518,6 @@ function Login() {
           m.mutate();
         }}
       >
-        <span className="auth-eyebrow">{ui("auth.welcomeBack").toUpperCase()}</span>
         <h1>{ui("auth.welcomeBack")}</h1>
         <p>{ui("auth.signInContinue")}</p>
         <label>
@@ -2082,6 +2081,46 @@ function useList(path: string, extra: Row = {}) {
   };
   return { q, search, setSearch, offset, setOffset, limit, setLimit, sorting, filtering };
 }
+type SummaryFigure = { label: string; value: unknown; tone?: "danger" | "warning" | "success" };
+/** Headline figures for a list page, counted by the API over every filtered row. */
+function PageSummary({ figures, loading }: { figures: SummaryFigure[]; loading?: boolean }) {
+  return (
+    <section className="page-summary" aria-label={uiLabel("Summary")}>
+      {figures.map((figure) => {
+        const value = Number(figure.value ?? 0);
+        return (
+          <div key={figure.label} className={figure.tone && value > 0 ? `page-summary-item ${figure.tone}` : "page-summary-item"}>
+            <strong>{loading ? "—" : s(figure.value, "0")}</strong>
+            <span>{uiLabel(figure.label)}</span>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+/** Rows at or under this count leave room a "next step" card can use on narrower screens. */
+const FEW_ROWS = 10;
+/**
+ * What to do next on a list page. Wide screens always give it a column beside the
+ * data; narrower ones show it under the table only while the data is thin, so
+ * a short list reads as a starting point rather than an empty page.
+ */
+function PageGuide({ title, text, actions, total }: { title: string; text: string; actions: { label: string; to: string; primary?: boolean }[]; total: number }) {
+  return (
+    <aside className={total <= FEW_ROWS ? "page-guide few" : "page-guide"}>
+      <span className="eyebrow">{uiLabel("Next step")}</span>
+      <h3>{uiLabel(title)}</h3>
+      <p>{uiLabel(text)}</p>
+      <div className="button-row">
+        {actions.map((action) => (
+          <NavLink key={action.to} className={action.primary ? "button primary" : "button subtle"} to={action.to}>
+            {uiLabel(action.label)}
+          </NavLink>
+        ))}
+      </div>
+    </aside>
+  );
+}
 function Identities() {
   const [provider, setProvider] = useState(""),
     [status, setStatus] = useState(""),
@@ -2090,6 +2129,17 @@ function Identities() {
   return (
     <>
       <Head title="Identities" />
+      <PageSummary
+        loading={x.q.isLoading}
+        figures={[
+          { label: "Identities", value: x.q.data?.summary?.total },
+          { label: "Sources", value: x.q.data?.summary?.sources },
+          { label: "Access assignments", value: x.q.data?.summary?.assignments },
+          { label: "With findings", value: x.q.data?.summary?.with_findings, tone: "danger" },
+        ]}
+      />
+      <div className="page-layout">
+      <div className="page-main">
       <Filter v={x.search} onChange={x.setSearch}>
         <ProviderFilter
           value={provider}
@@ -2133,6 +2183,14 @@ function Identities() {
         setOffset={x.setOffset}
         setLimit={x.setLimit}
       />
+      </div>
+      <PageGuide
+        total={x.q.data?.total ?? 0}
+        title="Identities come from your sources"
+        text="Each person or account is collected from a connected directory. Connect more sources to widen the audit, or declare which access each identity should hold."
+        actions={[{ label: "Define the expected state", to: "/golden", primary: true }, { label: "Sources & IdPs", to: "/sources" }]}
+      />
+      </div>
       {selected && <IdentityDrawer identity={selected} close={() => setSelected(null)} />}
     </>
   );
@@ -2212,6 +2270,17 @@ function Accesses() {
   return (
     <>
       <Head title="Access" />
+      <PageSummary
+        loading={x.q.isLoading}
+        figures={[
+          { label: "Access rights", value: x.q.data?.summary?.total },
+          { label: "Holders", value: x.q.data?.summary?.holders },
+          { label: "Sources", value: x.q.data?.summary?.sources },
+          { label: "With findings", value: x.q.data?.summary?.with_findings, tone: "danger" },
+        ]}
+      />
+      <div className="page-layout">
+      <div className="page-main">
       <Filter v={x.search} onChange={x.setSearch}>
         <ProviderFilter
           value={provider}
@@ -2220,25 +2289,19 @@ function Accesses() {
         />
       </Filter>
       <Table
-        cols={[
-          "Access",
-          "What it allows",
-          "Source / application",
-          "Permission",
-          "Target",
-          "Holders",
-          "Findings",
-        ]}
-        fields={["display_name", "description", "provider", "permission", "target", null, null]}
+        cols={["Access", "Source / application", "Permission", "Target", "Holders", "Findings"]}
+        fields={["display_name", "provider", "permission", "target", null, null]}
         sorting={x.sorting}
         filtering={x.filtering}
         q={x.q}
         onRow={(i) => setSelected((x.q.data?.items ?? [])[i])}
         rows={(x.q.data?.items ?? []).map((r) => [
-          <button className="link-button" onClick={() => setSelected(r)}>
-            {s(r.display_name, s(r.name))}
-          </button>,
-          <Sub>{describeAccess(r)}</Sub>,
+          <>
+            <button className="link-button" onClick={() => setSelected(r)}>
+              {s(r.display_name, s(r.name))}
+            </button>
+            <Sub>{describeAccess(r)}</Sub>
+          </>,
           s(r.provider),
           permissionText(r.permission) || "—",
           targetText(r.target) || "—",
@@ -2253,6 +2316,14 @@ function Accesses() {
         setOffset={x.setOffset}
         setLimit={x.setLimit}
       />
+      </div>
+      <PageGuide
+        total={x.q.data?.total ?? 0}
+        title="Say which access is expected"
+        text="These access rights were collected from your systems. Declare the ones that should exist in the Golden Source, and EARE reports everything else as unexpected."
+        actions={[{ label: "Open the Golden Source", to: "/golden", primary: true }, { label: "Connect another source", to: "/sources" }]}
+      />
+      </div>
       {selected && <AccessDrawer access={selected} close={() => setSelected(null)} />}
     </>
   );
@@ -2735,6 +2806,24 @@ function List({ path, title, principal }: { path: string; title: string; princip
   return (
     <>
       <Head title={title} />
+      <PageSummary
+        loading={x.q.isLoading}
+        figures={findings
+          ? [
+              { label: "Findings", value: x.q.data?.summary?.total },
+              { label: "Unexpected", value: x.q.data?.summary?.unexpected, tone: "danger" },
+              { label: "Missing", value: x.q.data?.summary?.missing, tone: "warning" },
+              { label: "Sources", value: x.q.data?.summary?.sources },
+            ]
+          : [
+              { label: "Actions", value: x.q.data?.summary?.total },
+              { label: "Pending", value: x.q.data?.summary?.pending, tone: "warning" },
+              { label: "Exported", value: x.q.data?.summary?.exported },
+              { label: "Completed", value: x.q.data?.summary?.completed, tone: "success" },
+            ]}
+      />
+      <div className="page-layout">
+      <div className="page-main">
       <Filter v={x.search} onChange={x.setSearch}>
         <ProviderFilter
           value={provider}
@@ -2779,12 +2868,15 @@ function List({ path, title, principal }: { path: string; title: string; princip
         rows={(x.q.data?.items ?? []).map((r) =>
           findings
             ? [
-                <button
-                  className="link-button"
-                  onClick={() => setSelected({ ...r, campaign_id: campaign || null, campaign_name: selectedCampaignName })}
-                >
-                  {s((r.identity as Row | undefined)?.display_name, s(r.identity_identifier))}
-                </button>,
+                <>
+                  <button
+                    className="link-button"
+                    onClick={() => setSelected({ ...r, campaign_id: campaign || null, campaign_name: selectedCampaignName })}
+                  >
+                    {s((r.identity as Row | undefined)?.display_name, s(r.identity_identifier))}
+                  </button>
+                  <Sub>{s(r.identity_provider, "")}</Sub>
+                </>,
                 s((r.access as Row | undefined)?.display_name, s(r.access_name)),
                 s(r.access_provider),
                 <Status v={r.classification} />,
@@ -2793,9 +2885,12 @@ function List({ path, title, principal }: { path: string; title: string; princip
                 expectedMeaning(r),
               ]
             : [
-                <button className="link-button" onClick={() => setSelected(r)}>
-                  {s(r.identity_display_name, s(r.identity_identifier))}
-                </button>,
+                <>
+                  <button className="link-button" onClick={() => setSelected(r)}>
+                    {s(r.identity_display_name, s(r.identity_identifier))}
+                  </button>
+                  <Sub>{s(r.identity_provider, s(r.access_provider, ""))}</Sub>
+                </>,
                 s(r.action, s(r.decision)),
                 s(r.access_display_name, s(r.access_name)),
                 s(r.campaign_name, s(r.campaign_id)),
@@ -2812,6 +2907,23 @@ function List({ path, title, principal }: { path: string; title: string; princip
         setOffset={x.setOffset}
         setLimit={x.setLimit}
       />
+      </div>
+      {findings ? (
+        <PageGuide
+          total={x.q.data?.total ?? 0}
+          title="Turn findings into decisions"
+          text="A finding is a gap between what the systems contain and the Golden Source. A campaign asks the owners to confirm or revoke each one."
+          actions={[{ label: "+ New campaign", to: "/campaigns/new", primary: true }, { label: "Open the Golden Source", to: "/golden" }]}
+        />
+      ) : (
+        <PageGuide
+          total={x.q.data?.total ?? 0}
+          title="Carry out what owners decided"
+          text="Each revocation decided in a campaign becomes an action. Export them for the teams who apply the change, then mark them completed once confirmed."
+          actions={[{ label: "Reports", to: "/reports", primary: true }, { label: "Campaigns", to: "/campaigns" }]}
+        />
+      )}
+      </div>
       {selected &&
         (findings ? (
           <FindingDrawer row={selected} close={() => setSelected(null)} />
@@ -2963,6 +3075,17 @@ function Campaigns({ principal }: { principal: Principal }) {
           + New campaign
         </a>
       </Head>
+      <PageSummary
+        loading={x.q.isLoading}
+        figures={[
+          { label: "Campaigns", value: x.q.data?.summary?.total },
+          { label: "Open", value: x.q.data?.summary?.open },
+          { label: "Closed", value: x.q.data?.summary?.closed },
+          { label: "Pending reviews", value: x.q.data?.summary?.pending, tone: "warning" },
+        ]}
+      />
+      <div className="page-layout">
+      <div className="page-main">
       <Filter v={x.search} onChange={x.setSearch} />
       <Table
         cols={["Campaign", "Scope", "Status", "Progress", "Pending", "Due date", "Actions"]}
@@ -2971,7 +3094,10 @@ function Campaigns({ principal }: { principal: Principal }) {
         filtering={x.filtering}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) => [
-          <NavLink to={"/campaigns/" + s(r.id)}>{s(r.name)}</NavLink>,
+          <>
+            <NavLink to={"/campaigns/" + s(r.id)}>{s(r.name)}</NavLink>
+            <Sub>{`${s(r.review_items, "0")} review items · ${s(r.pilot, "no pilot")}`}</Sub>
+          </>,
           s((r.scope as Row | undefined)?.type, "all"),
           <Status v={r.status} />,
           <div className="table-progress">
@@ -2994,6 +3120,14 @@ function Campaigns({ principal }: { principal: Principal }) {
         setOffset={x.setOffset}
         setLimit={x.setLimit}
       />
+      </div>
+      <PageGuide
+        total={x.q.data?.total ?? 0}
+        title="Ask owners to confirm access"
+        text="A campaign sends each access to the person who owns it. Their approvals and revocations become the evidence in your reports and the actions to carry out."
+        actions={[{ label: "+ New campaign", to: "/campaigns/new", primary: true }, { label: "Reports", to: "/reports" }]}
+      />
+      </div>
       {deleting ? (
         <Confirm
           title={`Delete ${s(deleting.name)}?`}
