@@ -198,6 +198,17 @@ checklist and recommends creating one for every source not yet confirmed,
 naming them in `sources_without_read_only_account`. It is an attestation by the
 administrator: EARE cannot inspect a directory account's rights itself.
 
+### A guide that walks the user through each step
+
+- Setup steps show progress ("4 of 6 steps complete") and open steps are links.
+- Following a step or a recommendation points at where it is done: the page
+  scrolls to the element (`data-guide-target`) and rings it until it is used.
+  A step can be a short walk: the read-only step rings the source's
+  "Configure" button, then the setting inside the drawer (`GUIDE_FOCUS`).
+- The "EARE Guide" button carries a badge with what is left to do.
+- The guide re-reads its facts after every successful change, and a notice
+  says when a setup step completes and which one comes next.
+
 ### Accessibility and RTL
 
 One focus-ring token on every interactive element; `prefers-reduced-motion`

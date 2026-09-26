@@ -596,6 +596,10 @@
       "reviewDecision": "What does this review mean?",
       "remediation": "Why does this action exist?",
       "reportMeaning": "What does this report contain?"
-    }
+    },
+    "progress": "اكتملت {{done}} من {{total}} خطوات",
+    "pendingBadge": "{{count}} للإنجاز",
+    "stepDoneNext": "اكتملت الخطوة: {{step}}. التالية: {{next}}.",
+    "stepDoneAll": "اكتملت الخطوة: {{step}}. انتهى الإعداد الأولي."
   }
 }

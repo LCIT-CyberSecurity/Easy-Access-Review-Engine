@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ActionMenu, ApplicationPicker, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, sourceSupportsAttributeMapping, splitPermissions } from "./App";
+import { ActionMenu, ApplicationPicker, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, sourceSupportsAttributeMapping, splitPermissions } from "./App";
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {
@@ -124,5 +124,35 @@ describe("applications", () => {
   it("keeps a long list of applications to one line when read", () => {
     expect(applicationSummary("CRM")).toBe("CRM");
     expect(applicationSummary("CRM, ERP, Payroll, HR")).toBe("CRM, ERP +2");
+  });
+});
+
+describe("guide hand-holding", () => {
+  const checklist = [
+    { id: "sources", status: "complete" },
+    { id: "read_only_accounts", status: "attention" },
+    { id: "users", status: "not_started" },
+  ];
+
+  it("counts open setup steps for admins and actionable advice for others", () => {
+    expect(guidePendingCount({ state: { setup_checklist: checklist } }, "ADMIN")).toBe(2);
+    expect(guidePendingCount({ recommendations: [
+      { status: "actionable", priority: "primary" },
+      { status: "actionable", priority: "secondary" },
+      { status: "completed", priority: "informational" },
+    ] }, "OPERATOR")).toBe(1);
+    expect(guidePendingCount(undefined, "ADMIN")).toBe(0);
+  });
+
+  it("shows how far the setup has come", () => {
+    const html = renderToStaticMarkup(createElement(GuideChecklist, { items: checklist, text: (key: unknown) => String(key) }));
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain('aria-valuenow="1"');
+    expect(html).toContain('aria-valuemax="3"');
+  });
+
+  it("walks the read-only step from the source card to the setting itself", () => {
+    expect(GUIDE_FOCUS.read_only_accounts).toEqual(["configure-source", "read-only-account"]);
+    expect(GUIDE_FOCUS.dedicated_read_only_accounts).toEqual(GUIDE_FOCUS.read_only_accounts);
   });
 });

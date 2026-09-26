@@ -812,12 +812,60 @@ function Shell({ principal }: { principal: Principal }) {
     [guideEnabled, setGuideEnabled] = useState(() => readGuidePreference(principal, "enabled", true)),
     [onboardingSeen, setOnboardingSeen] = useState(() => readGuidePreference(principal, "seen", false)),
     location = useLocation(),
+    toast = useToast(),
+    [guideFocus, setGuideFocus] = useState<string[]>([]),
+    stepStatuses = useRef<Record<string, string> | null>(null),
     guidance = useQuery({
       queryKey: ["guidance", location.pathname],
       queryFn: () => getGuidance(location.pathname),
       enabled: guideEnabled,
       staleTime: 30000,
-    });
+    }),
+    guidePending = guideEnabled ? guidePendingCount(guidance.data, principal.role) : 0;
+  // Point at where a guide step is done: wait for the element to render, scroll
+  // it into view and ring it; clicking it moves on to the next target, if any.
+  useEffect(() => {
+    if (!guideFocus.length) return;
+    const [target, ...rest] = guideFocus,
+      started = Date.now(),
+      smooth = !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    let element: HTMLElement | null = null;
+    const release = () => element?.classList.remove("guide-focus");
+    const advance = () => { release(); setGuideFocus(rest); };
+    const search = window.setInterval(() => {
+      element = document.querySelector<HTMLElement>(`[data-guide-target="${target}"]`);
+      if (element) {
+        window.clearInterval(search);
+        element.classList.add("guide-focus");
+        element.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "center" });
+        element.addEventListener("click", advance, { once: true });
+      } else if (Date.now() - started > 5000) {
+        window.clearInterval(search);
+        setGuideFocus([]);
+      }
+    }, 150);
+    const expire = window.setTimeout(() => { release(); setGuideFocus([]); }, 20000);
+    return () => {
+      window.clearInterval(search);
+      window.clearTimeout(expire);
+      element?.removeEventListener("click", advance);
+      release();
+    };
+  }, [guideFocus]);
+  // Say so when a setup step turns complete, and name the next one.
+  useEffect(() => {
+    const items = arr((guidance.data?.state as Row | undefined)?.setup_checklist);
+    if (!items.length) return;
+    const now = Object.fromEntries(items.map((item) => [s(item.id), s(item.status)]));
+    const before = stepStatuses.current;
+    stepStatuses.current = now;
+    if (!before) return;
+    const finished = items.find((item) => now[s(item.id)] === "complete" && before[s(item.id)] && before[s(item.id)] !== "complete");
+    if (!finished) return;
+    const next = items.find((item) => s(item.status) !== "complete"),
+      label = (item: Row) => guideTranslation(guideChecklistLabelKey(item));
+    toast("ok", next ? ui("guide.stepDoneNext", { step: label(finished), next: label(next) }) : ui("guide.stepDoneAll", { step: label(finished) }));
+  }, [guidance.data]);
   // Ctrl/Cmd+K is the one global shortcut. It is bound on the document because
   // the palette must open from anywhere, including from inside a drawer.
   useEffect(() => {
@@ -878,8 +926,14 @@ function Shell({ principal }: { principal: Principal }) {
               <span>{ui("palette.title")}</span>
               <kbd>{paletteShortcutLabel()}</kbd>
             </button>
-            <button className="guide-trigger" type="button" onClick={() => setGuideOpen(true)} aria-label={ui("guide.open")}>
+            <button
+              className="guide-trigger"
+              type="button"
+              onClick={() => setGuideOpen(true)}
+              aria-label={guidePending ? `${ui("guide.open")} — ${ui("guide.pendingBadge", { count: guidePending })}` : ui("guide.open")}
+            >
               <HelpCircle size={16} /> <span>{ui("guide.title")}</span>
+              {guidePending ? <span className="guide-badge" aria-hidden="true">{guidePending}</span> : null}
             </button>
             <UserMenu
               principal={principal}
@@ -922,7 +976,7 @@ function Shell({ principal }: { principal: Principal }) {
           </Routes>
         </main>
       </div>
-      {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} /> : null}
+      {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} focus={(id) => setGuideFocus(GUIDE_FOCUS[id] ?? [])} /> : null}
       {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
       {paletteOpen ? <CommandPalette role={principal.role} close={() => setPaletteOpen(false)} /> : null}
     </div>
@@ -1314,18 +1368,61 @@ export const guideTranslation = (key: unknown): string => {
 export const accessDrawerTitle = (access: Row): string => s(access.display_name, s(access.name ?? access.access_name));
 export const accessDrawerTechnicalIdentifier = (access: Row): string => s(access.name ?? access.access_name, "");
 export const accessDrawerBusinessContextOrder = ["application", "business_permission", "owner", "description"] as const;
-export function GuideChecklist({ items, text }: { items: Row[]; text: (key: unknown) => string }) {
+/**
+ * Where on a page each guide step happens, as the data-guide-target elements to
+ * point at in order. A step with two targets is a short walk: the first click
+ * (e.g. "Configure") reveals the second (the setting inside the drawer).
+ */
+export const GUIDE_FOCUS: Record<string, string[]> = {
+  sources: ["add-source"],
+  configure_sources: ["add-source"],
+  initial_collection: ["sync-source"],
+  collect_snapshot: ["sync-source"],
+  operator_missing_snapshot: ["sync-source"],
+  read_only_accounts: ["configure-source", "read-only-account"],
+  dedicated_read_only_accounts: ["configure-source", "read-only-account"],
+  users: ["add-user"],
+  create_operator: ["add-user"],
+  expected_state: ["golden-create"],
+  define_expected_state: ["golden-create"],
+  operator_missing_golden: ["golden-create"],
+};
+/** What still needs doing: open setup steps for an admin, actionable advice for everyone else. */
+export const guidePendingCount = (data: Row | undefined, role: string): number => {
+  if (!data) return 0;
+  if (role === "ADMIN") return arr((data.state as Row | undefined)?.setup_checklist).filter((item) => s(item.status) !== "complete").length;
+  return arr(data.recommendations).filter((item) => item.status === "actionable" && ["primary", "attention"].includes(s(item.priority))).length;
+};
+export function GuideChecklist({ items, text, open }: { items: Row[]; text: (key: unknown) => string; open?: (item: Row) => void }) {
   if (!items.length) return null;
+  const done = items.filter((item) => s(item.status) === "complete").length;
   return (
     <section className="guide-section">
       <h3>{text("guide.setupTitle")}</h3>
+      <div className="guide-progress">
+        <span>{ui("guide.progress", { done, total: items.length })}</span>
+        <div className="guide-progress-bar" role="progressbar" aria-valuemin={0} aria-valuemax={items.length} aria-valuenow={done}>
+          <span style={{ width: `${Math.round((done / items.length) * 100)}%` }} />
+        </div>
+      </div>
       <div className="guide-checklist">
-        {items.map((item) => (
-          <div className="guide-checklist-item" key={s(item.id)}>
-            <span aria-hidden="true">{s(item.status) === "complete" ? "✓" : s(item.status) === "attention" ? "!" : "○"}</span>
-            <strong>{text(guideChecklistLabelKey(item))}</strong>
-          </div>
-        ))}
+        {items.map((item) => {
+          const status = s(item.status), label = <strong>{text(guideChecklistLabelKey(item))}</strong>;
+          const mark = <span aria-hidden="true">{status === "complete" ? "✓" : status === "attention" ? "!" : "○"}</span>;
+          // Open steps lead to the place where they are done; finished ones stay plain.
+          return open && status !== "complete" && item.action_url ? (
+            <NavLink className={`guide-checklist-item actionable ${status}`} key={s(item.id)} to={s(item.action_url)} onClick={() => open(item)}>
+              {mark}
+              {label}
+              <ChevronRight size={15} aria-hidden="true" />
+            </NavLink>
+          ) : (
+            <div className={`guide-checklist-item ${status}`} key={s(item.id)}>
+              {mark}
+              {label}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
@@ -1345,7 +1442,8 @@ function writeGuidePreference(principal: Principal, suffix: string, value: boole
     // Guidance remains available for this session when storage is unavailable.
   }
 }
-function GuideDrawer({ data, loading, error, retry, principal, enabled, close, setEnabled }: { data?: Row; loading: boolean; error: boolean; retry: () => void; principal: Principal; enabled: boolean; close: () => void; setEnabled: (value: boolean) => void }) {
+function GuideDrawer({ data, loading, error, retry, principal, enabled, close, setEnabled, focus }: { data?: Row; loading: boolean; error: boolean; retry: () => void; principal: Principal; enabled: boolean; close: () => void; setEnabled: (value: boolean) => void; focus: (id: string) => void }) {
+  const go = (id: unknown) => { close(); focus(s(id)); };
   const recommendations = arr(data?.recommendations), state = (data?.state ?? {}) as Row, pageHelp = (data?.page_help ?? {}) as Row;
   const readiness = (data?.campaign_readiness ?? null) as Row | null;
   const text = guideTranslation;
@@ -1370,14 +1468,14 @@ function GuideDrawer({ data, loading, error, retry, principal, enabled, close, s
                 {principal.role === "REMEDIATION_MANAGER" && Number(state.exported_actions) ? <span>! {s(state.exported_actions)} {text("labels.exported")}</span> : null}
               </div>
             </section>
-            {principal.role === "ADMIN" ? <GuideChecklist items={arr(state.setup_checklist)} text={text} /> : null}
+            {principal.role === "ADMIN" ? <GuideChecklist items={arr(state.setup_checklist)} text={text} open={(item) => go(item.id)} /> : null}
             {openRecommendation ? (
               <section className="guide-primary">
                 <span className="eyebrow">{text("guide.next")}</span>
                 <h3>{text(openRecommendation.title)}</h3>
                 <p>{text(openRecommendation.description)}</p>
                 <p className="guide-why"><strong>{text("guide.why")}</strong> {text(openRecommendation.reason)}</p>
-                {openRecommendation.action_url ? <NavLink className="button primary" to={s(openRecommendation.action_url)} onClick={close}>{text(openRecommendation.action_label)}</NavLink> : null}
+                {openRecommendation.action_url ? <NavLink className="button primary" to={s(openRecommendation.action_url)} onClick={() => go(openRecommendation.id)}>{text(openRecommendation.action_label)}</NavLink> : null}
               </section>
             ) : null}
             {readiness ? <section className="guide-section"><h3>{text("guide.readinessTitle")}</h3><div className="guide-facts"><span>{readiness.scope ? `✓ ${text("guide.scopeDefined")}` : `○ ${text("guide.scopeRequired")}`}</span><span>{(readiness.snapshot as Row | undefined)?.selected ? `✓ ${text("guide.snapshotSelected")}` : `○ ${text("guide.snapshotRequired")}`}</span><span>{(readiness.expected_state as Row | undefined)?.selected ? `✓ ${text("guide.expectedSelected")}` : `○ ${text("guide.expectedRequired")}`}</span><span>{(readiness.pilot as Row | undefined)?.selected ? `✓ ${text("guide.pilotSelected")} ${s((readiness.pilot as Row).username)}` : `○ ${text("guide.pilotRequired")}`}</span><span>{Number((readiness.reviewers as Row | undefined)?.unresolved) ? `⚠ ${s((readiness.reviewers as Row).unresolved)} ${text("guide.unresolvedReviewers")}` : `✓ ${text("guide.reviewersResolved")}`}</span></div>{vals(readiness.warnings).some((item) => item === "unresolved_reviewers_bypassed") ? <p className="field-note">{text("guide.unresolvedReviewersBypassed")}</p> : null}</section> : null}
@@ -1388,7 +1486,7 @@ function GuideDrawer({ data, loading, error, retry, principal, enabled, close, s
                   <div className="guide-suggestion" key={s(item.id)}>
                     <strong>{text(item.title)}</strong>
                     <p>{text(item.description)}</p>
-                    {item.action_url ? <NavLink className="text-button" to={s(item.action_url)} onClick={close}>{text(item.action_label)}</NavLink> : null}
+                    {item.action_url ? <NavLink className="text-button" to={s(item.action_url)} onClick={() => go(item.id)}>{text(item.action_label)}</NavLink> : null}
                   </div>
                 ))}
               </section>
@@ -4368,6 +4466,7 @@ function Golden() {
                 </label>
                 <button
                   className="button primary"
+                  data-guide-target="golden-create"
                   disabled={!sid || baseline.isPending}
                   onClick={() => baseline.mutate()}
                 >
@@ -5331,7 +5430,7 @@ function Sources({ principal }: { principal: Principal }) {
   return (
     <>
       <Head title="Sources & IdPs">
-        {principal.role === "ADMIN" ? <button className="button primary" onClick={() => edit()}>+ Add source</button> : null}
+        {principal.role === "ADMIN" ? <button className="button primary" data-guide-target="add-source" onClick={() => edit()}>+ Add source</button> : null}
       </Head>
       <p>
         Connect and monitor the identity and access systems EARE audits. Secrets remain referenced through
@@ -5372,7 +5471,15 @@ function Sources({ principal }: { principal: Principal }) {
             </div>
             <div className="source-foot">
               {principal.role === "ADMIN" && Boolean((r.capabilities as Row | undefined)?.source_browser) ? <NavLink className="button subtle" to={`/sources/${encodeURIComponent(s(r.provider))}/browse`}>Browse source</NavLink> : null}
-              {principal.role === "ADMIN" ? <button className="button subtle" onClick={() => edit(configs.find((c) => s(c.provider) === s(r.provider)))}>Configure</button> : null}
+              {principal.role === "ADMIN" ? (
+                <button
+                  className="button subtle"
+                  data-guide-target={((configs.find((c) => s(c.provider) === s(r.provider))?.collection as Row | undefined)?.read_only_account === true) ? undefined : "configure-source"}
+                  onClick={() => edit(configs.find((c) => s(c.provider) === s(r.provider)))}
+                >
+                  Configure
+                </button>
+              ) : null}
               <button
                 className="button subtle"
                 onClick={() => {
@@ -5384,6 +5491,7 @@ function Sources({ principal }: { principal: Principal }) {
               </button>
               <button
                 className="button primary"
+                data-guide-target="sync-source"
                 onClick={() => {
                   setKind("sync");
                   start.mutate({ p: s(r.provider), a: "sync" });
@@ -5487,7 +5595,7 @@ function Sources({ principal }: { principal: Principal }) {
               </>
             )}
             <h4>COLLECTION ACCOUNT</h4>
-            <label className="checkbox-label">
+            <label className="checkbox-label" data-guide-target="read-only-account">
               <input
                 type="checkbox"
                 checked={(editing.collection as Row | undefined)?.read_only_account === true}
@@ -5949,7 +6057,7 @@ function UsersPage() {
               + From {s(d.name)}
             </button>
           ))}
-          <button className="button primary" onClick={() => edit()}>
+          <button className="button primary" data-guide-target="add-user" onClick={() => edit()}>
             + New local user
           </button>
         </div>
