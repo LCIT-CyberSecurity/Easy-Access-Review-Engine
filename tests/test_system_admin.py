@@ -71,3 +71,14 @@ def test_bootstrap_requires_password_change_then_clears_it():
     assert updated["must_change_password"] is False
     assert authenticate_user(c, "admin", "admin") is None
     assert authenticate_user(c, "admin", "a-secure-password")["must_change_password"] is False
+
+
+def test_password_change_rotates_session_version():
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    init_system(c)
+    upsert_user(c, {"username": "alice", "role": "OPERATOR", "password": "a-secure-password"})
+    before = c.execute("SELECT session_version FROM system_users WHERE username='alice'").fetchone()[0]
+    change_password(c, "alice", "another-secure-password")
+    after = c.execute("SELECT session_version FROM system_users WHERE username='alice'").fetchone()[0]
+    assert after == before + 1

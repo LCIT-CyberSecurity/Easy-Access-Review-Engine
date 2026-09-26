@@ -98,6 +98,26 @@ def _operator_client(db: Path, scopes: list[str] | None = None) -> TestClient:
 
 
 if TestClient is not None:
+    def test_remediation_manager_cannot_read_governance_tables():
+        client = _client()
+        _login(client, "remediation", "remediation-password")
+        assert client.get("/api/remediation-actions").status_code == 200
+        for route in ("providers", "identities", "accesses", "snapshots", "campaigns", "review-items", "decisions"):
+            assert client.get(f"/api/{route}").status_code == 403
+
+    def test_login_throttle_returns_generic_429():
+        client = _client()
+        for _ in range(5):
+            assert client.post("/api/auth/login", json={"username": "operator", "password": "wrong"}).status_code == 401
+        response = client.post("/api/auth/login", json={"username": "operator", "password": "wrong"})
+        assert response.status_code == 429
+        assert response.json()["detail"] == "Too many login attempts"
+
+    def test_explicit_session_secret_rejects_placeholders(monkeypatch):
+        monkeypatch.setenv("EARE_SESSION_SECRET", "changeme")
+        with pytest.raises(RuntimeError):
+            create_app(str(Path(tempfile.mkstemp(prefix="eare-secret-", suffix=".db")[1])))
+
     def test_forbidden_roles_cannot_bypass_dashboard_or_campaign_api():
         client = _client()
         _login(client, "owner", "owner-password")

@@ -5,13 +5,44 @@ ENV_FILE="${ENV_FILE:-.env}"
 if [[ -f "$ENV_FILE" ]]; then
   # The dotenv file supplies defaults; explicit process environment values win.
   declare -A provided_environment=()
-  for variable_name in LDAP_URI BASE_DN PROVIDER_NAME BIND_DN LDAP_PASSWORD LDAP_PASSWORD_FILE LDAP_CA_CERT SEARCH_SCOPE LDAP_FILTER START_TLS ALLOW_ANONYMOUS ALLOW_PARTIAL PAGE_SIZE CONNECTION_TIMEOUT_SECONDS SEARCH_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS CHECK_ONLY EXTRA_GROUP_ATTRIBUTES OUTPUT; do
+  recognized_variables=(LDAP_URI BASE_DN PROVIDER_NAME BIND_DN LDAP_PASSWORD LDAP_PASSWORD_FILE LDAP_CA_CERT SEARCH_SCOPE LDAP_FILTER START_TLS ALLOW_ANONYMOUS ALLOW_PARTIAL PAGE_SIZE CONNECTION_TIMEOUT_SECONDS SEARCH_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS CHECK_ONLY EXTRA_GROUP_ATTRIBUTES OUTPUT)
+  for variable_name in "${recognized_variables[@]}"; do
     if [[ ${!variable_name+x} ]]; then
       provided_environment["$variable_name"]="${!variable_name}"
     fi
   done
-  # shellcheck disable=SC1090
-  . "$ENV_FILE"
+  while IFS= read -r dotenv_line || [[ -n "$dotenv_line" ]]; do
+    [[ "$dotenv_line" =~ ^[[:space:]]*$ || "$dotenv_line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$dotenv_line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)[[:space:]]*$ ]]; then
+      variable_name="${BASH_REMATCH[1]}"
+      value="${BASH_REMATCH[2]}"
+      recognized=0
+      for candidate in "${recognized_variables[@]}"; do
+        [[ "$variable_name" == "$candidate" ]] && recognized=1 && break
+      done
+      [[ "$recognized" -eq 1 ]] || continue
+      if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+        value="${value:1:${#value}-2}"
+      elif [[ "$value" == \'* ]]; then
+        value="${value:1}"
+        parsed=""
+        while [[ -n "$value" ]]; do
+          if [[ "${value:0:4}" == "'\\''" ]]; then
+            parsed+="'"
+            value="${value:4}"
+          elif [[ "${value:0:1}" == "'" ]]; then
+            value="${value:1}"
+            break
+          else
+            parsed+="${value:0:1}"
+            value="${value:1}"
+          fi
+        done
+        value="$parsed"
+      fi
+      printf -v "$variable_name" '%s' "$value"
+    fi
+  done < "$ENV_FILE"
   for variable_name in "${!provided_environment[@]}"; do
     printf -v "$variable_name" '%s' "${provided_environment[$variable_name]}"
   done

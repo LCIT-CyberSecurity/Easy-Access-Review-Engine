@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -17,6 +18,7 @@ DEFAULT_LOGIN_ATTRIBUTE = "uid"
 DEFAULT_TIMEOUT_SECONDS = 10
 SEARCH_ATTRIBUTES = ("dn", "cn", "displayName", "mail")
 MAX_RESULTS = 50
+LDAP_ATTRIBUTE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*(?:;[A-Za-z][A-Za-z0-9-]*(?:=[A-Za-z0-9-]+)?)?$")
 
 
 class DirectoryError(RuntimeError):
@@ -45,6 +47,27 @@ def validate_directory(config: dict[str, Any]) -> None:
     if not str(config.get("endpoint", "")).strip():
         raise DirectoryError("The directory requires an LDAP URI, for example ldaps://ldap.example.org")
     settings = settings_of(config)
+    login_attribute = str(settings.get("login_attribute") or DEFAULT_LOGIN_ATTRIBUTE).strip()
+    if not LDAP_ATTRIBUTE.fullmatch(login_attribute):
+        raise DirectoryError("login_attribute must be a valid LDAP attribute description")
+    user_filter = str(settings.get("user_filter") or "(objectClass=person)").strip()
+    if not user_filter or "\x00" in user_filter or not user_filter.startswith("(") or not user_filter.endswith(")"):
+        raise DirectoryError("user_filter must be a parenthesized LDAP filter")
+    depth = 0
+    escaped = False
+    for character in user_filter:
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth < 0:
+                raise DirectoryError("user_filter has unbalanced parentheses")
+    if depth != 0 or escaped:
+        raise DirectoryError("user_filter has unbalanced parentheses")
     if not str(settings.get("base_dn", "")).strip():
         raise DirectoryError("The directory requires a base DN")
     # A bind carries the person's own password: refuse to send it over a plaintext connection.

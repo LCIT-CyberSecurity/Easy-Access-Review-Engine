@@ -19,4 +19,4 @@ def test_failed_job_keeps_its_provider_context(tmp_path):
 
     assert job["status"] == "FAILED"
     assert job["result"] == {"provider": "corp-ad"}
-    assert job["error"] == "collector failed"
+    assert job["error"] == "The background operation failed."

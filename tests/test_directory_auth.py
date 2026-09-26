@@ -212,3 +212,7 @@ def test_plaintext_directories_are_refused_because_a_bind_sends_the_password():
     assert "ldaps://" in message_of(DirectoryError, validate_directory, {**CONFIG, "endpoint": "ldap://ldap.example.test"})
     validate_directory({**CONFIG, "endpoint": "ldaps://ldap.example.test"})
     validate_directory({**CONFIG, "settings": {**CONFIG["settings"], "start_tls": True}})
+
+
+def test_directory_login_attribute_validation():
+    assert "attribute" in message_of(DirectoryError, validate_directory, {**CONFIG, "settings": {**CONFIG["settings"], "login_attribute": "uid)(objectClass=*"}})

@@ -19,7 +19,11 @@ def _connect(path: str | Path) -> sqlite3.Connection:
     # read-model requests; tolerate that short SQLite write contention.
     conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("CREATE TABLE IF NOT EXISTS web_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, progress TEXT NOT NULL, result TEXT, error TEXT, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS web_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, progress TEXT NOT NULL, result TEXT, error TEXT, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT, created_by TEXT, provider TEXT, campaign_id TEXT)")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(web_jobs)")}
+    for name in ("created_by", "provider", "campaign_id"):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE web_jobs ADD COLUMN {name} TEXT")
     conn.execute("CREATE TABLE IF NOT EXISTS web_job_events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, event TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL)")
     conn.commit()
     return conn
@@ -35,8 +39,8 @@ def create_job(
     job_id = str(uuid4())
     with _connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO web_jobs (id, kind, status, progress, result, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO web_jobs (id, kind, status, progress, result, created_at, created_by, provider, campaign_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 job_id,
                 kind,
@@ -44,6 +48,9 @@ def create_job(
                 "Queued",
                 json.dumps(context, sort_keys=True) if context else None,
                 _now(),
+                str(context.get("created_by")) if context and context.get("created_by") else None,
+                str(context.get("provider")) if context and context.get("provider") else None,
+                str(context.get("campaign_id")) if context and context.get("campaign_id") else None,
             ),
         )
         conn.execute("INSERT INTO web_job_events (job_id, event, detail, created_at) VALUES (?, ?, ?, ?)", (job_id, "queued", "Job queued", _now()))
@@ -63,7 +70,7 @@ def _run(db_path: str | Path, job_id: str, operation: Callable[[str], dict[str, 
         result = operation(job_id)
     except Exception as exc:
         with _connect(db_path) as conn:
-            conn.execute("UPDATE web_jobs SET status = ?, progress = ?, error = ?, finished_at = ? WHERE id = ?", ("FAILED", "Failed", str(exc), _now(), job_id))
+            conn.execute("UPDATE web_jobs SET status = ?, progress = ?, error = ?, finished_at = ? WHERE id = ?", ("FAILED", "Failed", "The background operation failed.", _now(), job_id))
             conn.execute("INSERT INTO web_job_events (job_id, event, detail, created_at) VALUES (?, ?, ?, ?)", (job_id, "failed", "Job failed", _now()))
     else:
         with _connect(db_path) as conn:

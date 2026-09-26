@@ -72,6 +72,10 @@ from access_review_engine.system_admin import LOCAL_SOURCE, api_token_summary, a
 
 SESSION_COOKIE = "eare_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_FAILURE_WINDOW_SECONDS = 60
+LOGIN_BLOCK_SECONDS = 60
+INSECURE_SESSION_SECRETS = {"replace-with-a-random-long-session-secret", "changeme", "change-me", "secret", "password"}
 ROLES = ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER")
 
 
@@ -111,13 +115,14 @@ class WebPrincipal:
     username: str = ""
     display_name: str = ""
     must_change_password: bool = False
+    session_version: int = 1
 
     def can_access(self, scope: str | None) -> bool:
         return self.role == "ADMIN" or not scope or "*" in self.scopes or scope in self.scopes
 
 
 def _encode_session(principal: dict[str, Any], secret: bytes) -> str:
-    payload = {"sub": principal["subject"], "username": principal["username"], "display_name": principal["display_name"], "role": principal["role"], "scopes": principal["scopes"], "must_change_password": bool(principal.get("must_change_password", False)), "exp": int(time.time()) + SESSION_TTL_SECONDS}
+    payload = {"sub": principal["subject"], "username": principal["username"], "display_name": principal["display_name"], "role": principal["role"], "scopes": principal["scopes"], "must_change_password": bool(principal.get("must_change_password", False)), "session_version": int(principal.get("session_version", 1)), "exp": int(time.time()) + SESSION_TTL_SECONDS}
     body = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
     signature = hmac.new(secret, body.encode(), hashlib.sha256).hexdigest()
     return f"{body}.{signature}"
@@ -135,7 +140,7 @@ def _decode_session(token: str | None, secret: bytes) -> WebPrincipal | None:
         payload = json.loads(base64.urlsafe_b64decode(padded))
         if int(payload["exp"]) < int(time.time()) or payload["role"] not in ROLES:
             return None
-        return WebPrincipal(str(payload["sub"]), str(payload["role"]), frozenset(str(item) for item in payload.get("scopes", [])), str(payload.get("username", "")), str(payload.get("display_name", "")), bool(payload.get("must_change_password", False)))
+        return WebPrincipal(str(payload["sub"]), str(payload["role"]), frozenset(str(item) for item in payload.get("scopes", [])), str(payload.get("username", "")), str(payload.get("display_name", "")), bool(payload.get("must_change_password", False)), int(payload.get("session_version", 1)))
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
 
@@ -210,7 +215,15 @@ def create_app(db_path: str | None = None):
     system_conn: Any = _PerThreadConnection(db_path)
     init_system(system_conn)
     ensure_bootstrap_user(system_conn)
-    session_secret = os.environ.get("EARE_SESSION_SECRET", "").encode() or secrets.token_bytes(32)
+    configured_session_secret = os.environ.get("EARE_SESSION_SECRET")
+    if configured_session_secret is not None:
+        if len(configured_session_secret) < 32 or configured_session_secret.strip().lower() in INSECURE_SESSION_SECRETS:
+            raise RuntimeError("EARE_SESSION_SECRET must be at least 32 characters and not a known placeholder")
+        session_secret = configured_session_secret.encode()
+    else:
+        session_secret = secrets.token_bytes(32)
+    login_failures: dict[tuple[str, str], list[float]] = {}
+    login_failures_lock = threading.Lock()
     connector_directory = Path(db_path).resolve().parent / "connectors"
 
     def _load_web_connector(provider: str) -> dict[str, Any]:
@@ -252,6 +265,8 @@ def create_app(db_path: str | None = None):
         stored = next((item for item in list_users(system_conn) if item.get("username") == principal.username), None)
         if stored is None or not stored.get("enabled"):
             return None
+        if int(stored.get("session_version", 1)) != principal.session_version:
+            return None
         return WebPrincipal(
             principal.subject,
             str(stored.get("role", principal.role)),
@@ -259,6 +274,7 @@ def create_app(db_path: str | None = None):
             principal.username,
             str(stored.get("display_name", principal.display_name)),
             bool(stored.get("must_change_password", False)),
+            int(stored.get("session_version", 1)),
         )
 
     api_bearer = HTTPBearer(auto_error=False, scheme_name="BearerToken")
@@ -346,21 +362,38 @@ def create_app(db_path: str | None = None):
         return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, classification=classification, filters=filters, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=allowed_providers, allowed_campaign_ids=allowed_campaigns)
 
     def require_table_access(principal: WebPrincipal, table: str) -> None:
-        if principal.role == "BUSINESS_ADMIN" and table != "remediation_actions":
+        if principal.role in {"ADMIN", "OPERATOR"}:
+            return
+        if principal.role in {"BUSINESS_ADMIN", "REMEDIATION_MANAGER"} and table != "remediation_actions":
             raise HTTPException(status_code=403, detail="This role can only access remediation actions")
         if principal.role == "GROUP_OWNER" and table != "review_items":
             raise HTTPException(status_code=403, detail="This role can only access assigned reviews")
+        if principal.role not in ROLES:
+            raise HTTPException(status_code=403, detail="Insufficient role")
 
     @app.post("/api/auth/login")
-    def login(payload: dict[str, Any] = Body(...), response: Response = None):  # type: ignore[assignment]
+    def login(request: Request, payload: dict[str, Any] = Body(...), response: Response = None):  # type: ignore[assignment]
         username, password = payload.get("username"), payload.get("password")
         if not isinstance(username, str) or not isinstance(password, str) or not username.strip() or not password:
             raise HTTPException(status_code=400, detail="Username and password are required")
+        key = (username.strip().lower(), request.client.host if request.client else "unknown")
+        now = time.monotonic()
+        with login_failures_lock:
+            attempts = [timestamp for timestamp in login_failures.get(key, []) if now - timestamp < LOGIN_FAILURE_WINDOW_SECONDS]
+            blocked = bool(attempts and len(attempts) >= LOGIN_FAILURE_LIMIT and now - attempts[-1] < LOGIN_BLOCK_SECONDS)
+            login_failures[key] = attempts
+        if blocked:
+            raise HTTPException(status_code=429, detail="Too many login attempts", headers={"Retry-After": str(LOGIN_BLOCK_SECONDS)})
         principal = authenticate_user(system_conn, username, password, _directory_login)
         if principal is None:
+            with login_failures_lock:
+                login_failures[key] = [*login_failures.get(key, []), now][-LOGIN_FAILURE_LIMIT:]
             record_sign_in_event("auth.sign_in_failed", username.strip().lower())
             raise HTTPException(status_code=401, detail="Invalid credentials")
+        with login_failures_lock:
+            login_failures.pop(key, None)
         record_sign_in_event("auth.signed_in", principal["username"], {"role": principal["role"], "auth_source": principal.get("auth_source", LOCAL_SOURCE)})
+        response.headers["Cache-Control"] = "no-store"
         response.set_cookie(SESSION_COOKIE, _encode_session(principal, session_secret), httponly=True, secure=os.environ.get("EARE_COOKIE_SECURE") == "1", samesite="strict", max_age=SESSION_TTL_SECONDS, path="/")
         return {"subject": principal["subject"], "username": principal["username"], "display_name": principal["display_name"], "role": principal["role"], "scopes": principal["scopes"], "must_change_password": bool(principal.get("must_change_password", False))}
 
@@ -378,6 +411,7 @@ def create_app(db_path: str | None = None):
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         record_sign_in_event("auth.password_changed", str(updated["username"]))
+        response.headers["Cache-Control"] = "no-store"
         response.set_cookie(SESSION_COOKIE, _encode_session(updated, session_secret), httponly=True, secure=os.environ.get("EARE_COOKIE_SECURE") == "1", samesite="strict", max_age=SESSION_TTL_SECONDS, path="/")
         return {"subject": updated["subject"], "username": updated["username"], "display_name": updated["display_name"], "role": updated["role"], "scopes": updated["scopes"], "must_change_password": False}
 
@@ -2647,11 +2681,11 @@ def create_app(db_path: str | None = None):
         if search:
             needle = search.casefold()
             rows = [row for row in rows if needle in json.dumps(row, sort_keys=True).casefold()]
-        from access_review_engine.web_read_models import apply_field_filters, sorted_rows
+        from access_review_engine.web_read_models import apply_field_filters, findings_summary, sorted_rows
 
         rows = apply_field_filters(rows, column_filters(request))
         rows = sorted_rows(rows, sort or "source_group", order or "asc")
-        return {"items": rows[offset : offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower()}
+        return {"items": rows[offset : offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower(), "summary": findings_summary(rows)}
 
     @app.patch("/api/findings/tracking")
     def finding_tracking_save(request: Request, payload: dict[str, Any] = Body(...)):
@@ -2821,7 +2855,7 @@ def create_app(db_path: str | None = None):
 
     @app.post("/api/sources/{provider}/sync", status_code=202)
     def sync(provider: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
         def operation(job_id: str) -> dict[str, Any]:
             config = _load_web_connector(provider)
             secrets_config = secret_environment(config)
@@ -2840,11 +2874,11 @@ def create_app(db_path: str | None = None):
                 return {"snapshot_id": snapshot.id, "provider": provider}
             finally:
                 artifact.unlink(missing_ok=True)
-        return create_job(db_path, "sync", operation, context={"provider": provider})
+        return create_job(db_path, "sync", operation, context={"provider": provider, "created_by": principal.username})
 
     @app.post("/api/sources/{provider}/preview", status_code=202)
     def source_preview(provider: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
         def operation(job_id: str) -> dict[str, Any]:
             artifact = Path(db_path).with_name(f".eare-preview-{provider}-{job_id}.zip")
             try:
@@ -2863,32 +2897,30 @@ def create_app(db_path: str | None = None):
                 return preview
             finally:
                 artifact.unlink(missing_ok=True)
-        return create_job(db_path, "preview", operation, context={"provider": provider})
+        return create_job(db_path, "preview", operation, context={"provider": provider, "created_by": principal.username})
 
-    @app.post("/api/sources/{provider}/sync/preview")
-    def sync_preview(provider: str, request: Request, input_path: str, classification_rules: str | None = None):
-        _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
-        source_config = None
-        config_path = connector_path(provider, connector_directory)
-        if config_path.is_file():
-            source_config = _load_web_connector(provider)
-        return preview_import(db_path, input_path, provider=provider, classification_rules=classification_rules, source_config=source_config).as_dict()
+    def _authorized_job(principal: WebPrincipal, job_id: str) -> dict[str, Any]:
+        try:
+            record = get_job(db_path, job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        if principal.role == "ADMIN":
+            return record
+        if principal.role != "OPERATOR" or not record.get("provider") or not record.get("created_by"):
+            raise HTTPException(status_code=403, detail="Job access is not authorized")
+        if record["created_by"] != principal.username or not principal.can_access(str(record["provider"])):
+            raise HTTPException(status_code=403, detail="Job access is not authorized")
+        return record
 
     @app.get("/api/jobs/{job_id}")
     def job(job_id: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
-        try:
-            return get_job(db_path, job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        return _authorized_job(principal, job_id)
 
     @app.get("/api/jobs/{job_id}/events")
     def job_events(job_id: str, request: Request):
-        _require(current_user(request), ("ADMIN", "OPERATOR"))
-        try:
-            get_job(db_path, job_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="Job not found") from exc
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        _authorized_job(principal, job_id)
         body = "".join(f"event: {event['event']}\ndata: {json.dumps(event)}\n\n" for event in get_events(db_path, job_id))
         return StreamingResponse(iter([body]), media_type="text/event-stream")
 

@@ -13,7 +13,7 @@ LOCAL_SOURCE = "local"
 
 def init_system(conn: sqlite3.Connection) -> None:
     conn.executescript("""
-    CREATE TABLE IF NOT EXISTS system_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, password_hash TEXT, must_change_password INTEGER NOT NULL DEFAULT 0, api_access_enabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS system_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, password_hash TEXT, must_change_password INTEGER NOT NULL DEFAULT 0, api_access_enabled INTEGER NOT NULL DEFAULT 0, session_version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS identity_provider_configs (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, endpoint TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, settings TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_prefix TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT);
@@ -31,12 +31,14 @@ def init_system(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE system_users ADD COLUMN external_id TEXT")
     if "api_access_enabled" not in columns:
         conn.execute("ALTER TABLE system_users ADD COLUMN api_access_enabled INTEGER NOT NULL DEFAULT 0")
+    if "session_version" not in columns:
+        conn.execute("ALTER TABLE system_users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1")
     conn.commit()
 
 def list_users(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc).isoformat()
     rows = conn.execute("""SELECT u.id, u.username, u.display_name, u.role, u.scopes, u.enabled,
-        u.must_change_password, u.api_access_enabled, u.auth_source, u.external_id, u.created_at,
+        u.must_change_password, u.api_access_enabled, u.session_version, u.auth_source, u.external_id, u.created_at,
         t.token_prefix, t.last_used_at
         FROM system_users u LEFT JOIN api_tokens t ON t.id = (
             SELECT id FROM api_tokens WHERE user_id = u.id AND revoked_at IS NULL AND expires_at > ?
@@ -47,6 +49,7 @@ def list_users(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         "scopes": json.loads(row["scopes"]),
         "must_change_password": bool(row["must_change_password"]),
         "api_access_enabled": bool(row["api_access_enabled"]),
+        "session_version": int(row["session_version"]),
         "api_token_active": row["token_prefix"] is not None,
         "api_token_prefix": row["token_prefix"],
         "api_token_last_used_at": row["last_used_at"],
@@ -165,7 +168,7 @@ def authenticate_user(conn: sqlite3.Connection, username: str, password: str, di
     ``directory`` receives the directory name, the username, the stored external id and the
     password, and reports whether the directory accepted the credentials.
     """
-    row = conn.execute("SELECT id, username, display_name, role, scopes, enabled, password_hash, must_change_password, auth_source, external_id FROM system_users WHERE username = ?", (username.strip().lower(),)).fetchone()
+    row = conn.execute("SELECT id, username, display_name, role, scopes, enabled, password_hash, must_change_password, session_version, auth_source, external_id FROM system_users WHERE username = ?", (username.strip().lower(),)).fetchone()
     if row is None or not row["enabled"]:
         return None
     source = row["auth_source"] or LOCAL_SOURCE
@@ -174,7 +177,7 @@ def authenticate_user(conn: sqlite3.Connection, username: str, password: str, di
             return None
     elif directory is None or not directory(source, row["username"], row["external_id"], password):
         return None
-    return {"subject": row["id"], "username": row["username"], "display_name": row["display_name"], "role": row["role"], "scopes": json.loads(row["scopes"]), "must_change_password": bool(row["must_change_password"]) and source == LOCAL_SOURCE, "auth_source": source}
+    return {"subject": row["id"], "username": row["username"], "display_name": row["display_name"], "role": row["role"], "scopes": json.loads(row["scopes"]), "must_change_password": bool(row["must_change_password"]) and source == LOCAL_SOURCE, "session_version": int(row["session_version"]), "auth_source": source}
 
 
 def ensure_bootstrap_user(conn: sqlite3.Connection) -> None:
@@ -184,8 +187,8 @@ def ensure_bootstrap_user(conn: sqlite3.Connection) -> None:
         password = os.environ.get("EARE_ADMIN_PASSWORD") or "admin"
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
-            "INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, must_change_password, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (username, username, username, "ADMIN", json.dumps(["*"]), 1, _password_hash(password), 1, now),
+            "INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, must_change_password, session_version, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (username, username, username, "ADMIN", json.dumps(["*"]), 1, _password_hash(password), 1, 1, now),
         )
         conn.commit()
 
@@ -222,7 +225,8 @@ def upsert_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any
         enabled=excluded.enabled, api_access_enabled=excluded.api_access_enabled,
         password_hash=CASE WHEN excluded.auth_source <> ? THEN NULL ELSE COALESCE(excluded.password_hash, system_users.password_hash) END,
         must_change_password=COALESCE(?, system_users.must_change_password), auth_source=excluded.auth_source,
-        external_id=COALESCE(excluded.external_id, system_users.external_id)""",
+        external_id=COALESCE(excluded.external_id, system_users.external_id),
+        session_version=system_users.session_version + CASE WHEN excluded.auth_source <> system_users.auth_source THEN 1 ELSE 0 END""",
         (record["id"], record["username"], record["display_name"], record["role"], json.dumps(scopes),
          int(record["enabled"]), password_hash, must_change, int(api_access_enabled), source, external_id,
          record["created_at"], LOCAL_SOURCE, must_change))
@@ -253,7 +257,7 @@ def reset_password(conn: sqlite3.Connection, username: str, password: str) -> di
         raise ValueError("directory accounts change their password in their directory")
     if not isinstance(password, str) or len(password) < 12:
         raise ValueError("password must contain at least 12 characters")
-    conn.execute("UPDATE system_users SET password_hash = ?, must_change_password = 1 WHERE username = ?", (_password_hash(password), normalized))
+    conn.execute("UPDATE system_users SET password_hash = ?, must_change_password = 1, session_version = session_version + 1 WHERE username = ?", (_password_hash(password), normalized))
     conn.commit()
     return {"username": normalized, "must_change_password": True}
 
@@ -268,7 +272,7 @@ def change_password(conn: sqlite3.Connection, username: str, password: str) -> d
     normalized = username.strip().lower()
     if conn.execute("SELECT 1 FROM system_users WHERE username = ?", (normalized,)).fetchone() is None:
         raise ValueError("user not found")
-    conn.execute("UPDATE system_users SET password_hash = ?, must_change_password = 0 WHERE username = ?", (_password_hash(password), normalized))
+    conn.execute("UPDATE system_users SET password_hash = ?, must_change_password = 0, session_version = session_version + 1 WHERE username = ?", (_password_hash(password), normalized))
     conn.commit()
     return authenticate_user(conn, normalized, password) or {}
 

@@ -31,7 +31,7 @@ services:
       eare-api:
         condition: service_healthy
     ports:
-      - "4173:80"
+      - "127.0.0.1:4173:80"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
       interval: 10s
