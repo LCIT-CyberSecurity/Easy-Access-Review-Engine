@@ -1,0 +1,22 @@
+name: Google connector live checks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+jobs:
+  live:
+    if: ${{ vars.GOOGLE_LIVE_ENABLED == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[app,dev,google]"
+      - name: Run guarded live tests
+        env:
+          EARE_WORKSPACE_CREDENTIALS_FILE: ${{ secrets.EARE_WORKSPACE_CREDENTIALS_FILE }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+        run: pytest -q -m live_google
