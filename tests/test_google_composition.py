@@ -11,7 +11,7 @@ from access_review_engine.domain import (
     Provider,
 )
 from access_review_engine.services import calculate_effective_accesses, create_snapshot
-from access_review_engine.snapshot_composition import compose_snapshots
+from access_review_engine.snapshot_composition import compose_snapshots, _resolve_composite_assignment
 
 
 def test_composition_derives_workspace_group_to_gcp_access_without_fake_assignment():
@@ -163,7 +163,7 @@ def test_composition_resolves_old_gcp_principal_after_workspace_import():
     from access_review_engine.snapshot_composition import _resolve_composite_assignment
 
     resolved_probe = _resolve_composite_assignment(
-        gcp_snapshot.access_assignments[0], workspace_snapshot.identities
+        gcp_snapshot.access_assignments[0], workspace_snapshot.identities, workspace_snapshot.providers
     )
     assert resolved_probe.identity_provider == "workspace"
 
@@ -237,3 +237,18 @@ def test_composition_keeps_ambiguous_workspace_principal_unresolved():
     assert resolved.identity_provider == "gcp"
     assert resolved.origin.raw.get("unresolved") is True
     assert resolved.origin.raw.get("ambiguous") is True
+
+
+def test_composition_does_not_fallback_to_non_google_identity():
+    ad = Provider("ad", "active_directory")
+    assignment = AccessAssignment(
+        "gcp", "gcp-access", "gcp", "alice@example.com",
+        Origin("policy", True, False, "projects/p", {"principal": "user:alice@example.com", "unresolved": True}),
+    )
+    resolved = _resolve_composite_assignment(
+        assignment,
+        [Identity("ad", "alice@example.com", IdentityType.USER_ACCOUNT, "active")],
+        [ad],
+    )
+    assert resolved.identity_provider == "gcp"
+    assert resolved.origin.raw.get("unresolved") is True

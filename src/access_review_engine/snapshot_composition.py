@@ -191,9 +191,7 @@ def _resolve_composite_assignment(
     provider_types = {provider.name: provider.type for provider in providers}
     preferred_types = {"google_workspace"} if kind in {"user", "group"} else {"gcp_iam"}
     preferred = [item for item in candidates if provider_types.get(item.provider) in preferred_types]
-    if preferred:
-        candidates = preferred
-    unique = {(item.provider, item.identifier): item for item in candidates}
+    unique = {(item.provider, item.identifier): item for item in preferred}
     if len(unique) != 1:
         if len(unique) > 1:
             updated = deepcopy(assignment)

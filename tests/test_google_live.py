@@ -6,6 +6,9 @@ import pytest
 from access_review_engine.collectors.gcp_iam import collect as collect_gcp
 from access_review_engine.collectors.google_workspace import collect as collect_workspace
 
+if hasattr(pytest, "mark"):
+    pytestmark = pytest.mark.live_google
+
 def test_live_google_read_only_contract(tmp_path: Path):
     credential_path = os.environ.get("EARE_WORKSPACE_CREDENTIALS_FILE") or os.environ.get(
         "GOOGLE_APPLICATION_CREDENTIALS"

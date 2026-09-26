@@ -57,7 +57,9 @@ def _display_name(row: dict[str, Any], fallback: str) -> str:
 
 
 def import_google_workspace_zip(
-    path: str, known_identities: list[Identity] | None = None
+    path: str,
+    known_identities: list[Identity] | None = None,
+    known_provider_types: dict[str, str] | None = None,
 ) -> ImportResult:
     manifest, records = read_artifact(path, "google_workspace", FILES)
     provider_name = str(manifest["provider"])
@@ -76,8 +78,16 @@ def import_google_workspace_zip(
             if value:
                 known_by_email.setdefault(str(value).casefold(), []).append(identity)
 
-    def unique_known(values: list[Identity]) -> Identity | None:
-        unique = {(item.provider, item.identifier): item for item in values}
+    def unique_known(values: list[Identity], preferred_type: str | None = None) -> Identity | None:
+        candidates = [
+            item
+            for item in values
+            if preferred_type is not None
+            and (known_provider_types or {}).get(item.provider) == preferred_type
+        ]
+        if preferred_type is None:
+            candidates = values
+        unique = {(item.provider, item.identifier): item for item in candidates}
         return next(iter(unique.values())) if len(unique) == 1 else None
     for row in records["users.jsonl"]:
         email = str(row.get("primaryEmail") or row.get("email") or "").strip().lower()
@@ -296,17 +306,32 @@ def import_google_workspace_zip(
             accesses.append(access)
             access_by_name[name] = access
         assigned_to = str(row.get("assignedTo") or row.get("assignee_id") or "").strip()
-        assignee = by_native.get(assigned_to)
-        if assignee is None and assigned_to:
-            assignee = unique_known(known_by_native.get(assigned_to, []))
+        assignee_type = str(row.get("assigneeType") or row.get("assignee_type") or "").upper()
+        assigned_email = str(
+            row.get("assignedToEmail") or row.get("assigneeEmail") or ""
+        ).strip().casefold()
+        service_account_assignee = assignee_type in {
+            "SERVICE_ACCOUNT",
+            "SERVICEACCOUNT",
+            "TECHNICAL_ACCOUNT",
+        } or assigned_email.endswith(".iam.gserviceaccount.com")
+        assignee = None
+        if service_account_assignee:
+            if assigned_to:
+                assignee = unique_known(known_by_native.get(assigned_to, []), "gcp_iam")
+            if assignee is None and assigned_email:
+                assignee = unique_known(known_by_email.get(assigned_email, []), "gcp_iam")
+        else:
+            assignee = by_native.get(assigned_to)
+            if assignee is None and assigned_to:
+                assignee = unique_known(known_by_native.get(assigned_to, []), "google_workspace")
         if assignee is None:
-            assigned_email = str(
-                row.get("assignedToEmail") or row.get("assigneeEmail") or ""
-            ).strip().casefold()
             if assigned_email:
-                assignee = by_email.get(assigned_email) or unique_known(
-                    known_by_email.get(assigned_email, [])
-                )
+                assignee = by_email.get(assigned_email)
+                if assignee is None and not service_account_assignee:
+                    assignee = unique_known(
+                        known_by_email.get(assigned_email, []), "google_workspace"
+                    )
         if assignee:
             assignments.append(
                 AccessAssignment(

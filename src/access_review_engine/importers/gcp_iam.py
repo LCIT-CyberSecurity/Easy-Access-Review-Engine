@@ -91,8 +91,7 @@ def import_gcp_iam_zip(
             for key, item in candidates.items()
             if (known_provider_types or {}).get(item.provider) == preferred_type
         }
-        candidates = preferred or candidates
-        return next(iter(candidates.values())) if len(candidates) == 1 else None
+        return next(iter(preferred.values())) if len(preferred) == 1 else None
     identities: list[Identity] = []
     service_accounts: dict[str, Identity] = {}
     for row in records["service-accounts.jsonl"]:

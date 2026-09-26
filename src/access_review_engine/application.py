@@ -60,7 +60,13 @@ def import_file_to_repository(
         elif source_type == "openldap":
             result = import_openldap_zip(file_path, source_config=source_config)
         elif source_type == "google_workspace":
-            result = import_google_workspace_zip(file_path, known_identities=known_identities)
+            result = import_google_workspace_zip(
+                file_path,
+                known_identities=known_identities,
+                known_provider_types={
+                    row["name"]: row["type"] for row in repo.list_payloads("providers")
+                },
+            )
         elif source_type == "gcp_iam":
             result = import_gcp_iam_zip(
                 file_path,
@@ -841,8 +847,7 @@ def _assignment_resolver(repo: Repository) -> tuple[
             for candidate_key, item in candidates.items()
             if provider_types.get(item.provider) == preferred_type
         }
-        selected = preferred or candidates
-        google[key] = next(iter(selected.values())) if len(selected) == 1 else None
+        google[key] = next(iter(preferred.values())) if len(preferred) == 1 else None
     return (
         _unique_identities_by_native_id(identities),
         _unique_identities_by_ldap_dn(identities),
@@ -857,7 +862,7 @@ def _resolve_assignment(
         dict[str, Identity],
         dict[str, Identity],
         dict[tuple[str, str], Identity],
-        dict[tuple[str, str], Identity],
+        dict[tuple[str, str], Identity | None],
     ],
 ) -> bool:
     if not assignment.origin.raw.get("unresolved"):

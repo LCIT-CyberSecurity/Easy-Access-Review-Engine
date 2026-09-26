@@ -209,7 +209,12 @@ def test_workspace_admin_role_resolves_known_gcp_service_account(tmp_path):
             "memberships.jsonl": [],
             "admin-roles.jsonl": [{"roleId": "r1", "roleName": "Help Desk"}],
             "admin-role-assignments.jsonl": [
-                {"roleId": "r1", "assignedTo": "sa-unique-id", "scopeType": "CUSTOMER"}
+                {
+                    "roleId": "r1",
+                    "assignedTo": "sa-unique-id",
+                    "assigneeType": "SERVICE_ACCOUNT",
+                    "scopeType": "CUSTOMER",
+                }
             ],
             "collection-errors.json": [],
         },
@@ -220,11 +225,40 @@ def test_workspace_admin_role_resolves_known_gcp_service_account(tmp_path):
         "gcp", "eare-admin@project.iam.gserviceaccount.com", IdentityType.TECHNICAL_ACCOUNT,
         "active", native_id="sa-unique-id", email="eare-admin@project.iam.gserviceaccount.com",
     )
-    result = import_google_workspace_zip(path, known_identities=[service_account])
+    result = import_google_workspace_zip(
+        path, known_identities=[service_account], known_provider_types={"gcp": "gcp_iam"}
+    )
     assert len(result.identities) == 0
     assert len(result.assignments) == 1
     assert result.assignments[0].identity_provider == "gcp"
     assert result.assignments[0].identity_identifier == service_account.identifier
+
+
+def test_workspace_service_account_email_does_not_resolve_to_other_provider(tmp_path):
+    path = tmp_path / "workspace-service-account-ambiguous.zip"
+    _artifact(
+        path,
+        {"source_type": "google_workspace", "provider": "workspace", "completeness": "full"},
+        {
+            "users.jsonl": [], "groups.jsonl": [], "memberships.jsonl": [],
+            "admin-roles.jsonl": [{"roleId": "r1", "roleName": "Help Desk"}],
+            "admin-role-assignments.jsonl": [{
+                "roleId": "r1", "assignedToEmail": "sa@project.iam.gserviceaccount.com",
+                "assigneeType": "SERVICE_ACCOUNT", "scopeType": "CUSTOMER",
+            }],
+            "collection-errors.json": [],
+        },
+    )
+    from access_review_engine.domain import Identity, IdentityType
+
+    result = import_google_workspace_zip(
+        path,
+        known_identities=[
+            Identity("ad", "sa@project.iam.gserviceaccount.com", IdentityType.TECHNICAL_ACCOUNT, "active")
+        ],
+        known_provider_types={"ad": "active_directory"},
+    )
+    assert result.assignments == []
 
 
 def test_workspace_memberships_require_groups():
