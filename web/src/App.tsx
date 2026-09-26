@@ -114,6 +114,123 @@ function PermissionPicker({ value, options, disabled, onChange }: { value: strin
     </div>
   );
 }
+/** How many catalogue matches the application picker lists before asking for more letters. */
+const APPLICATION_PICKER_LIMIT = 40;
+/**
+ * Pick any number of applications from a catalogue that may hold hundreds:
+ * chosen ones are removable chips, typing filters the catalogue, Enter adds the
+ * highlighted match, Backspace on an empty query removes the last chip, and an
+ * unknown name can be created in place. The value stays one comma-separated list.
+ */
+export function ApplicationPicker({ value, options, disabled, onChange, onCreate, placeholder = "Search applications…" }: {
+  value: string;
+  options: string[];
+  disabled?: boolean;
+  onChange: (value: string) => void;
+  onCreate?: (name: string) => void;
+  placeholder?: string;
+}) {
+  const selected = splitPermissions(value),
+    [query, setQuery] = useState(""),
+    [open, setOpen] = useState(false),
+    [active, setActive] = useState(0),
+    inputRef = useRef<HTMLInputElement>(null),
+    listId = useRef(`application-picker-${Math.random().toString(36).slice(2)}`).current,
+    needle = query.trim().toLocaleLowerCase(),
+    available = options.filter((option) => !selected.includes(option) && option.toLocaleLowerCase().includes(needle)),
+    matches = available.slice(0, APPLICATION_PICKER_LIMIT),
+    known = [...options, ...selected].some((option) => option.toLocaleLowerCase() === needle),
+    canCreate = Boolean(needle && !known && onCreate),
+    choices = matches.length + (canCreate ? 1 : 0),
+    add = (option: string) => {
+      onChange(joinPermissions([...selected, option]));
+      setQuery("");
+      setActive(0);
+      inputRef.current?.focus();
+    },
+    remove = (option: string) => onChange(joinPermissions(selected.filter((item) => item !== option))),
+    create = () => {
+      onCreate?.(query.trim());
+      setQuery("");
+      setOpen(false);
+    };
+  return (
+    <div
+      className={disabled ? "application-picker disabled" : "application-picker"}
+      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }}
+    >
+      <div className="application-picker-field" onClick={() => inputRef.current?.focus()}>
+        {selected.map((option) => (
+          <span key={option} className="application-chip">
+            {option}
+            <button type="button" aria-label={`Remove ${option}`} disabled={disabled} onClick={(event) => { event.stopPropagation(); remove(option); }}>
+              <X size={12} />
+            </button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          role="combobox"
+          aria-expanded={open && choices > 0}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          value={query}
+          disabled={disabled}
+          placeholder={selected.length ? "Add another…" : placeholder}
+          onFocus={() => setOpen(true)}
+          onChange={(event) => { setQuery(event.target.value); setActive(0); setOpen(true); }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); setActive((index) => Math.min(index + 1, choices - 1)); }
+            else if (event.key === "ArrowUp") { event.preventDefault(); setActive((index) => Math.max(index - 1, 0)); }
+            else if (event.key === "Enter") {
+              event.preventDefault();
+              if (active < matches.length && matches[active]) add(matches[active]);
+              else if (canCreate) create();
+            } else if (event.key === "Backspace" && !query && selected.length) remove(selected[selected.length - 1]);
+            else if (event.key === "Escape") setOpen(false);
+          }}
+        />
+      </div>
+      {open && choices > 0 ? (
+        <ul id={listId} role="listbox" className="application-picker-menu">
+          {matches.map((option, index) => (
+            <li
+              key={option}
+              role="option"
+              aria-selected={index === active}
+              className={index === active ? "active" : undefined}
+              onMouseEnter={() => setActive(index)}
+              onMouseDown={(event) => { event.preventDefault(); add(option); }}
+            >
+              {option}
+            </li>
+          ))}
+          {available.length > matches.length ? (
+            <li className="application-picker-more" aria-disabled="true">
+              {available.length - matches.length} more — keep typing to narrow the list
+            </li>
+          ) : null}
+          {canCreate ? (
+            <li
+              role="option"
+              aria-selected={active === matches.length}
+              className={active === matches.length ? "application-picker-create active" : "application-picker-create"}
+              onMouseEnter={() => setActive(matches.length)}
+              onMouseDown={(event) => { event.preventDefault(); create(); }}
+            >
+              + Create “{query.trim()}”
+            </li>
+          ) : null}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+/** A read-only list of applications stays one line: the first two, then a count. */
+export const applicationSummary = (value: unknown): string => {
+  const names = splitPermissions(value);
+  return names.length > 2 ? `${names.slice(0, 2).join(", ")} +${names.length - 2}` : names.join(", ");
+};
 export const goldenAccessEditIsDirty = (value: Row | null): boolean => Boolean(value &&
   ["application", "business_permission", "owner"].some((field) => s(value[field], "") !== s(value[`original_${field}`], "")));
 export const goldenAccessEditPayload = (value: Row): Row => ({
@@ -738,7 +855,7 @@ function Shell({ principal }: { principal: Principal }) {
                     onClick={() => setC(false)}
                     className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
                   >
-                    <I size={18} />
+                    <I size={20} />
                     {ui(NAV_KEYS[label] ?? label)}
                   </NavLink>
                 ))}
@@ -2143,6 +2260,9 @@ function Accesses() {
 function AccessDetail({ access }: { access: Row }) {
   const client = useQueryClient(),
     toast = useToast(),
+    // Same cache entry as the Golden Source page, so the catalogue loads once.
+    applicationCatalog = useQuery({ queryKey: ["golden-applications"], queryFn: () => getJson("golden-applications"), retry: false }),
+    catalogApplications = arr(applicationCatalog.data?.applications as Row[] | undefined).map((option) => s(option.name)).filter(Boolean),
     [currentAccess, setCurrentAccess] = useState(access),
     [tab, setTab] = useState("overview"),
     [editingContext, setEditingContext] = useState(false),
@@ -2206,6 +2326,8 @@ function AccessDetail({ access }: { access: Row }) {
               ].map(([label, field]) => (
                 field === "business_permission"
                   ? <div key={field} className="drawer-form-group"><span>{label}</span><PermissionPicker value={s(manual[field], "")} options={DEFAULT_GOLDEN_CAPABILITIES} onChange={(value) => setManual((current) => ({ ...current, [field]: value }))} /></div>
+                  : field === "application"
+                  ? <div key={field} className="drawer-form-group"><span>{label}</span><ApplicationPicker value={s(manual[field], "")} options={catalogApplications} onChange={(value) => setManual((current) => ({ ...current, [field]: value }))} /></div>
                   : <label key={field}>{label}<input value={s(manual[field], "")} onChange={(event) => setManual((current) => ({ ...current, [field]: event.target.value }))} /></label>
               ))}
               <button className="button primary" disabled={saveContext.isPending} onClick={() => saveContext.mutate()}>Save manual reference</button>
@@ -3796,7 +3918,7 @@ function Golden() {
           return;
         }
         await applicationCatalog.refetch();
-        if (editingAccess) setEditingAccess({ ...editingAccess, application: s(((data.application ?? {}) as Row).name) });
+        if (editingAccess) setEditingAccess({ ...editingAccess, application: joinPermissions([...splitPermissions(editingAccess.application), s(((data.application ?? {}) as Row).name)]) });
         setNewApplication(null);
       },
       onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to create application") }),
@@ -4256,8 +4378,8 @@ function Golden() {
                   const editing = editingAccess?.key === key;
                   const applicationOptions = Array.from(new Set([
                     ...arr(applicationCatalog.data?.applications as Row[] | undefined).map((option) => s(option.name)).filter(Boolean),
-                    ...vals(accessesQuery.data?.application_options),
-                  ]));
+                    ...vals(accessesQuery.data?.application_options).flatMap(splitPermissions),
+                  ])).sort((left, right) => left.localeCompare(right));
                   const capabilityOptions = arr(functionalModelQuery.data?.capabilities);
                   const permissionOptions = capabilityOptions.length
                     ? capabilityOptions.map((option) => s(option.id, s(option.label)))
@@ -4267,15 +4389,14 @@ function Golden() {
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
                   const ownerDisplay = owner ? ownerDisplayLabel(owner, arr(ownerOptions.data?.items), s(r.access_provider)) : "";
                   const applicationCell = editing
-                    ? <div className="inline-edit-stack"><select value={s(editingAccess?.application, "")} onChange={(event) => {
-                        if (event.target.value === "__new_application__") setNewApplication({ name: "", comment: "", similar: [] });
-                        else setEditingAccess({ ...editingAccess, application: event.target.value });
-                      }} disabled={saveAccessRow.isPending}>
-                        <option value="">Select application</option>
-                        {applicationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                        <option value="__new_application__">+ Add new application</option>
-                      </select><small>Observed: {contextValue(r.business_context, "application", "source") || "—"}</small></div>
-                    : <button className="link-button" onClick={() => requestAccessEdit(r)}>{application || "—"}</button>;
+                    ? <div className="inline-edit-stack"><ApplicationPicker
+                        value={s(editingAccess?.application, "")}
+                        options={applicationOptions}
+                        disabled={saveAccessRow.isPending}
+                        onChange={(value) => setEditingAccess({ ...editingAccess, application: value })}
+                        onCreate={(name) => setNewApplication({ name, comment: "", similar: [] })}
+                      /><small>Observed: {contextValue(r.business_context, "application", "source") || "—"}</small></div>
+                    : <button className="link-button" title={splitPermissions(application).join(", ")} onClick={() => requestAccessEdit(r)}>{applicationSummary(application) || "—"}</button>;
                   const permissionCell = editing
                     ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>Observed: {contextValue(r.business_context, "business_permission", "source") || "—"}</small></div>
                     : <button className="link-button" onClick={() => requestAccessEdit(r)}>{businessPermission ? joinPermissions(splitPermissions(businessPermission)) : "Not provided"}</button>;

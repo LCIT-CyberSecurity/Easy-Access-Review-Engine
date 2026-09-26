@@ -138,10 +138,13 @@ nothing in it mutates data. Arrow keys move, `Enter` opens, `Esc` closes.
 
 ### Density
 
-Content reads at `main`'s size (15px body text, 15×18px table cells). The rail is
-260px; its links grow from 38px to 46px so the navigation fills a tall screen
-without turning into oversized buttons. Page gutters scale from 24px to 48px and
-the content column stops at 1840px.
+Type is one step larger everywhere (16px body; every size from 10px to 15px went
+up by 1px), table cells read at 15px with the first column in primary ink, and
+rows are taller (20×24px cells). The rail is 280px; its links grow from 44px to
+58px and the LCIT mark with "EARE / Access governance" leads it. Spacing is
+looser: 36px under the page title, 32px after the introduction, 24px between
+toolbar, cards and panels. Gutters scale from 24px to 48px; the content column
+stops at 1840px.
 
 ### Tables as one unit
 
@@ -168,6 +171,22 @@ the content column stops at 1840px.
 A Golden access may carry several business permissions (`read, write, execute`).
 The Golden table and the access drawer edit them as a set of toggles and store
 them as one comma-separated value, so the API is unchanged.
+
+### Several applications per access
+
+An access may belong to several applications. In the Golden table and the access
+drawer the application field is a type-ahead picker: chosen applications are
+removable chips, typing filters a catalogue of any size (40 matches shown, then
+"keep typing"), Enter adds, Backspace removes the last chip, and an unknown name
+can be created in place. The value is stored as one comma-separated list; the
+API splits it (`split_multi_value`) wherever it counts, lists or matches
+applications, so the payload shape is unchanged.
+
+### System database connections
+
+The API used one SQLite connection for the system tables across FastAPI's worker
+threads; concurrent reads interleaved and returned incomplete rows, which showed
+as random 500s and sign-outs. Each worker thread now gets its own connection.
 
 ### Accessibility and RTL
 
