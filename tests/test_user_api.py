@@ -192,6 +192,16 @@ def test_public_swagger_is_read_only_and_hides_internal_routes(tmp_path):
     assert "BearerToken" in schema["components"]["securitySchemes"]
 
 
+def test_public_swagger_is_hidden_when_external_user_api_is_disabled(tmp_path):
+    client, db = _setup(tmp_path)
+    conn = sqlite3.connect(db)
+    set_external_user_api_enabled(conn, False)
+    conn.close()
+
+    assert client.get("/swagger").status_code == 404
+    assert client.get("/openapi.json").status_code == 404
+
+
 
 def test_group_owner_and_business_admin_keep_existing_read_boundaries(tmp_path):
     client, db = _setup(tmp_path)

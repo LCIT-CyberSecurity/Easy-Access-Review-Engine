@@ -3201,6 +3201,8 @@ def create_app(db_path: str | None = None):
 
     @app.get("/openapi.json", include_in_schema=False)
     def public_openapi():
+        if not external_user_api_enabled(system_conn):
+            raise HTTPException(status_code=404, detail="Not found")
         schema = dict(app.openapi())
         schema["paths"] = {
             path: {method: operation for method, operation in methods.items() if method == "get"}
@@ -3236,6 +3238,8 @@ def create_app(db_path: str | None = None):
 
     @app.get("/swagger", include_in_schema=False, response_class=HTMLResponse)
     def swagger():
+        if not external_user_api_enabled(system_conn):
+            raise HTTPException(status_code=404, detail="Not found")
         return get_swagger_ui_html(openapi_url="/openapi.json", title="EARE External User API")
 
     return app
