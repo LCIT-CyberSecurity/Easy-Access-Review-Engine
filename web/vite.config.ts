@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
-  server: { port: 5173, proxy: { '/api': 'http://127.0.0.1:8000' } },
+  server: { port: 5173, proxy: { '/api': 'http://127.0.0.1:8000', '/mcp': { target: 'http://127.0.0.1:8000', changeOrigin: false } } },
   build: {
     // The libraries change on an upgrade, the application changes on every
     // release: splitting them lets a deployment reuse the cached vendor chunk

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from contextlib import asynccontextmanager
 import base64
 import csv
 import difflib
@@ -60,6 +61,7 @@ from access_review_engine.domain import (
 from access_review_engine.golden_annotations import annotation_for_assignment, copy_assignment_annotations, normalize_assignment_comment, set_assignment_annotation
 from access_review_engine.guidance import GuidanceContext, build_guidance
 from access_review_engine.reporting import access_names_from_snapshot, build_report_rows, identity_names_from_snapshot, render_pdf_report, report_summary, write_reports
+from access_review_engine.mcp_server import build_mcp_asgi
 from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, compare_snapshot, create_decision, create_golden_source, create_golden_version, evolve_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
 from access_review_engine.snapshot_composition import compose_snapshots
 from access_review_engine.source_inspector import SourceInspectorError, browse_source_tree, discover_source_attributes, get_source_object, search_source_objects, source_object_kinds
@@ -69,7 +71,7 @@ from access_review_engine.web_jobs import create_job, get_events, get_job, updat
 from access_review_engine.web_read_models import _add_review_provenance, _display_names, _latest_decisions, projected_rows, review_item_view, review_summary
 from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import, snapshot_collection_scope
 from access_review_engine.directory_auth import DirectoryError, authenticate as directory_authenticate, search_accounts as directory_accounts, test_directory, validate_directory
-from access_review_engine.system_admin import LOCAL_SOURCE, api_token_summary, authenticate_api_token, authenticate_user, change_password as update_password, create_api_token, enabled_admins, ensure_bootstrap_user, external_user_api_enabled, init_system, list_idps, list_users, reset_password, revoke_api_tokens, set_enabled, set_external_user_api_enabled, upsert_idp, upsert_user
+from access_review_engine.system_admin import LOCAL_SOURCE, api_token_summary, authenticate_api_token, authenticate_user, change_password as update_password, create_api_token, create_mcp_token, enabled_admins, ensure_bootstrap_user, external_user_api_enabled, init_system, list_idps, list_users, mcp_enabled, mcp_token_summary, revoke_api_tokens, revoke_mcp_tokens, reset_password, set_enabled, set_external_user_api_enabled, set_mcp_enabled, upsert_idp, upsert_user
 
 
 SESSION_COOKIE = "eare_session"
@@ -213,7 +215,20 @@ def create_app(db_path: str | None = None):
     if FastAPI is None:
         raise RuntimeError("Install the 'app' extra to use the REST API")
     db_path = db_path or os.environ.get("EARE_DB_PATH", "access-review.db")
-    app = FastAPI(title="Easy Access Review Engine", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None)
+    mcp_holder: dict[str, Any] = {}
+
+    @asynccontextmanager
+    async def lifespan(_app: Any):
+        if mcp_holder:
+            async with mcp_holder["server"].session_manager.run():
+                yield
+        else:
+            yield
+
+    app = FastAPI(title="Easy Access Review Engine", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    # The Streamable HTTP endpoint is intentionally available at exactly /mcp;
+    # avoid a slash redirect that can discard an Authorization header in clients.
+    app.router.redirect_slashes = False
     system_conn: Any = _PerThreadConnection(db_path)
     init_system(system_conn)
     ensure_bootstrap_user(system_conn)
@@ -542,6 +557,49 @@ def create_app(db_path: str | None = None):
                 record_audit(repo, request, "api.global_enabled" if enabled else "api.global_disabled", "system_setting", "external_user_api_enabled")
         return {"external_user_api_enabled": enabled}
 
+    @app.put("/api/system/settings/mcp")
+    def system_mcp_toggle(request: Request, payload: dict[str, Any] = Body(...)):
+        _require(current_user(request), ("ADMIN",))
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise HTTPException(status_code=400, detail="enabled must be a boolean")
+        previous = mcp_enabled(system_conn)
+        set_mcp_enabled(system_conn, enabled)
+        if previous != enabled:
+            with Repository(db_path) as repo:
+                record_audit(repo, request, "mcp.enabled" if enabled else "mcp.disabled", "system_setting", "mcp_enabled")
+        return {"mcp_enabled": enabled}
+
+    @app.get("/api/me/mcp-token")
+    def me_mcp_token(request: Request):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"))
+        stored = _stored_user(principal.username)
+        return {"mcp_enabled": mcp_enabled(system_conn), "mcp_access_enabled": bool(stored and stored.get("mcp_access_enabled")), "token": mcp_token_summary(system_conn, str(stored["id"])) if stored else {"active": False}}
+
+    @app.post("/api/me/mcp-token")
+    def me_mcp_token_create(request: Request):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"))
+        stored = _stored_user(principal.username)
+        if stored is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        try:
+            result = create_mcp_token(system_conn, str(stored["id"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        with Repository(db_path) as repo:
+            record_audit(repo, request, "mcp.token_created", "mcp_token", str(result["id"]), {"user_id": stored["id"], "token_prefix": result["prefix"]})
+        response = {**result, "warning": "This credential is shown once and will not be displayed again."}
+        return Response(content=json.dumps(response), media_type="application/json", headers={"Cache-Control": "no-store"})
+
+    @app.delete("/api/me/mcp-token")
+    def me_mcp_token_revoke(request: Request):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"))
+        stored = _stored_user(principal.username)
+        revoked = revoke_mcp_tokens(system_conn, str(stored["id"])) if stored else 0
+        with Repository(db_path) as repo:
+            record_audit(repo, request, "mcp.token_revoked", "user", principal.username)
+        return {"revoked": revoked > 0}
+
     @app.post("/api/system/users/{username}/api-token/revoke")
     def system_user_api_token_revoke(username: str, request: Request):
         principal = _require(current_user(request), ("ADMIN",))
@@ -558,6 +616,31 @@ def create_app(db_path: str | None = None):
                 record_audit(repo, request, "api.token_revoked", "api_token", str(token["id"]), {"user_id": stored["id"], "token_prefix": str(token["token_prefix"]), "revoked_by": principal.username})
         return {"revoked": revoked > 0}
 
+    @app.post("/api/system/users/{username}/mcp-token/create")
+    def system_user_mcp_token_create(username: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN",))
+        stored = _stored_user(username)
+        if stored is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        try:
+            result = create_mcp_token(system_conn, str(stored["id"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        with Repository(db_path) as repo:
+            record_audit(repo, request, "mcp.token_created", "mcp_token", str(result["id"]), {"user_id": stored["id"], "token_prefix": result["prefix"], "created_by": principal.username})
+        return Response(content=json.dumps({**result, "warning": "This credential is shown once and will not be displayed again."}), media_type="application/json", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/system/users/{username}/mcp-token/revoke")
+    def system_user_mcp_token_revoke(username: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN",))
+        stored = _stored_user(username)
+        if stored is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        revoked = revoke_mcp_tokens(system_conn, str(stored["id"]))
+        with Repository(db_path) as repo:
+            record_audit(repo, request, "mcp.token_revoked", "user", str(stored["username"]), {"revoked_by": principal.username})
+        return {"revoked": revoked > 0}
+
     @app.get("/api/system")
     def system_overview(request: Request):
         _require(current_user(request), ("ADMIN",))
@@ -565,7 +648,7 @@ def create_app(db_path: str | None = None):
         users = [{**user, "pending_reviews": pending.get(str(user.get("username", "")).lower(), 0)} for user in list_users(system_conn)]
         with Repository(db_path) as repo:
             providers = _authorized_domain_options(repo)
-        return {"users": users, "identity_providers": list_idps(system_conn), "providers": providers, "roles": sorted(ROLES), "external_user_api_enabled": external_user_api_enabled(system_conn)}
+        return {"users": users, "identity_providers": list_idps(system_conn), "providers": providers, "roles": sorted(ROLES), "external_user_api_enabled": external_user_api_enabled(system_conn), "mcp_enabled": mcp_enabled(system_conn)}
 
     @app.get("/api/campaign-pilots")
     def campaign_pilots(request: Request):
@@ -3257,4 +3340,9 @@ def create_app(db_path: str | None = None):
 </html>"""
         )
 
+    mcp_server, mcp_app = build_mcp_asgi(db_path, system_conn)
+    mcp_holder["server"] = mcp_server
+    # Mount at the host root so the SDK's own /mcp route is exact and no slash
+    # redirect can lose the bearer header.
+    app.mount("/", mcp_app)
     return app
