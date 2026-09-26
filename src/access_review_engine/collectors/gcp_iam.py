@@ -15,6 +15,7 @@ import yaml
 from access_review_engine.google_artifacts import write_jsonl
 
 MAX_RETRIES = 3
+GCP_REQUIRED_SURFACES = frozenset({"iam_allow_policies", "service_accounts"})
 
 
 class GcpClient(Protocol):
@@ -64,7 +65,10 @@ def _pages(
                             }
                         )
         else:
-            values = response.get("serviceAccounts", [])
+            # IAM projects.serviceAccounts.list returns ListServiceAccountsResponse.accounts.
+            # Keep this aligned with the official REST contract so a fake response cannot hide
+            # a production incompatibility.
+            values = response.get("accounts", [])
         if not isinstance(values, list):
             raise ValueError(f"GCP {surface} response has an invalid result list")
         rows.extend(row for row in values if isinstance(row, dict))
@@ -154,7 +158,11 @@ def collect(
         "counts": {"iam-bindings": len(bindings), "service-accounts": len(accounts)},
         "pages": pages,
         "collection_errors": errors,
-        "completeness": "full" if not errors and set(requested) == set(completed) else "scoped",
+        "completeness": (
+            "full"
+            if not errors and set(completed) == GCP_REQUIRED_SURFACES
+            else "scoped"
+        ),
         "authoritative_scope": {
             "connector_type": "gcp_iam",
             "scope": scope,
@@ -188,11 +196,16 @@ def _build_client(config: dict[str, Any]) -> GcpClient:
             raise RuntimeError("GCP service account file is not configured or readable")
         credentials = service_account.Credentials.from_service_account_file(
             os.environ[env_name],
-            scopes=["https://www.googleapis.com/auth/cloud-platform.read-only"],
+            # Cloud Asset searchAllIamPolicies requires cloud-platform. This OAuth scope does
+            # not grant write access by itself: effective access remains constrained by the
+            # service account's IAM roles, which must contain read-only permissions only.
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
         )
     else:
         credentials, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform.read-only"]
+            # Cloud Asset searchAllIamPolicies requires cloud-platform. IAM permissions granted
+            # to the connector service account remain the read-only enforcement boundary.
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
         )
     asset = build("cloudasset", "v1", credentials=credentials, cache_discovery=False)
     iam = build("iam", "v1", credentials=credentials, cache_discovery=False)

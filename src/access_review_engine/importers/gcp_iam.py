@@ -121,11 +121,16 @@ def import_gcp_iam_zip(path: str, known_identities: list[Identity] | None = None
                     name,
                     provider_name,
                     ControlObject(
-                        "gcp_iam_binding",
-                        f"gcp-iam-binding:{_stable(semantic)}",
-                        f"gcp-iam-binding:{_stable(semantic)}",
-                        role,
-                        {"condition": condition} if condition else {},
+                        type="gcp_iam_binding",
+                        identifier=f"gcp-iam-binding:{_stable(semantic)}",
+                        native_id=f"gcp-iam-binding:{_stable(semantic)}",
+                        display_name=role,
+                        description=None,
+                        metadata={
+                            "resource": resource,
+                            "role": role,
+                            "condition": condition,
+                        },
                     ),
                     Permission(role, role, metadata={"condition": condition} if condition else {}),
                     Target(
@@ -197,7 +202,12 @@ def import_gcp_iam_zip(path: str, known_identities: list[Identity] | None = None
     if errors and completeness == Completeness.FULL:
         completeness = Completeness.SCOPED
     scope = dict(
-        manifest.get("authoritative_scope") or {"type": "providers", "values": [provider_name]}
+        manifest.get("authoritative_scope")
+        or {
+            "connector_type": "gcp_iam",
+            "scope": str(manifest.get("scope") or ""),
+            "surfaces": sorted(str(item) for item in manifest.get("requested_surfaces", [])),
+        }
     )
     scope["completeness"] = completeness
     if errors:

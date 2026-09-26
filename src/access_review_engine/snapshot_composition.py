@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from copy import deepcopy
 from hashlib import sha256
 
 from access_review_engine.domain import (
+    AccessAssignment,
     AccessRelation,
     AccessRelationType,
     AssignmentType,
     Completeness,
+    IdentityType,
     Origin,
     Snapshot,
 )
@@ -83,6 +86,17 @@ def compose_snapshots(
                 if identity:
                     identities[(identity.provider, identity.identifier)] = identity
                     break
+    assignments = {
+        (
+            resolved.provider,
+            resolved.access_name,
+            resolved.identity_provider,
+            resolved.identity_identifier,
+            resolved.origin_fingerprint,
+        ): resolved
+        for item in assignments.values()
+        for resolved in [_resolve_composite_assignment(item, identities.values())]
+    }
     # A provider-local group membership access grants a cross-provider access only
     # when the direct cloud assignment resolved to that exact Workspace group.
     group_accesses = {
@@ -140,3 +154,41 @@ def compose_snapshots(
         access_relations=list(relations.values()),
         import_scope={"type": "providers", "values": sorted(providers), "completeness": scoped},
     )
+
+
+def _resolve_composite_assignment(
+    assignment: AccessAssignment, identities: Iterable
+) -> AccessAssignment:
+    """Resolve an old provider-local Google principal against identities in the composite.
+
+    Source snapshots remain immutable and retain the original principal evidence. The composed
+    snapshot may point the direct assignment at the now-known Workspace identity so graph
+    traversal can derive cross-provider access without materializing a direct effective grant.
+    """
+    principal = assignment.origin.raw.get("principal")
+    if not assignment.origin.raw.get("unresolved") or not isinstance(principal, str):
+        return assignment
+    kind, separator, identifier = principal.partition(":")
+    if not separator or kind not in {"user", "group"}:
+        return assignment
+    identity_type = {
+        "user": IdentityType.USER_ACCOUNT,
+        "group": IdentityType.GROUP,
+    }[kind]
+    wanted = identifier.casefold()
+    for identity in identities:
+        if isinstance(identity.metadata, dict) and identity.metadata.get("unresolved"):
+            continue
+        if identity.type != identity_type:
+            continue
+        values = [identity.identifier, identity.email]
+        if isinstance(identity.metadata, dict):
+            values.extend(identity.metadata.get("aliases", []))
+        if any(str(value or "").casefold() == wanted for value in values):
+            updated = deepcopy(assignment)
+            updated.identity_provider = identity.provider
+            updated.identity_identifier = identity.identifier
+            updated.origin.raw["composite_resolved"] = True
+            updated.origin.raw["cross_domain_resolved"] = identity.provider != assignment.provider
+            return updated
+    return assignment

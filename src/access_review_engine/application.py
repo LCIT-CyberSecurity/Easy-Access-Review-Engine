@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
-from typing import Iterable
 from zipfile import BadZipFile, ZipFile
 
 from access_review_engine.domain import (
@@ -14,18 +14,17 @@ from access_review_engine.domain import (
     Completeness,
     GoldenSourceVersion,
     Identity,
-    Provider,
     ProviderType,
 )
 from access_review_engine.importers.ad import ImportResult, import_ad_zip
+from access_review_engine.importers.gcp_iam import import_gcp_iam_zip
+from access_review_engine.importers.google_workspace import import_google_workspace_zip
 from access_review_engine.importers.openldap import (
     DEFAULT_OPENLDAP_FILTER,
     _canonical_dn,
     import_openldap_ldif,
     import_openldap_zip,
 )
-from access_review_engine.importers.google_workspace import import_google_workspace_zip
-from access_review_engine.importers.gcp_iam import import_gcp_iam_zip
 from access_review_engine.services import create_snapshot, reconcile_identities
 from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
 from access_review_engine.storage import (
@@ -33,9 +32,9 @@ from access_review_engine.storage import (
     hydrate_access,
     hydrate_access_relation,
     hydrate_assignment,
+    hydrate_authentication_posture,
     hydrate_identity,
     hydrate_provider,
-    hydrate_authentication_posture,
 )
 
 
@@ -195,7 +194,20 @@ def _is_authoritative_full(result: ImportResult) -> bool:
     ):
         return False
     if result.provider.type in {"google_workspace", "gcp_iam"}:
-        return bool(scope.get("authoritative_scope")) and scope.get("completeness") in {None, Completeness.FULL, "full"}
+        authoritative_scope = scope.get("authoritative_scope")
+        if not isinstance(authoritative_scope, dict):
+            return False
+        required = (
+            {"users", "groups", "memberships", "admin_roles", "admin_role_assignments"}
+            if result.provider.type == "google_workspace"
+            else {"iam_allow_policies", "service_accounts"}
+        )
+        surfaces = set(authoritative_scope.get("surfaces", []))
+        return (
+            surfaces == required
+            and scope.get("completeness") in {None, Completeness.FULL, "full"}
+            and not scope.get("collection_errors")
+        )
     return (
         result.batch.completeness == Completeness.FULL
         and scope.get("completeness") in {None, Completeness.FULL, "full"}

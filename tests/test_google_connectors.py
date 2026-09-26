@@ -95,7 +95,7 @@ class FakeGcp:
 
     def list_service_accounts(self, scope, page_token):
         return {
-            "serviceAccounts": [{"email": "backup@prod.iam.gserviceaccount.com", "uniqueId": "sa1"}]
+            "accounts": [{"email": "backup@prod.iam.gserviceaccount.com", "uniqueId": "sa1"}]
         }
 
 
@@ -121,7 +121,7 @@ def test_workspace_collector_paginates_empty_page_and_imports_model(tmp_path):
         "collection": {"page_size": 200},
     }
     manifest = collect_workspace(config, output, FakeWorkspace())
-    assert manifest["completeness"] == "full"
+    assert manifest["completeness"] == "scoped"
     result = import_google_workspace_zip(output)
     alice = next(
         identity for identity in result.identities if identity.identifier == "alice@example.com"
@@ -164,6 +164,62 @@ def test_gcp_conditions_and_special_principals_are_preserved(tmp_path):
     result = import_gcp_iam_zip(output)
     assert result.accesses[0].permission.identifier == "roles/editor"
     assert result.accesses[0].metadata["condition"]["expression"].startswith("request.time")
+
+
+def test_gcp_service_accounts_use_official_accounts_response_key(tmp_path):
+    class Client(FakeGcp):
+        def list_service_accounts(self, scope, page_token):
+            return {
+                "accounts": [
+                    {
+                        "name": "projects/prod/serviceAccounts/backup@prod.iam.gserviceaccount.com",
+                        "email": "backup@prod.iam.gserviceaccount.com",
+                        "uniqueId": "sa1",
+                    }
+                ]
+            }
+
+    output = tmp_path / "service-accounts.zip"
+    manifest = collect_gcp(
+        {
+            "provider": "gcp-acme",
+            "connection": {"scope": "projects/prod"},
+            "collection": {"iam_allow_policies": False, "service_accounts": True},
+        },
+        output,
+        Client(),
+    )
+    assert manifest["counts"]["service-accounts"] == 1
+    result = import_gcp_iam_zip(output)
+    assert [item.identifier for item in result.identities] == [
+        "backup@prod.iam.gserviceaccount.com"
+    ]
+
+
+def test_gcp_service_account_pagination_uses_accounts_and_empty_pages(tmp_path):
+    class Client(FakeGcp):
+        def list_service_accounts(self, scope, page_token):
+            return {
+                None: {"accounts": [], "nextPageToken": "sa2"},
+                "sa2": {
+                    "accounts": [
+                        {"email": "backup@prod.iam.gserviceaccount.com", "uniqueId": "sa1"}
+                    ]
+                },
+            }[page_token]
+
+    output = tmp_path / "service-accounts-pages.zip"
+    manifest = collect_gcp(
+        {
+            "provider": "gcp-acme",
+            "connection": {"scope": "projects/prod"},
+            "collection": {"iam_allow_policies": False, "service_accounts": True},
+        },
+        output,
+        Client(),
+    )
+    assert manifest["pages"]["service_accounts"] == 2
+    assert manifest["counts"]["service-accounts"] == 1
 
 
 def test_workspace_group_graph_derives_effective_access_without_fake_assignment(tmp_path):
@@ -238,6 +294,145 @@ def test_partial_workspace_import_does_not_delete_previous_identity(tmp_path):
         )
 
 
+def test_workspace_users_only_collection_is_scoped_and_retains_groups(tmp_path):
+    first = tmp_path / "workspace-complete.zip"
+    _artifact(
+        first,
+        {
+            "source_type": "google_workspace",
+            "provider": "workspace-acme",
+            "completeness": "full",
+            "requested_surfaces": [
+                "users",
+                "groups",
+                "memberships",
+                "admin_roles",
+                "admin_role_assignments",
+            ],
+            "completed_surfaces": [
+                "users",
+                "groups",
+                "memberships",
+                "admin_roles",
+                "admin_role_assignments",
+            ],
+            "authoritative_scope": {
+                "connector_type": "google_workspace",
+                "customer_id": "customer-a",
+                "surfaces": [
+                    "users",
+                    "groups",
+                    "memberships",
+                    "admin_roles",
+                    "admin_role_assignments",
+                ],
+            },
+        },
+        {
+            "users.jsonl": [{"id": "u1", "primaryEmail": "alice@example.com"}],
+            "groups.jsonl": [{"id": "g1", "email": "admins@example.com"}],
+            "memberships.jsonl": [],
+            "admin-roles.jsonl": [],
+            "admin-role-assignments.jsonl": [],
+            "collection-errors.json": [],
+        },
+    )
+    second = tmp_path / "workspace-users-only.zip"
+    _artifact(
+        second,
+        {
+            "source_type": "google_workspace",
+            "provider": "workspace-acme",
+            "completeness": "scoped",
+            "requested_surfaces": ["users"],
+            "completed_surfaces": ["users"],
+            "authoritative_scope": {
+                "connector_type": "google_workspace",
+                "customer_id": "customer-a",
+                "surfaces": ["users"],
+            },
+        },
+        {
+            "users.jsonl": [{"id": "u1", "primaryEmail": "alice@example.com"}],
+            "groups.jsonl": [],
+            "memberships.jsonl": [],
+            "admin-roles.jsonl": [],
+            "admin-role-assignments.jsonl": [],
+            "collection-errors.json": [],
+        },
+    )
+    with Repository(tmp_path / "workspace-scope.db") as repo:
+        first_snapshot = persist_import_result(repo, import_google_workspace_zip(first))
+        second_snapshot = persist_import_result(repo, import_google_workspace_zip(second))
+        assert first_snapshot.comparison_states is not None
+        assert second_snapshot.comparison_states is not None
+        imports = repo.list_payloads("imports")
+        assert {item["scope"]["completeness"] for item in imports} == {"full", "scoped"}
+        assert any(row["identifier"] == "admins@example.com" for row in repo.list_payloads("identities"))
+
+
+def test_gcp_iam_only_collection_is_scoped_and_retains_service_accounts(tmp_path):
+    first = tmp_path / "gcp-complete.zip"
+    _artifact(
+        first,
+        {
+            "source_type": "gcp_iam",
+            "provider": "gcp-acme",
+            "scope": "projects/prod",
+            "completeness": "full",
+            "requested_surfaces": ["iam_allow_policies", "service_accounts"],
+            "completed_surfaces": ["iam_allow_policies", "service_accounts"],
+            "authoritative_scope": {
+                "connector_type": "gcp_iam",
+                "scope": "projects/prod",
+                "surfaces": ["iam_allow_policies", "service_accounts"],
+            },
+        },
+        {
+            "iam-bindings.jsonl": [],
+            "service-accounts.jsonl": [
+                {"email": "backup@prod.iam.gserviceaccount.com", "uniqueId": "sa1"}
+            ],
+            "resource-hierarchy.jsonl": [],
+            "collection-errors.json": [],
+        },
+    )
+    second = tmp_path / "gcp-iam-only.zip"
+    _artifact(
+        second,
+        {
+            "source_type": "gcp_iam",
+            "provider": "gcp-acme",
+            "scope": "projects/prod",
+            "completeness": "scoped",
+            "requested_surfaces": ["iam_allow_policies"],
+            "completed_surfaces": ["iam_allow_policies"],
+            "authoritative_scope": {
+                "connector_type": "gcp_iam",
+                "scope": "projects/prod",
+                "surfaces": ["iam_allow_policies"],
+            },
+        },
+        {
+            "iam-bindings.jsonl": [],
+            "service-accounts.jsonl": [],
+            "resource-hierarchy.jsonl": [],
+            "collection-errors.json": [],
+        },
+    )
+    with Repository(tmp_path / "gcp-scope.db") as repo:
+        first_snapshot = persist_import_result(repo, import_gcp_iam_zip(first))
+        second_snapshot = persist_import_result(repo, import_gcp_iam_zip(second))
+        assert first_snapshot.comparison_states is not None
+        assert second_snapshot.comparison_states is not None
+        imports = repo.list_payloads("imports")
+        assert {item["scope"]["completeness"] for item in imports} == {"full", "scoped"}
+        assert any(
+            row["identifier"] == "backup@prod.iam.gserviceaccount.com"
+            for row in repo.list_payloads("identities")
+        )
+
+
 def test_workspace_roles_join_assignments_and_group_access_ids(tmp_path):
     path = tmp_path / "roles.zip"
     _artifact(
@@ -296,6 +491,92 @@ def test_workspace_roles_join_assignments_and_group_access_ids(tmp_path):
     assert any(item.identity_identifier == "unknown@example.com" for item in result.assignments)
     role_access = next(item for item in result.accesses if item.metadata.get("role_id") == "r1")
     assert role_access.display_name == "Help Desk"
+    assert role_access.control_object.native_id == role_access.name
+    assert role_access.control_object.display_name == "Help Desk"
+    assert any(
+        relation.parent_access_name == "google-group:g1:MEMBER"
+        and relation.child_access_name == role_access.name
+        for relation in result.access_relations
+    )
+
+
+def test_workspace_admin_role_expiration_is_not_identity(tmp_path):
+    def make(name, expiration):
+        path = tmp_path / f"{name}.zip"
+        _artifact(
+            path,
+            {
+                "source_type": "google_workspace",
+                "provider": "w",
+                "completeness": "scoped",
+            },
+            {
+                "users.jsonl": [],
+                "groups.jsonl": [],
+                "memberships.jsonl": [],
+                "admin-roles.jsonl": [{"roleId": "r1", "roleName": "Help Desk"}],
+                "admin-role-assignments.jsonl": [
+                    {
+                        "roleAssignmentId": name,
+                        "roleId": "r1",
+                        "assignedTo": "u1",
+                        "scopeType": "CUSTOMER",
+                        "expirationDetails": expiration,
+                    }
+                ],
+                "collection-errors.json": [],
+            },
+        )
+        return import_google_workspace_zip(path).accesses[0].name
+
+    assert make("before", {"expireTime": "2030-01-01T00:00:00Z"}) == make(
+        "after", {"expireTime": "2031-01-01T00:00:00Z"}
+    )
+
+
+def test_group_assigned_admin_role_is_effective_without_direct_user_assignment(tmp_path):
+    path = tmp_path / "group-admin-role.zip"
+    _artifact(
+        path,
+        {
+            "source_type": "google_workspace",
+            "provider": "workspace-acme",
+            "completeness": "scoped",
+        },
+        {
+            "users.jsonl": [{"id": "u1", "primaryEmail": "alice@example.com"}],
+            "groups.jsonl": [{"id": "g1", "email": "admins@example.com", "displayName": "Admins"}],
+            "memberships.jsonl": [
+                {"group_id": "g1", "member_id": "u1", "role": "MEMBER", "member_type": "USER"}
+            ],
+            "admin-roles.jsonl": [{"roleId": "r1", "roleName": "Help Desk"}],
+            "admin-role-assignments.jsonl": [
+                {
+                    "roleAssignmentId": "ra1",
+                    "roleId": "r1",
+                    "assignedTo": "g1",
+                    "assigneeType": "GROUP",
+                    "scopeType": "CUSTOMER",
+                }
+            ],
+            "collection-errors.json": [],
+        },
+    )
+    result = import_google_workspace_zip(path)
+    evaluation = calculate_effective_accesses(
+        result.assignments, result.access_relations, result.accesses
+    )
+    role_access = next(item for item in result.accesses if item.metadata.get("role_id") == "r1")
+    assert any(
+        item.identity_identifier == "alice@example.com"
+        and item.access_name == role_access.name
+        and not item.direct
+        for item in evaluation.effective_accesses
+    )
+    assert not any(
+        item.identity_identifier == "alice@example.com" and item.access_name == role_access.name
+        for item in result.assignments
+    )
 
 
 def test_gcp_principal_parser_keeps_special_and_deleted_principals(tmp_path):
@@ -354,7 +635,7 @@ def test_gcp_flags_do_not_call_disabled_surfaces(tmp_path):
 
         def list_service_accounts(self, scope, page_token):
             self.calls.append("sa")
-            return {"serviceAccounts": []}
+            return {"accounts": []}
 
     client = Client()
     collect_gcp(
@@ -425,10 +706,12 @@ def test_gcp_assignment_resolves_after_workspace_import_and_alias(tmp_path):
             "source_type": "gcp_iam",
             "provider": "g",
             "completeness": "full",
+            "requested_surfaces": ["iam_allow_policies", "service_accounts"],
+            "completed_surfaces": ["iam_allow_policies", "service_accounts"],
             "authoritative_scope": {
                 "connector_type": "gcp_iam",
                 "scope": "projects/p",
-                "surfaces": ["iam_allow_policies"],
+                "surfaces": ["iam_allow_policies", "service_accounts"],
             },
         },
         {
@@ -451,10 +734,30 @@ def test_gcp_assignment_resolves_after_workspace_import_and_alias(tmp_path):
             "source_type": "google_workspace",
             "provider": "w",
             "completeness": "full",
+            "requested_surfaces": [
+                "users",
+                "groups",
+                "memberships",
+                "admin_roles",
+                "admin_role_assignments",
+            ],
+            "completed_surfaces": [
+                "users",
+                "groups",
+                "memberships",
+                "admin_roles",
+                "admin_role_assignments",
+            ],
             "authoritative_scope": {
                 "connector_type": "google_workspace",
                 "customer_id": "c",
-                "surfaces": ["users"],
+                "surfaces": [
+                    "users",
+                    "groups",
+                    "memberships",
+                    "admin_roles",
+                    "admin_role_assignments",
+                ],
             },
         },
         {

@@ -1,6 +1,9 @@
 from access_review_engine.domain import (
     Access,
     AccessAssignment,
+    AccessRelation,
+    AccessRelationType,
+    AssignmentType,
     Identity,
     IdentityType,
     Origin,
@@ -81,3 +84,107 @@ def test_composition_keeps_weakest_completeness_and_source_ids():
     composed = compose_snapshots([snapshot], ["workspace"], ["scoped"])
     assert composed.source_import_ids == ["import-1"]
     assert composed.comparison_states is not None
+
+
+def test_composition_resolves_old_gcp_principal_after_workspace_import():
+    workspace = Provider("workspace", "google_workspace")
+    gcp = Provider("gcp", "gcp_iam")
+    alice = Identity("workspace", "alice@example.com", IdentityType.USER_ACCOUNT, "active")
+    developers = Identity(
+        "workspace", "developers@example.com", IdentityType.GROUP, "active", native_id="dev"
+    )
+    cloud_admins = Identity(
+        "workspace", "cloud-admins@example.com", IdentityType.GROUP, "active", native_id="cloud"
+    )
+    unresolved = Identity(
+        "gcp", "cloud-admins@example.com", IdentityType.GROUP, "unknown", metadata={"unresolved": True}
+    )
+    dev_access = Access(
+        "google-group:dev:MEMBER",
+        "workspace",
+        metadata={"membership_role": "MEMBER", "source_group": "developers@example.com"},
+    )
+    cloud_access = Access(
+        "google-group:cloud:MEMBER",
+        "workspace",
+        metadata={"membership_role": "MEMBER", "source_group": "cloud-admins@example.com"},
+    )
+    editor = Access("gcp-iam:editor", "gcp", permission=Permission("roles/editor"))
+    workspace_snapshot = create_snapshot(
+        [workspace],
+        [alice, developers, cloud_admins],
+        [],
+        [dev_access, cloud_access],
+        [
+            AccessAssignment(
+                "workspace",
+                dev_access.name,
+                "workspace",
+                alice.identifier,
+                Origin(AssignmentType.GROUP, True, False, "developers@example.com"),
+            )
+        ],
+        ["workspace-import-2"],
+        access_relations=[
+            AccessRelation(
+                "workspace",
+                dev_access.name,
+                "workspace",
+                cloud_access.name,
+                AccessRelationType.GRANTS,
+                Origin(AssignmentType.GROUP, False, True, "developers@example.com"),
+            )
+        ],
+    )
+    gcp_snapshot = create_snapshot(
+        [gcp],
+        [unresolved],
+        [],
+        [editor],
+        [
+            AccessAssignment(
+                "gcp",
+                editor.name,
+                "gcp",
+                unresolved.identifier,
+                Origin(
+                    AssignmentType.POLICY,
+                    True,
+                    False,
+                    "projects/prod",
+                    {"principal": "group:cloud-admins@example.com", "unresolved": True},
+                ),
+            )
+        ],
+        ["gcp-import-1"],
+    )
+    assert any(item.identifier == "cloud-admins@example.com" for item in workspace_snapshot.identities)
+    assert gcp_snapshot.access_assignments[0].origin.raw["unresolved"] is True
+    from access_review_engine.snapshot_composition import _resolve_composite_assignment
+
+    resolved_probe = _resolve_composite_assignment(
+        gcp_snapshot.access_assignments[0], workspace_snapshot.identities
+    )
+    assert resolved_probe.identity_provider == "workspace"
+
+    composed = compose_snapshots(
+        [gcp_snapshot, workspace_snapshot], ["workspace", "gcp"], ["full", "full"]
+    )
+    effective = calculate_effective_accesses(
+        composed.access_assignments, composed.access_relations, composed.accesses
+    )
+    assert any(
+        assignment.identity_provider == "workspace"
+        and assignment.identity_identifier == "cloud-admins@example.com"
+        for assignment in composed.access_assignments
+    )
+    assert any(
+        item.identity_identifier == "alice@example.com"
+        and item.access_name == editor.name
+        and item.direct is False
+        for item in effective.effective_accesses
+    )
+    assert not any(
+        item.identity_identifier == "alice@example.com" and item.access_name == editor.name
+        for item in composed.access_assignments
+    )

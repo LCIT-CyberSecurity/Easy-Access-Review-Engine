@@ -21,7 +21,10 @@ ACLs, Gmail delegation, Drive ACLs, Calendar ACLs or OAuth grants. Incomplete
 collections are marked `scoped`; they never authorize deletion of previously
 observed objects.
 
-The application requests read-only Google scopes. Configure a reverse proxy
+Cloud Asset Inventory's `searchAllIamPolicies` requires the OAuth scope
+`https://www.googleapis.com/auth/cloud-platform`; this scope alone does not
+grant write access. The service account must still be restricted to the
+read-only IAM permissions required by the connector. Configure a reverse proxy
 and TLS outside EARE for production use; do not expose credential files to the
 WebUI. Optional live tests must be explicitly configured and are skipped when
 Google credentials are absent.

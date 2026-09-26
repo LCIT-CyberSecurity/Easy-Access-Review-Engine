@@ -120,11 +120,16 @@ def import_google_workspace_zip(
                 name=name,
                 provider=provider_name,
                 control_object=ControlObject(
-                    "google_group",
-                    group.identifier,
-                    f"google-group:{group.native_id or group.identifier}:{role}",
-                    group.display_name,
-                    {"membership_role": role},
+                    type="google_group",
+                    identifier=group.identifier,
+                    native_id=f"google-group:{group.native_id or group.identifier}:{role}",
+                    display_name=group.display_name,
+                    description=f"Google Workspace group {role.lower()} membership",
+                    metadata={
+                        "membership_role": role,
+                        "group_native_id": group.native_id,
+                        "source_group": group.identifier,
+                    },
                 ),
                 permission=Permission(f"google.workspace.group.{role.lower()}", role.title()),
                 target=Target(
@@ -235,19 +240,23 @@ def import_google_workspace_zip(
             continue
         role_definition = role_definitions.get(role_id, {})
         condition = row.get("condition") or row.get("conditionExpression") or ""
-        semantic = (
-            f"{role_id}|{scope_type}|{scope_id}|{condition}|{row.get('expirationDetails') or ''}"
-        )
+        semantic = f"{role_id}|{scope_type}|{scope_id}|{condition}"
         name = f"google-admin:{_id('workspace-admin', semantic)}"
         if name not in access_by_name:
             access = Access(
                 name=name,
                 provider=provider_name,
                 control_object=ControlObject(
-                    "google_workspace_admin_role",
-                    name,
-                    role_definition.get("roleName") or role_id,
-                    {"scope_type": scope_type, "scope_id": scope_id},
+                    type="google_workspace_admin_role",
+                    identifier=name,
+                    native_id=name,
+                    display_name=role_definition.get("roleName") or role_id,
+                    description=role_definition.get("roleDescription"),
+                    metadata={
+                        "scope_type": scope_type,
+                        "scope_id": scope_id,
+                        "role_id": role_id,
+                    },
                 ),
                 permission=Permission(role_id, role_definition.get("roleName") or role_id),
                 target=Target(
@@ -285,6 +294,32 @@ def import_google_workspace_zip(
                     ),
                 )
             )
+            if assignee.type == IdentityType.GROUP:
+                group_member_access = (
+                    f"google-group:{assignee.native_id or assignee.identifier}:MEMBER"
+                )
+                relations.append(
+                    AccessRelation(
+                        provider_name,
+                        group_member_access,
+                        provider_name,
+                        name,
+                        AccessRelationType.GRANTS,
+                        Origin(
+                            AssignmentType.GROUP,
+                            False,
+                            True,
+                            role_id,
+                            {
+                                "role_assignment_id": row.get("roleAssignmentId") or row.get("id")
+                            },
+                        ),
+                        id=_id(
+                            "workspace-admin-group",
+                            f"{assignee.identifier}:{name}",
+                        ),
+                    )
+                )
     errors = records["collection-errors.json"]
     completeness = str(
         manifest.get("completeness") or (Completeness.UNKNOWN if errors else Completeness.FULL)
@@ -292,7 +327,12 @@ def import_google_workspace_zip(
     if errors and completeness == Completeness.FULL:
         completeness = Completeness.SCOPED
     scope = dict(
-        manifest.get("authoritative_scope") or {"type": "providers", "values": [provider_name]}
+        manifest.get("authoritative_scope")
+        or {
+            "connector_type": "google_workspace",
+            "customer_id": str(manifest.get("customer_id") or ""),
+            "surfaces": sorted(str(item) for item in manifest.get("requested_surfaces", [])),
+        }
     )
     scope["completeness"] = completeness
     if errors:

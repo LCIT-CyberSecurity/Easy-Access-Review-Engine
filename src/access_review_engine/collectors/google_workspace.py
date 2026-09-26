@@ -16,6 +16,9 @@ from access_review_engine.google_artifacts import write_jsonl
 
 MAX_RETRIES = 3
 DEFAULT_TIMEOUT = 30
+WORKSPACE_REQUIRED_SURFACES = frozenset(
+    {"users", "groups", "memberships", "admin_roles", "admin_role_assignments"}
+)
 
 
 class WorkspaceClient(Protocol):
@@ -181,7 +184,11 @@ def collect(
     completed = [
         surface for surface in requested if surface not in {row["surface"] for row in errors}
     ]
-    completeness = "full" if not errors and set(completed) == set(requested) else "scoped"
+    completeness = (
+        "full"
+        if not errors and set(completed) == WORKSPACE_REQUIRED_SURFACES
+        else "scoped"
+    )
     manifest = {
         "source_type": "google_workspace",
         "schema_version": 1,
