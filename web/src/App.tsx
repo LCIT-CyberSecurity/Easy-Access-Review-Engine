@@ -1355,6 +1355,13 @@ function ApiTokenPanel({ menuOpen }: { menuOpen: boolean }) {
   );
 }
 
+export const mcpAccessStatus = (enabled: boolean, authorized: boolean): string =>
+  !authorized ? "MCP access is disabled by an administrator." : !enabled ? "MCP server is currently disabled." : "MCP access is available.";
+
+export function McpTokenOnce({ menuOpen, token }: { menuOpen: boolean; token: string }) {
+  return menuOpen && token ? <div className="api-key-once"><strong>Copy this key now. It will not be displayed again.</strong><code>{token}</code></div> : null;
+}
+
 function McpTokenPanel({ menuOpen }: { menuOpen: boolean }) {
   const client = useQueryClient();
   const [issuedKey, setIssuedKey] = useState("");
@@ -1382,12 +1389,11 @@ function McpTokenPanel({ menuOpen }: { menuOpen: boolean }) {
     <div className="user-menu-section">
       <span className="user-menu-label"><KeyRound size={13} /> MCP access</span>
       {status.isLoading ? <small className="muted">Loading MCP key status…</small> : null}
-      {!status.isLoading && !authorized ? <small className="muted">MCP access is disabled by an administrator.</small> : null}
-      {!status.isLoading && authorized && !globallyEnabled ? <small className="muted">MCP server is currently disabled.</small> : null}
+      {!status.isLoading && (!authorized || !globallyEnabled) ? <small className="muted">{mcpAccessStatus(globallyEnabled, authorized)}</small> : null}
       {authorized && globallyEnabled ? (
         <>
           {token.active ? <small className="muted">{s(token.prefix)} · created {s(token.created_at)} · expires {s(token.expires_at)} · last used {s(token.last_used_at, "never")}</small> : <small className="muted">No active MCP key.</small>}
-          {issuedKey ? <div className="api-key-once"><strong>Copy this key now. It will not be displayed again.</strong><code>{issuedKey}</code><button className="button subtle" type="button" onClick={() => { if (navigator.clipboard) void navigator.clipboard.writeText(issuedKey); }}>Copy key</button></div> : null}
+          {issuedKey ? <><McpTokenOnce menuOpen={menuOpen} token={issuedKey} /><button className="button subtle" type="button" onClick={() => { if (navigator.clipboard) void navigator.clipboard.writeText(issuedKey); }}>Copy key</button></> : null}
           {(issue.error || revoke.error) ? <small className="form-error">{s(issue.error || revoke.error)}</small> : null}
           <div className="button-row">
             <button className="button subtle" type="button" disabled={issue.isPending} onClick={() => issue.mutate()}>{token.active ? "Generate new MCP key" : "Generate MCP key"}</button>

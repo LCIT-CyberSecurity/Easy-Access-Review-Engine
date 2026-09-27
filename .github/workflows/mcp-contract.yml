@@ -8,6 +8,8 @@ on:
       - "src/access_review_engine/api.py"
       - "tests/test_mcp_*.py"
       - "web/nginx.conf"
+      - "web/src/App.tsx"
+      - "web/src/**/*.test.ts"
       - ".github/workflows/mcp-contract.yml"
   push:
     paths:
@@ -16,6 +18,8 @@ on:
       - "src/access_review_engine/api.py"
       - "tests/test_mcp_*.py"
       - "web/nginx.conf"
+      - "web/src/App.tsx"
+      - "web/src/**/*.test.ts"
       - ".github/workflows/mcp-contract.yml"
 
 jobs:
@@ -29,3 +33,4 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install ".[app,dev]"
       - run: pytest -q tests/test_mcp_security.py
+      - run: cd web && npm ci && npm test && npm run build
