@@ -1,0 +1,4 @@
+{"id":"u-alice","username":"alice","email":"alice@example.test","firstName":"Alice","lastName":"Example","enabled":true}
+{"id":"u-bob","username":"bob","email":"bob@example.test","enabled":true}
+{"id":"u-charlie","username":"charlie","enabled":false}
+{"id":"u-backup","username":"svc-backup","enabled":false,"service_account":true}

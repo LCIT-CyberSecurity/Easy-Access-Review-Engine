@@ -1,0 +1,5 @@
+{"id":"cr-sales","client_id":"c-crm","name":"Sales","role_kind":"client"}
+{"id":"cr-backup","client_id":"c-crm","name":"Backup-Operator","role_kind":"client"}
+{"id":"cr-crm-admin","client_id":"c-crm","name":"admin","role_kind":"client"}
+{"id":"cr-erp-admin","client_id":"c-erp","name":"admin","role_kind":"client"}
+{"id":"cr-erp-read","client_id":"c-erp","name":"Read","role_kind":"client"}

@@ -1,0 +1,5 @@
+{"id":"m-1","group_id":"g-france","member_id":"u-alice"}
+{"id":"m-2","group_id":"g-finance","member_id":"g-france"}
+{"id":"m-3","group_id":"g-finance","member_id":"u-bob"}
+{"id":"m-4","group_id":"g-a","member_id":"u-charlie"}
+{"id":"m-5","group_id":"g-b","member_id":"u-charlie"}
