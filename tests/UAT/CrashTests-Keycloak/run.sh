@@ -5,6 +5,19 @@ cd "$(dirname "$0")"
 project=eare-keycloak-crashtest
 compose=(docker compose -p "$project" -f compose.yaml)
 api_url=${EARE_URL:-http://127.0.0.1:4175}
+realm=eare-crashtest
+
+json_value() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+for key in sys.argv[2].split("."):
+    value = value[int(key)] if isinstance(value, list) else value[key]
+print(value)
+PY
+}
 
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 docker network inspect web_default >/dev/null 2>&1 || { echo "existing OpenLDAP network web_default is required" >&2; exit 1; }
@@ -62,7 +75,88 @@ docker exec "$api_container" python -m access_review_engine.cli.main \
   --config /data/connectors/keycloak-crashtest.yaml \
   sync keycloak-crashtest
 curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > initial-snapshots.json
-grep -q 'keycloak-crashtest' initial-snapshots.json
+initial_snapshot_id=$(json_value initial-snapshots.json 'items.-1.id')
+test -n "$initial_snapshot_id"
+
+curl -fsS -b "$cookie" -H 'Content-Type: application/json' \
+  -d "{\"name\":\"keycloak-crashtest-golden\",\"display_name\":\"Keycloak CrashTest Golden\",\"snapshot_id\":\"$initial_snapshot_id\"}" \
+  "$api_url/api/golden-sources/baseline" > golden.json
+golden_version_id=$(json_value golden.json 'version.id')
+test -n "$golden_version_id"
+
+kc() { docker exec "$keycloak_container" /opt/keycloak/bin/kcadm.sh "$@"; }
+user_id() { kc get users -r "$realm" -q username="$1" --fields id --format csv --noquotes | tail -1; }
+
+chloe=$(user_id chloe.bernard)
+bruno=$(user_id bruno.leroy)
+finance=$(kc get groups -r "$realm" -q search=Finance --fields id --format csv --noquotes | tail -1)
+kc add-roles -r "$realm" --uid "$chloe" --cclientid erp --rolename admin >/dev/null
+kc delete "users/$bruno/groups/$finance" -r "$realm" >/dev/null
+
+docker exec "$api_container" python -m access_review_engine.cli.main \
+  --db /data/access-review.db \
+  --config /data/connectors/keycloak-crashtest.yaml \
+  sync keycloak-crashtest
+curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > observed-snapshots.json
+observed_snapshot_id=$(json_value observed-snapshots.json 'items.-1.id')
+test -n "$observed_snapshot_id" && test "$observed_snapshot_id" != "$initial_snapshot_id"
+
+campaign_payload=$(printf '{"name":"keycloak-crashtest-campaign","display_name":"Keycloak CrashTest Campaign","snapshot_id":"%s","golden_source_version_id":"%s","pilot":"admin","scope":{"type":"all"},"allow_unresolved_reviewers":true}' "$observed_snapshot_id" "$golden_version_id")
+curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d "$campaign_payload" \
+  "$api_url/api/campaigns" > campaign.json
+campaign_id=$(json_value campaign.json id)
+test -n "$campaign_id"
+curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d '{}' \
+  "$api_url/api/campaigns/$campaign_id/open" > campaign-open.json
+curl -fsS -b "$cookie" "$api_url/api/campaigns/$campaign_id" > campaign-detail.json
+
+unexpected_id=$(python3 - campaign-detail.json <<'PY'
+import json
+import sys
+for item in json.load(open(sys.argv[1], encoding="utf-8"))["reviews"]:
+    if item.get("classification") == "unexpected" and item.get("identity_display_name") == "chloe.bernard":
+        print(item["id"])
+        break
+PY
+)
+missing_id=$(python3 - campaign-detail.json <<'PY'
+import json
+import sys
+for item in json.load(open(sys.argv[1], encoding="utf-8"))["reviews"]:
+    if item.get("classification") == "missing" and item.get("identity_display_name") == "bruno.leroy":
+        print(item["id"])
+        break
+PY
+)
+expected_id=$(python3 - campaign-detail.json <<'PY'
+import json
+import sys
+for item in json.load(open(sys.argv[1], encoding="utf-8"))["reviews"]:
+    if item.get("classification") == "expected_and_observed" and item.get("identity_display_name") == "alice.martin":
+        print(item["id"])
+        break
+PY
+)
+test -n "$unexpected_id" -a -n "$missing_id" -a -n "$expected_id"
+curl -fsS -b "$cookie" -H 'Content-Type: application/json' \
+  -d '{"value":"revoke","comment":"Keycloak CrashTest drift"}' \
+  "$api_url/api/review-items/$unexpected_id/decision" > revoke.json
+curl -fsS -b "$cookie" -H 'Content-Type: application/json' \
+  -d '{"value":"approve","comment":"Keycloak CrashTest expected access"}' \
+  "$api_url/api/review-items/$expected_id/decision" > approve.json
+curl -fsS -b "$cookie" "$api_url/api/reports/$campaign_id/results?limit=100" > report.json
+grep -q 'unexpected' report.json
+grep -q 'missing' report.json
+grep -q 'expected_and_observed' report.json
+
+after_4173=$(docker ps --format '{{.Names}} {{.Ports}}' | grep '4173->' || true)
+test "$before_4173" = "$after_4173"
+if docker exec "$api_container" sh -c \
+  'grep -R -I -l EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK /data 2>/dev/null | grep .'; then
+  echo "Keycloak secret canary leaked into EARE data" >&2
+  exit 1
+fi
 
 echo "PASS: Keycloak/EARE infrastructure, source configuration, Test Connection and initial sync"
-echo "4173 unchanged: $before_4173"
+echo "PASS: Golden Source, drift, second sync, campaign, findings, decisions and reporting"
+echo "PASS: 4173 unchanged and secret canary absent from EARE data"

@@ -84,14 +84,33 @@ sales=$(group_id Sales); [[ -n "$sales" ]] || sales=$(kc create groups -r "$real
 support=$(group_id Support); [[ -n "$support" ]] || support=$(kc create groups -r "$realm" -s name=Support -i)
 
 user_id() { kc get users -r "$realm" -q username="$1" --fields id --format csv --noquotes | tail -1; }
-assign_group() { local uid; uid=$(user_id "$1"); [[ -n "$uid" ]] && kc put "users/$uid/groups/$2" -r "$realm" >/dev/null 2>&1 || true; }
+assign_group() { local uid; uid=$(user_id "$1"); [[ -n "$uid" ]] && kc update "users/$uid/groups/$2" -r "$realm" >/dev/null 2>&1 || true; }
 assign_group alice.martin "$france"
 assign_group bruno.leroy "$finance"
 assign_group emma.laurent "$sales"
 assign_group david.robert "$support"
 
-assign_realm() { local uid; uid=$(user_id "$1"); [[ -n "$uid" ]] && kc create "users/$uid/role-mappings/realm" -r "$realm" -s "name=$2" >/dev/null 2>&1 || true; }
-assign_client() { local uid; uid=$(user_id "$1"); [[ -n "$uid" ]] && kc create "users/$uid/role-mappings/clients/$3" -r "$realm" -s "name=$2" >/dev/null 2>&1 || true; }
+assign_group_realm_role() {
+  kc add-roles -r "$realm" --gid "$1" --rolename "$2" >/dev/null 2>&1 || true
+}
+assign_group_client_role() {
+  kc add-roles -r "$realm" --gid "$1" --cclientid "$(kc get clients/"$3" -r "$realm" --fields clientId --format csv --noquotes | tail -1)" \
+    --rolename "$2" >/dev/null 2>&1 || true
+}
+assign_group_realm_role "$finance" accountant
+assign_group_client_role "$sales" sales "$crm"
+assign_group_client_role "$support" support "$crm"
+
+assign_realm() {
+  local uid; uid=$(user_id "$1")
+  [[ -n "$uid" ]] && kc add-roles -r "$realm" --uid "$uid" --rolename "$2" >/dev/null 2>&1 || true
+}
+assign_client() {
+  local uid client_name; uid=$(user_id "$1")
+  client_name=$(kc get clients/"$3" -r "$realm" --fields clientId --format csv --noquotes | tail -1)
+  [[ -n "$uid" ]] && kc add-roles -r "$realm" --uid "$uid" --cclientid "$client_name" \
+    --rolename "$2" >/dev/null 2>&1 || true
+}
 assign_realm bob.leroy accountant
 assign_client alice.martin sales "$crm"
 assign_client svc-backup Backup-Operator "$backup"
