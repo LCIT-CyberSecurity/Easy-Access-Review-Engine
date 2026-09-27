@@ -1,2 +1,6 @@
 .env
+.env.runtime
 *.log
+*-export.zip
+connection-check.json
+initial-snapshots.json

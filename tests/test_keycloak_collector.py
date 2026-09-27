@@ -63,6 +63,9 @@ class FakeKeycloak:
             "composites": [{"id": "rr-invoice", "name": "invoice-read", "role_kind": "realm"}],
         }
 
+    def check_realm(self) -> None:
+        self.calls.append(("realm", 0, {}))
+
     def list(
         self, surface: str, page: int, page_size: int, **kwargs: object
     ) -> list[dict[str, object]]:
@@ -183,3 +186,18 @@ def test_keycloak_realm_scope_change_is_rejected() -> None:
         assert str(exc) == "KEYCLOAK_REALM_SCOPE_CHANGED"
     else:
         raise AssertionError("realm scope change was accepted")
+
+
+def test_check_only_uses_only_valid_parent_contexts(tmp_path: Path) -> None:
+    config = _config()
+    config["_check_only"] = True
+    result = collect(config, tmp_path / "check.zip", FakeKeycloak())
+    assert result["check_only"] is True
+    assert {row["surface"] for row in result["diagnostics"]} >= {
+        "authentication",
+        "users",
+        "groups",
+        "clients",
+        "realm_roles",
+        "dependent_surfaces",
+    }
