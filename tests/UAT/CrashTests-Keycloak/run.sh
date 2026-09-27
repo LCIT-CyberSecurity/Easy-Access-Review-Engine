@@ -149,6 +149,30 @@ grep -q 'unexpected' report.json
 grep -q 'missing' report.json
 grep -q 'expected_and_observed' report.json
 
+# Exercise scoped collection handling by temporarily removing only group-read
+# permissions from the collector service account, then restore them and prove
+# that a subsequent FULL collection still succeeds.
+docker exec "$keycloak_container" /opt/keycloak/bin/kcadm.sh remove-roles \
+  -r "$realm" --uusername service-account-eare-collector \
+  --cclientid realm-management --rolename query-groups --rolename view-groups >/dev/null 2>&1 || true
+docker exec "$api_container" sh -c \
+  "cp /data/connectors/keycloak-crashtest.yaml /tmp/keycloak-partial.yaml && sed -i 's/allow_partial: false/allow_partial: true/' /tmp/keycloak-partial.yaml"
+set +e
+docker exec "$api_container" python -m access_review_engine.cli.main \
+  --db /data/access-review.db \
+  --config /tmp/keycloak-partial.yaml \
+  sync keycloak-crashtest >/tmp/keycloak-partial.out 2>&1
+partial_status=$?
+set -e
+docker exec "$keycloak_container" /opt/keycloak/bin/kcadm.sh add-roles \
+  -r "$realm" --uusername service-account-eare-collector \
+  --cclientid realm-management --rolename query-groups --rolename view-groups >/dev/null 2>&1 || true
+test "$partial_status" -eq 0
+docker exec "$api_container" python -m access_review_engine.cli.main \
+  --db /data/access-review.db \
+  --config /data/connectors/keycloak-crashtest.yaml \
+  sync keycloak-crashtest >/dev/null
+
 after_4173=$(docker ps --format '{{.Names}} {{.Ports}}' | grep '4173->' || true)
 test "$before_4173" = "$after_4173"
 if docker exec "$api_container" sh -c \
@@ -159,4 +183,5 @@ fi
 
 echo "PASS: Keycloak/EARE infrastructure, source configuration, Test Connection and initial sync"
 echo "PASS: Golden Source, drift, second sync, campaign, findings, decisions and reporting"
+echo "PASS: scoped collection and restored FULL collection"
 echo "PASS: 4173 unchanged and secret canary absent from EARE data"
