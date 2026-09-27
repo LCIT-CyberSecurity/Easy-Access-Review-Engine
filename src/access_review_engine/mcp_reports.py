@@ -92,13 +92,7 @@ class McpReportService:
             raw_snapshot = repo.get_payload("snapshots", campaign.snapshot_id)
             snapshot = hydrate_snapshot(raw_snapshot) if raw_snapshot else None
             raw_items = [item for item in repo.list_payloads("review_items") if item.get("campaign_id") == report_id]
-            required = campaign_required_providers(
-                campaign.scope,
-                snapshot_providers=[item.provider for item in snapshot.providers] if snapshot else (),
-                review_items=raw_items,
-            )
-            if not can_access_campaign(str(principal.get("role", "")), principal.get("scopes", []), required):
-                raise ReportNotFound("report not found")
+            self._authorize(principal, campaign, snapshot, raw_items)
             items = [hydrate_review_item(item) for item in raw_items]
             item_ids = {item.id for item in items}
             decisions = [hydrate_decision(item) for item in repo.list_payloads("decisions") if item.get("review_item_id") in item_ids]
@@ -111,7 +105,22 @@ class McpReportService:
             return campaign, snapshot, [_safe_row(row) for row in rows]
 
     @staticmethod
-    def _context(campaign: Any, snapshot: Any) -> dict[str, object]:
+    def _authorize(principal: dict[str, Any], campaign: Any, snapshot: Any, raw_items: list[dict[str, Any]]) -> None:
+        required = campaign_required_providers(
+            campaign.scope,
+            snapshot_providers=[item.name for item in snapshot.providers] if snapshot else (),
+            review_items=raw_items,
+        )
+        if not can_access_campaign(str(principal.get("role", "")), principal.get("scopes", []), required):
+            raise ReportNotFound("report not found")
+
+    @staticmethod
+    def _context(campaign: Any, snapshot: Any, rows: list[dict[str, object]]) -> dict[str, object]:
+        visible_providers = sorted({
+            str(row["provider"]) for row in rows if row.get("provider")
+        } | {
+            str(row["identity_provider"]) for row in rows if row.get("identity_provider")
+        })
         return {
             "id": campaign.id,
             "name": _safe_text(campaign.display_name or campaign.name),
@@ -123,13 +132,23 @@ class McpReportService:
             "snapshot": {
                 "id": _safe_text(snapshot.id) if snapshot else None,
                 "created_at": _safe_text(snapshot.created_at) if snapshot else None,
-                "providers": [
-                    {"name": _safe_text(provider.name), "type": _safe_text(provider.type), "display_name": _safe_text(provider.display_name)}
-                    for provider in snapshot.providers
-                ] if snapshot else [],
-                "source_import_ids": [_safe_text(item, 200) for item in snapshot.source_import_ids] if snapshot else [],
+                "providers": visible_providers,
             },
         }
+
+    def _authorized_campaign(self, principal: dict[str, Any], report_id: str) -> tuple[Any, Any]:
+        if not isinstance(report_id, str) or not report_id or len(report_id) > 200:
+            raise ReportNotFound("report not found")
+        with Repository(self.db_path) as repo:
+            payload = repo.get_payload("campaigns", report_id)
+            if payload is None:
+                raise ReportNotFound("report not found")
+            campaign = hydrate_campaign(payload)
+            raw_snapshot = repo.get_payload("snapshots", campaign.snapshot_id)
+            snapshot = hydrate_snapshot(raw_snapshot) if raw_snapshot else None
+            raw_items = [item for item in repo.list_payloads("review_items") if item.get("campaign_id") == report_id]
+            self._authorize(principal, campaign, snapshot, raw_items)
+            return campaign, snapshot
 
     def list_reports(self, principal: dict[str, Any], limit: int = DEFAULT_LIMIT, offset: int = 0) -> dict[str, object]:
         limit, offset = bounded_page(limit, offset)
@@ -137,7 +156,7 @@ class McpReportService:
         with Repository(self.db_path) as repo:
             for payload in repo.list_payloads("campaigns"):
                 try:
-                    campaign, snapshot, _ = self._load(principal, str(payload.get("id", "")))
+                    campaign, snapshot = self._authorized_campaign(principal, str(payload.get("id", "")))
                 except ReportNotFound:
                     continue
                 reports.append({
@@ -151,7 +170,7 @@ class McpReportService:
 
     def _report(self, principal: dict[str, Any], report_id: str) -> tuple[dict[str, object], list[dict[str, object]]]:
         campaign, snapshot, rows = self._load(principal, report_id)
-        return self._context(campaign, snapshot), rows
+        return self._context(campaign, snapshot, rows), rows
 
     def summary(self, principal: dict[str, Any], report_id: str) -> dict[str, object]:
         context, rows = self._report(principal, report_id)

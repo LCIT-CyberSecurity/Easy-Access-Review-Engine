@@ -1,16 +1,18 @@
 """Official MCP SDK adapter for the EARE report-only surface."""
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Callable
 
 try:
     from mcp.server.mcpserver import Context, MCPServer
-    from mcp.server.transport_security import TransportSecuritySettings
+    from mcp.server.transport_security import RequestBodyLimitMiddleware, TransportSecuritySettings
 except ModuleNotFoundError:  # pragma: no cover - app extra is required in deployments
     Context = Any  # type: ignore[misc,assignment]
     MCPServer = None  # type: ignore[assignment]
     TransportSecuritySettings = None  # type: ignore[assignment]
+    RequestBodyLimitMiddleware = None  # type: ignore[assignment]
 
 from access_review_engine.mcp_reports import McpReportService, ReportNotFound
 from access_review_engine.storage import Repository
@@ -50,9 +52,10 @@ def authenticate_request(system_conn: Any, headers: Any) -> dict[str, Any] | Non
 
 
 class McpAuthMiddleware:
-    def __init__(self, app: Any, system_conn: Any) -> None:
+    def __init__(self, app: Any, system_conn: Any, db_path: str) -> None:
         self.app = app
         self.system_conn = system_conn
+        self.db_path = db_path
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -65,6 +68,7 @@ class McpAuthMiddleware:
             return
         principal = authenticate_request(self.system_conn, dict(scope.get("headers", [])))
         if principal is None:
+            _audit(self.db_path, "mcp.authentication_failed", None, "http", None, 0, time.monotonic())
             body = b"MCP authentication required"
             await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"text/plain"), (b"www-authenticate", b"Bearer"), (b"content-length", str(len(body)).encode())]})
             await send({"type": "http.response.body", "body": body})
@@ -74,9 +78,13 @@ class McpAuthMiddleware:
 
 
 def _allowed_hosts() -> list[str]:
-    import os
     configured = [item.strip() for item in os.getenv("EARE_MCP_ALLOWED_HOSTS", "").split(",") if item.strip()]
-    return configured or ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    return configured or ["127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*", "[::1]", "[::1]:*"]
+
+
+def _allowed_origins() -> list[str]:
+    configured = [item.strip() for item in os.getenv("EARE_MCP_ALLOWED_ORIGINS", "").split(",") if item.strip()]
+    return configured or ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
 
 
 def build_mcp_asgi(db_path: str, system_conn: Any) -> tuple[Any, Any]:
@@ -100,6 +108,7 @@ def build_mcp_asgi(db_path: str, system_conn: Any) -> tuple[Any, Any]:
         subject: dict[str, Any] | None = None
         try:
             subject = principal(ctx)
+            _audit(db_path, "mcp.tool_called", subject, tool, report_id, 0, started)
             result = operation(subject)
             count = result.get("total", len(result.get("items", []))) if isinstance(result, dict) else 0
             _audit(db_path, "mcp.tool_succeeded", subject, tool, report_id, int(count), started)
@@ -116,8 +125,7 @@ def build_mcp_asgi(db_path: str, system_conn: Any) -> tuple[Any, Any]:
 
     @server.tool(name="eare_get_current_user", structured_output=True)
     async def get_current_user(ctx: Context) -> dict[str, object]:
-        user = principal(ctx)
-        return {"username": user["username"], "display_name": user["display_name"], "role": user["role"], "authorized_scopes": user["scopes"]}
+        return call(ctx, "eare_get_current_user", None, lambda user: {"username": user["username"], "display_name": user["display_name"], "role": user["role"], "authorized_scopes": user["scopes"]})
 
     @server.tool(name="eare_list_reports", structured_output=True)
     async def list_reports(ctx: Context, limit: int = 25, offset: int = 0) -> dict[str, object]:
@@ -145,11 +153,13 @@ def build_mcp_asgi(db_path: str, system_conn: Any) -> tuple[Any, Any]:
 
     transport_security = TransportSecuritySettings(
         allowed_hosts=_allowed_hosts(),
-        allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+        allowed_origins=_allowed_origins(),
         enable_dns_rebinding_protection=True,
     )
     app = server.streamable_http_app(streamable_http_path="/mcp", stateless_http=False, transport_security=transport_security)
-    return server, McpAuthMiddleware(app, system_conn)
+    if RequestBodyLimitMiddleware is not None:
+        app = RequestBodyLimitMiddleware(app, 64 * 1024)
+    return server, McpAuthMiddleware(app, system_conn, db_path)
 
 
 def _audit(db_path: str, event_type: str, principal: dict[str, Any] | None, tool: str, report_id: str | None, result_count: int, started: float) -> None:

@@ -616,20 +616,6 @@ def create_app(db_path: str | None = None):
                 record_audit(repo, request, "api.token_revoked", "api_token", str(token["id"]), {"user_id": stored["id"], "token_prefix": str(token["token_prefix"]), "revoked_by": principal.username})
         return {"revoked": revoked > 0}
 
-    @app.post("/api/system/users/{username}/mcp-token/create")
-    def system_user_mcp_token_create(username: str, request: Request):
-        principal = _require(current_user(request), ("ADMIN",))
-        stored = _stored_user(username)
-        if stored is None:
-            raise HTTPException(status_code=404, detail="User not found")
-        try:
-            result = create_mcp_token(system_conn, str(stored["id"]))
-        except ValueError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        with Repository(db_path) as repo:
-            record_audit(repo, request, "mcp.token_created", "mcp_token", str(result["id"]), {"user_id": stored["id"], "token_prefix": result["prefix"], "created_by": principal.username})
-        return Response(content=json.dumps({**result, "warning": "This credential is shown once and will not be displayed again."}), media_type="application/json", headers={"Cache-Control": "no-store"})
-
     @app.post("/api/system/users/{username}/mcp-token/revoke")
     def system_user_mcp_token_revoke(username: str, request: Request):
         principal = _require(current_user(request), ("ADMIN",))

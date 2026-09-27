@@ -1355,6 +1355,50 @@ function ApiTokenPanel({ menuOpen }: { menuOpen: boolean }) {
   );
 }
 
+function McpTokenPanel({ menuOpen }: { menuOpen: boolean }) {
+  const client = useQueryClient();
+  const [issuedKey, setIssuedKey] = useState("");
+  useEffect(() => {
+    if (!menuOpen) setIssuedKey("");
+  }, [menuOpen]);
+  const status = useQuery({ queryKey: ["my-mcp-token"], queryFn: () => getJson("me/mcp-token") });
+  const issue = useMutation({
+    mutationFn: () => postJson("me/mcp-token"),
+    onSuccess: async (result) => {
+      setIssuedKey(s(result.token, ""));
+      await client.invalidateQueries({ queryKey: ["my-mcp-token"] });
+    },
+  });
+  const revoke = useMutation({
+    mutationFn: () => deleteJson("me/mcp-token"),
+    onSuccess: async () => {
+      setIssuedKey("");
+      await client.invalidateQueries({ queryKey: ["my-mcp-token"] });
+    },
+  });
+  const token = (status.data?.token ?? {}) as Row;
+  const authorized = Boolean(status.data?.mcp_access_enabled), globallyEnabled = Boolean(status.data?.mcp_enabled);
+  return (
+    <div className="user-menu-section">
+      <span className="user-menu-label"><KeyRound size={13} /> MCP access</span>
+      {status.isLoading ? <small className="muted">Loading MCP key status…</small> : null}
+      {!status.isLoading && !authorized ? <small className="muted">MCP access is disabled by an administrator.</small> : null}
+      {!status.isLoading && authorized && !globallyEnabled ? <small className="muted">MCP server is currently disabled.</small> : null}
+      {authorized && globallyEnabled ? (
+        <>
+          {token.active ? <small className="muted">{s(token.prefix)} · created {s(token.created_at)} · expires {s(token.expires_at)} · last used {s(token.last_used_at, "never")}</small> : <small className="muted">No active MCP key.</small>}
+          {issuedKey ? <div className="api-key-once"><strong>Copy this key now. It will not be displayed again.</strong><code>{issuedKey}</code><button className="button subtle" type="button" onClick={() => { if (navigator.clipboard) void navigator.clipboard.writeText(issuedKey); }}>Copy key</button></div> : null}
+          {(issue.error || revoke.error) ? <small className="form-error">{s(issue.error || revoke.error)}</small> : null}
+          <div className="button-row">
+            <button className="button subtle" type="button" disabled={issue.isPending} onClick={() => issue.mutate()}>{token.active ? "Generate new MCP key" : "Generate MCP key"}</button>
+            {token.active ? <button className="button subtle" type="button" disabled={revoke.isPending} onClick={() => revoke.mutate()}>Revoke key</button> : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function guideStorageKey(principal: Principal, suffix: string): string {
   return `eare.guide.${suffix}.${principal.subject}`;
 }
@@ -1569,6 +1613,7 @@ function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: (
           </span>
         </div>
         <ApiTokenPanel menuOpen={menuOpen} />
+        <McpTokenPanel menuOpen={menuOpen} />
         <div className="user-menu-section">
           <span className="user-menu-label">
             <Palette size={13} /> {ui("settings.settings")}
@@ -6076,7 +6121,6 @@ function UsersPage() {
     [picking, setPicking] = useState<Row | null>(null),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
-    [mcpTokenOnce, setMcpTokenOnce] = useState(""),
     [confirming, setConfirming] = useState<{ action: string; user: Row } | null>(null),
     [newPassword, setNewPassword] = useState(""),
     [reassignTo, setReassignTo] = useState(""),
@@ -6131,7 +6175,6 @@ function UsersPage() {
         setConfirming(null);
         setNewPassword("");
         setError("");
-        if (variables.action === "mcp-token/create") setMcpTokenOnce(s(d.token));
         setNotice(
           variables.action === "disable"
             ? `${name} can no longer sign in`
@@ -6139,10 +6182,8 @@ function UsersPage() {
               ? `${name} can sign in again`
               : variables.action === "api-token/revoke"
                 ? `${name}'s API key was revoked`
-                : variables.action === "mcp-token/revoke"
-                  ? `${name}'s MCP key was revoked`
-                  : variables.action === "mcp-token/create"
-                    ? `MCP key generated for ${name}`
+              : variables.action === "mcp-token/revoke"
+                ? `${name}'s MCP key was revoked`
                 : `New password set for ${name}. They must change it at their next sign-in.`,
         );
         await c.invalidateQueries({ queryKey: ["system"] });
@@ -6215,7 +6256,6 @@ function UsersPage() {
         pending={globalApi.isPending}
       />
       <McpDocumentation enabled={Boolean(q.data?.mcp_enabled)} onToggle={(enabled) => globalMcp.mutate(enabled)} pending={globalMcp.isPending} />
-      {mcpTokenOnce && <section className="panel"><h3>MCP key — copy it now</h3><p className="field-note">This credential will not be displayed again.</p><code>{mcpTokenOnce}</code><button className="button subtle" type="button" onClick={() => navigator.clipboard?.writeText(mcpTokenOnce)}>Copy</button></section>}
       {!directories.length && (
         <p className="muted">
           Only local accounts can sign in today. Configure a directory in Authentication to import accounts
@@ -6258,9 +6298,7 @@ function UsersPage() {
                 ...(r.api_token_active
                   ? [{ label: "Revoke API key", danger: true, onClick: () => confirmUserAction("api-token/revoke", r) }]
                   : []),
-                ...(r.mcp_token_active
-                  ? [{ label: "Revoke MCP key", danger: true, onClick: () => confirmUserAction("mcp-token/revoke", r) }]
-                  : r.mcp_access_enabled ? [{ label: "Generate MCP key", onClick: () => lifecycle.mutate({ action: "mcp-token/create", user: r }) }] : []),
+                ...(r.mcp_token_active ? [{ label: "Revoke MCP key", danger: true, onClick: () => confirmUserAction("mcp-token/revoke", r) }] : []),
                 ...(Number(r.pending_reviews) > 0
                   ? [{ label: "Reassign reviews", onClick: () => confirmUserAction("reassign", r) }]
                   : []),

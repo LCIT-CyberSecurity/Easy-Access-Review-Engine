@@ -157,6 +157,8 @@ def mcp_token_summary(conn: sqlite3.Connection, user_id: str) -> dict[str, Any]:
 
 
 def create_mcp_token(conn: sqlite3.Connection, user_id: str) -> dict[str, Any]:
+    if not mcp_enabled(conn):
+        raise ValueError("MCP server is currently disabled")
     user = conn.execute(
         "SELECT enabled, mcp_access_enabled FROM system_users WHERE id = ?", (user_id,)
     ).fetchone()
@@ -213,6 +215,8 @@ def authenticate_api_token(conn: sqlite3.Connection, token: str) -> dict[str, An
 
 def authenticate_mcp_token(conn: sqlite3.Connection, token: str) -> dict[str, Any] | None:
     if not isinstance(token, str) or not token.startswith("eare_mcp_") or len(token) > 160:
+        return None
+    if not mcp_enabled(conn):
         return None
     digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
     row = conn.execute("""SELECT t.id AS token_id, t.token_hash, t.token_prefix, t.expires_at, t.revoked_at,
