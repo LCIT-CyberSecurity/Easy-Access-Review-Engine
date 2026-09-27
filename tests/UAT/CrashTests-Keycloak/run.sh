@@ -19,36 +19,58 @@ print(value)
 PY
 }
 
+assert_latest_import() {
+  local file=$1 expected=$2
+  python3 - "$file" "$expected" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+expected = sys.argv[2]
+items = payload.get("items", [])
+if not items:
+    raise SystemExit("no import record returned")
+latest = max(items, key=lambda item: item.get("completed_at", ""))
+if latest.get("status") != "completed":
+    raise SystemExit(f"latest import is not completed: {latest.get('status')}")
+if latest.get("completeness") != expected:
+    raise SystemExit(
+        f"latest import completeness is {latest.get('completeness')!r}, expected {expected!r}"
+    )
+PY
+}
+
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
-docker network inspect web_default >/dev/null 2>&1 || { echo "existing OpenLDAP network web_default is required" >&2; exit 1; }
-docker inspect eare-crashtests-ldap >/dev/null 2>&1 || { echo "existing OpenLDAP container is required" >&2; exit 1; }
 
 before_4173=$(docker ps --format '{{.Names}} {{.Ports}}' | grep '4173->' || true)
-test -n "$before_4173"
+rm -f .env.runtime
 ./reset.sh
 
 umask 077
-ldap_password=$(sed -n 's/^EARE_LDAP_PASSWORD=//p' /home/cdev/crashtests-ldap-idp/api-ldap.env)
-test -n "$ldap_password"
 cat > .env.runtime <<EOF
 KEYCLOAK_DB_PASSWORD=$(openssl rand -hex 24)
 KEYCLOAK_ADMIN_PASSWORD=$(openssl rand -hex 24)
 EARE_ADMIN_PASSWORD=$(openssl rand -hex 24)
 EARE_SESSION_SECRET=$(openssl rand -hex 32)
 EARE_KEYCLOAK_CLIENT_SECRET=EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK
+EARE_LDAP_PASSWORD=$(openssl rand -hex 24)
 EOF
 set -a
 source .env.runtime
 set +a
-export EARE_LDAP_PASSWORD="$ldap_password"
 test -s .env.runtime
 compose=(docker compose --env-file "$PWD/.env.runtime" -p "$project" -f compose.yaml)
 
 "${compose[@]}" up -d --build
 keycloak_container=$("${compose[@]}" ps -q keycloak)
 api_container=$("${compose[@]}" ps -q eare-api)
+ldap_container=$("${compose[@]}" ps -q openldap)
 test -n "$keycloak_container"
 test -n "$api_container"
+test -n "$ldap_container"
+docker exec -i "$ldap_container" ldapadd -x -H ldap://127.0.0.1:389 \
+  -D cn=admin,dc=eare,dc=test -w "$EARE_LDAP_PASSWORD" \
+  -f /dev/stdin < seed/openldap/custom/seed.ldif >/dev/null
 until curl -fsS http://127.0.0.1:8180/realms/master >/dev/null; do sleep 2; done
 KEYCLOAK_CONTAINER="$keycloak_container" \
 KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
@@ -70,12 +92,29 @@ curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d "$source_payload" 
 curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d "$source_payload" "$api_url/api/system/sources/test" > connection-check.json
 grep -q '"status":"success"' connection-check.json
 
-docker exec "$api_container" python -m access_review_engine.cli.main \
-  --db /data/access-review.db \
-  --config /data/connectors/keycloak-crashtest.yaml \
-  sync keycloak-crashtest
+start_sync() {
+  local response job_id status
+  response=$(curl -fsS -b "$cookie" -X POST "$api_url/api/sources/keycloak-crashtest/sync")
+  printf '%s' "$response" > sync-start.json
+  job_id=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"$response")
+  for _ in $(seq 1 90); do
+    curl -fsS -b "$cookie" "$api_url/api/jobs/$job_id" > sync-job.json
+    status=$(json_value sync-job.json status)
+    case "$status" in
+      SUCCEEDED) sync_snapshot_id=$(json_value sync-job.json result.snapshot_id); return 0 ;;
+      FAILED) cat sync-job.json >&2; return 1 ;;
+    esac
+    sleep 2
+  done
+  echo "sync job timed out" >&2
+  return 1
+}
+
+start_sync
 curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > initial-snapshots.json
-initial_snapshot_id=$(json_value initial-snapshots.json 'items.-1.id')
+curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > initial-imports.json
+assert_latest_import initial-imports.json full
+initial_snapshot_id="$sync_snapshot_id"
 test -n "$initial_snapshot_id"
 
 curl -fsS -b "$cookie" -H 'Content-Type: application/json' \
@@ -86,19 +125,22 @@ test -n "$golden_version_id"
 
 kc() { docker exec "$keycloak_container" /opt/keycloak/bin/kcadm.sh "$@"; }
 user_id() { kc get users -r "$realm" -q username="$1" --fields id --format csv --noquotes | tail -1; }
+client_id() { kc get clients -r "$realm" -q clientId="$1" --fields id --format csv --noquotes | tail -1; }
 
-chloe=$(user_id chloe.bernard)
-bruno=$(user_id bruno.leroy)
+charlie=$(user_id charlie)
+bob=$(user_id bob)
+erp=$(client_id erp)
+erp_admin_role=$(kc get "clients/$erp/roles/admin" -r "$realm" --fields id --format csv --noquotes | tail -1)
+accountant_role=$(kc get roles/accountant -r "$realm" --fields id --format csv --noquotes | tail -1)
 finance=$(kc get groups -r "$realm" -q search=Finance --fields id --format csv --noquotes | tail -1)
-kc add-roles -r "$realm" --uid "$chloe" --cclientid erp --rolename admin >/dev/null
-kc delete "users/$bruno/groups/$finance" -r "$realm" >/dev/null
+kc add-roles -r "$realm" --uid "$charlie" --cid "$erp" --roleid "$erp_admin_role" >/dev/null
+kc remove-roles -r "$realm" --uid "$bob" --rolename accountant >/dev/null
 
-docker exec "$api_container" python -m access_review_engine.cli.main \
-  --db /data/access-review.db \
-  --config /data/connectors/keycloak-crashtest.yaml \
-  sync keycloak-crashtest
+start_sync
 curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > observed-snapshots.json
-observed_snapshot_id=$(json_value observed-snapshots.json 'items.-1.id')
+curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > observed-imports.json
+assert_latest_import observed-imports.json full
+observed_snapshot_id="$sync_snapshot_id"
 test -n "$observed_snapshot_id" && test "$observed_snapshot_id" != "$initial_snapshot_id"
 
 campaign_payload=$(printf '{"name":"keycloak-crashtest-campaign","display_name":"Keycloak CrashTest Campaign","snapshot_id":"%s","golden_source_version_id":"%s","pilot":"admin","scope":{"type":"all"},"allow_unresolved_reviewers":true}' "$observed_snapshot_id" "$golden_version_id")
@@ -110,20 +152,20 @@ curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d '{}' \
   "$api_url/api/campaigns/$campaign_id/open" > campaign-open.json
 curl -fsS -b "$cookie" "$api_url/api/campaigns/$campaign_id" > campaign-detail.json
 
-unexpected_id=$(python3 - campaign-detail.json <<'PY'
+unexpected_id=$(python3 - campaign-detail.json "$erp_admin_role" <<'PY'
 import json
 import sys
 for item in json.load(open(sys.argv[1], encoding="utf-8"))["reviews"]:
-    if item.get("classification") == "unexpected" and item.get("identity_display_name") == "chloe.bernard":
+    if item.get("classification") == "unexpected" and item.get("identity_identifier") == "charlie" and item.get("access_name", "").endswith(sys.argv[2]):
         print(item["id"])
         break
 PY
 )
-missing_id=$(python3 - campaign-detail.json <<'PY'
+missing_id=$(python3 - campaign-detail.json "$accountant_role" <<'PY'
 import json
 import sys
 for item in json.load(open(sys.argv[1], encoding="utf-8"))["reviews"]:
-    if item.get("classification") == "missing" and item.get("identity_display_name") == "bruno.leroy":
+    if item.get("classification") == "missing" and item.get("identity_identifier") == "bob" and item.get("access_name", "").endswith(sys.argv[2]):
         print(item["id"])
         break
 PY
@@ -132,7 +174,7 @@ expected_id=$(python3 - campaign-detail.json <<'PY'
 import json
 import sys
 for item in json.load(open(sys.argv[1], encoding="utf-8"))["reviews"]:
-    if item.get("classification") == "expected_and_observed" and item.get("identity_display_name") == "alice.martin":
+    if item.get("classification") == "expected_and_observed" and item.get("identity_identifier") == "alice" and item.get("access_name", "").startswith("client:"):
         print(item["id"])
         break
 PY
@@ -149,29 +191,32 @@ grep -q 'unexpected' report.json
 grep -q 'missing' report.json
 grep -q 'expected_and_observed' report.json
 
-# Exercise scoped collection handling by temporarily removing only group-read
-# permissions from the collector service account, then restore them and prove
-# that a subsequent FULL collection still succeeds.
-docker exec "$keycloak_container" /opt/keycloak/bin/kcadm.sh remove-roles \
-  -r "$realm" --uusername service-account-eare-collector \
-  --cclientid realm-management --rolename query-groups --rolename view-groups >/dev/null 2>&1 || true
-docker exec "$api_container" sh -c \
-  "cp /data/connectors/keycloak-crashtest.yaml /tmp/keycloak-partial.yaml && sed -i 's/allow_partial: false/allow_partial: true/' /tmp/keycloak-partial.yaml"
-set +e
-docker exec "$api_container" python -m access_review_engine.cli.main \
-  --db /data/access-review.db \
-  --config /tmp/keycloak-partial.yaml \
-  sync keycloak-crashtest >/tmp/keycloak-partial.out 2>&1
-partial_status=$?
-set -e
-docker exec "$keycloak_container" /opt/keycloak/bin/kcadm.sh add-roles \
-  -r "$realm" --uusername service-account-eare-collector \
-  --cclientid realm-management --rolename query-groups --rolename view-groups >/dev/null 2>&1 || true
-test "$partial_status" -eq 0
-docker exec "$api_container" python -m access_review_engine.cli.main \
-  --db /data/access-review.db \
-  --config /data/connectors/keycloak-crashtest.yaml \
-  sync keycloak-crashtest >/dev/null
+# Exercise scoped collection handling by temporarily removing only user-read
+# permissions from the collector service account.
+realm_management=$(client_id realm-management)
+collector_user=$(user_id service-account-eare-collector)
+kc remove-roles -r "$realm" --uid "$collector_user" --cclientid realm-management \
+  --rolename query-users --rolename view-users >/dev/null
+mapping_after_remove=$(kc get "users/$collector_user/role-mappings/clients/$realm_management" -r "$realm" --format json)
+! grep -q 'query-users' <<<"$mapping_after_remove"
+partial_payload=$(python3 -c 'import json,sys; value=json.load(sys.stdin); value["collection"]["allow_partial"]=True; print(json.dumps(value,separators=(",",":")))' <<<"$source_payload")
+curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d "$partial_payload" \
+  "$api_url/api/system/sources" >/dev/null
+start_sync
+curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > partial-snapshots.json
+curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > partial-imports.json
+assert_latest_import partial-imports.json scoped
+
+kc add-roles -r "$realm" --uid "$collector_user" --cclientid realm-management \
+  --rolename query-users --rolename view-users >/dev/null
+mapping_after_restore=$(kc get "users/$collector_user/role-mappings/clients/$realm_management" -r "$realm" --format json)
+grep -q 'query-users' <<<"$mapping_after_restore"
+curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d "$source_payload" \
+  "$api_url/api/system/sources" >/dev/null
+start_sync
+curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > restored-snapshots.json
+curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > restored-imports.json
+assert_latest_import restored-imports.json full
 
 after_4173=$(docker ps --format '{{.Names}} {{.Ports}}' | grep '4173->' || true)
 test "$before_4173" = "$after_4173"

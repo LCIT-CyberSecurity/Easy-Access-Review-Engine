@@ -181,12 +181,14 @@ def collect(
     data: dict[str, list[dict[str, Any]]] = {surface: [] for surface in requested}
     pages: dict[str, int] = {}
     errors: list[dict[str, str]] = []
+    failed_surfaces: set[str] = set()
 
     def run(surface: str, fn: Callable[[], tuple[list[dict[str, Any]], int]]) -> None:
         try:
             data[surface], pages[surface] = fn()
         except Exception as exc:
             errors.append({"surface": surface, "error": type(exc).__name__})
+            failed_surfaces.add(surface)
             data[surface] = []
             if not collection.get("allow_partial", False):
                 raise RuntimeError(f"Keycloak collection failed for {surface}") from exc
@@ -198,6 +200,7 @@ def collect(
             raw_groups, group_pages = _pages(client, "groups", page_size)
         except Exception as exc:
             errors.append({"surface": "groups", "error": type(exc).__name__})
+            failed_surfaces.add("groups")
             if not collection.get("allow_partial", False):
                 raise RuntimeError("Keycloak collection failed for groups") from exc
             raw_groups, group_pages = [], 0
@@ -242,15 +245,31 @@ def collect(
                     )
             except Exception as exc:
                 errors.append({"surface": "memberships", "error": type(exc).__name__})
+                failed_surfaces.add("memberships")
                 if not collection.get("allow_partial", False):
                     raise RuntimeError("Keycloak collection failed for memberships") from exc
+            if "groups" in failed_surfaces:
+                errors.append({"surface": "memberships", "error": "dependency_failed:groups"})
+                failed_surfaces.add("memberships")
+                memberships, membership_pages = [], 0
             data["memberships"], pages["memberships"] = memberships, membership_pages
     elif "memberships" in requested:
-        run("memberships", lambda: ([], 1))
+        errors.append({"surface": "memberships", "error": "dependency_failed:groups"})
+        failed_surfaces.add("memberships")
+        data["memberships"], pages["memberships"] = [], 0
 
     clients: list[dict[str, Any]] = []
+    clients_ok = True
     if "clients" in requested or "client_roles" in requested or "service_accounts" in requested:
-        clients, client_pages = _pages(client, "clients", page_size)
+        try:
+            clients, client_pages = _pages(client, "clients", page_size)
+        except Exception as exc:
+            clients_ok = False
+            failed_surfaces.add("clients")
+            errors.append({"surface": "clients", "error": type(exc).__name__})
+            clients, client_pages = [], 0
+            if not collection.get("allow_partial", False):
+                raise RuntimeError("Keycloak collection failed for clients") from exc
         if "clients" in requested:
             data["clients"], pages["clients"] = clients, client_pages
     if "realm_roles" in requested:
@@ -258,30 +277,41 @@ def collect(
     if "client_roles" in requested:
         client_roles: list[dict[str, Any]] = []
         role_pages = 0
-        try:
-            for item in clients:
-                roles, count = _pages(client, "client_roles", page_size, client=item)
-                role_pages += count
-                client_roles.extend(_role_row(role, "client", item) for role in roles)
-        except Exception as exc:
-            errors.append({"surface": "client_roles", "error": type(exc).__name__})
-            if not collection.get("allow_partial", False):
-                raise RuntimeError("Keycloak collection failed for client_roles") from exc
+        if not clients_ok:
+            errors.append({"surface": "client_roles", "error": "dependency_failed:clients"})
+            failed_surfaces.add("client_roles")
+        else:
+            try:
+                for item in clients:
+                    roles, count = _pages(client, "client_roles", page_size, client=item)
+                    role_pages += count
+                    client_roles.extend(_role_row(role, "client", item) for role in roles)
+            except Exception as exc:
+                errors.append({"surface": "client_roles", "error": type(exc).__name__})
+                failed_surfaces.add("client_roles")
+                if not collection.get("allow_partial", False):
+                    raise RuntimeError("Keycloak collection failed for client_roles") from exc
         data["client_roles"], pages["client_roles"] = client_roles, role_pages
     for surface, subject_key in (("user_role_mappings", "user"), ("group_role_mappings", "group")):
         if surface in requested:
-            subjects = data.get("users" if subject_key == "user" else "groups", [])
+            parent_surface = "users" if subject_key == "user" else "groups"
+            subjects = data.get(parent_surface, [])
             mappings: list[dict[str, Any]] = []
             mapping_pages = 0
-            try:
-                for subject in subjects:
-                    values, count = _pages(client, surface, page_size, subject=subject)
-                    mapping_pages += count
-                    mappings.extend(values)
-            except Exception as exc:
-                errors.append({"surface": surface, "error": type(exc).__name__})
-                if not collection.get("allow_partial", False):
-                    raise RuntimeError(f"Keycloak collection failed for {surface}") from exc
+            if parent_surface not in requested or parent_surface in failed_surfaces:
+                errors.append({"surface": surface, "error": f"dependency_failed:{parent_surface}"})
+                failed_surfaces.add(surface)
+            else:
+                try:
+                    for subject in subjects:
+                        values, count = _pages(client, surface, page_size, subject=subject)
+                        mapping_pages += count
+                        mappings.extend(values)
+                except Exception as exc:
+                    errors.append({"surface": surface, "error": type(exc).__name__})
+                    failed_surfaces.add(surface)
+                    if not collection.get("allow_partial", False):
+                        raise RuntimeError(f"Keycloak collection failed for {surface}") from exc
             data[surface], pages[surface] = mappings, mapping_pages
     if "composite_roles" in requested:
         composites: list[dict[str, Any]] = []
@@ -301,60 +331,79 @@ def collect(
             )
             for role in data.get("client_roles", [])
         ]
-        for role, kind, owner in roles:
-            if not role.get("composite"):
-                continue
-            try:
-                children, count = _pages(
-                    client, "composites", page_size, role=role, role_kind=kind, client=owner
-                )
-                composite_pages += count
-                for child in children:
-                    child_kind = _stable(child.get("role_kind"))
-                    if not child_kind:
-                        child_kind = "client" if child.get("clientRole") else "realm"
-                    composites.append(
-                        {
-                            "id": (
-                                f"composite:{kind}:{role.get('id')}:{child_kind}:{child.get('id')}"
-                            ),
-                            "parent_kind": kind,
-                            "parent_role_id": _stable(role.get("id")),
-                            "parent_client_id": _stable(owner.get("id")) if owner else "",
-                            "child_kind": child_kind,
-                            "child_role_id": _stable(child.get("id")),
-                            "child_client_id": _stable(
-                                child.get("containerId") or child.get("client_id")
-                            ),
-                        }
+        if (
+            "realm_roles" not in requested
+            or "client_roles" not in requested
+            or "realm_roles" in failed_surfaces
+            or "client_roles" in failed_surfaces
+        ):
+            errors.append({"surface": "composite_roles", "error": "dependency_failed:roles"})
+            failed_surfaces.add("composite_roles")
+        if "composite_roles" not in failed_surfaces:
+            for role, kind, owner in roles:
+                if not role.get("composite"):
+                    continue
+                try:
+                    children, count = _pages(
+                        client, "composites", page_size, role=role, role_kind=kind, client=owner
                     )
-            except Exception as exc:
-                errors.append({"surface": "composite_roles", "error": type(exc).__name__})
-                if not collection.get("allow_partial", False):
-                    raise RuntimeError("Keycloak collection failed for composite_roles") from exc
+                    composite_pages += count
+                    for child in children:
+                        child_kind = _stable(child.get("role_kind"))
+                        if not child_kind:
+                            child_kind = "client" if child.get("clientRole") else "realm"
+                        composites.append(
+                            {
+                                "id": (
+                                    f"composite:{kind}:{role.get('id')}:{child_kind}:{child.get('id')}"
+                                ),
+                                "parent_kind": kind,
+                                "parent_role_id": _stable(role.get("id")),
+                                "parent_client_id": _stable(owner.get("id")) if owner else "",
+                                "child_kind": child_kind,
+                                "child_role_id": _stable(child.get("id")),
+                                "child_client_id": _stable(
+                                    child.get("containerId") or child.get("client_id")
+                                ),
+                            }
+                        )
+                except Exception as exc:
+                    errors.append({"surface": "composite_roles", "error": type(exc).__name__})
+                    failed_surfaces.add("composite_roles")
+                    if not collection.get("allow_partial", False):
+                        raise RuntimeError(
+                            "Keycloak collection failed for composite_roles"
+                        ) from exc
         data["composite_roles"], pages["composite_roles"] = composites, composite_pages
     if "service_accounts" in requested:
         service_rows: list[dict[str, Any]] = []
         service_pages = 0
-        try:
-            for item in clients:
-                if not item.get("serviceAccountsEnabled", False):
-                    continue
-                values, count = _pages(client, "service_accounts", page_size, client=item)
-                service_pages += count
-                service_rows.extend(
-                    {
-                        **row,
-                        "client_id": _stable(item.get("id")),
-                        "clientId": _stable(item.get("clientId")),
-                        "service_account": True,
-                    }
-                    for row in values
-                )
-        except Exception as exc:
-            errors.append({"surface": "service_accounts", "error": type(exc).__name__})
-            if not collection.get("allow_partial", False):
-                raise RuntimeError("Keycloak collection failed for service_accounts") from exc
+        if "clients" not in requested or not clients_ok:
+            errors.append({"surface": "service_accounts", "error": "dependency_failed:clients"})
+            failed_surfaces.add("service_accounts")
+        else:
+            try:
+                for item in clients:
+                    if not item.get("serviceAccountsEnabled", False):
+                        continue
+                    values = _retry(
+                        lambda item=item: client.list("service_accounts", 0, page_size, client=item)
+                    )
+                    service_pages += 1
+                    service_rows.extend(
+                        {
+                            **row,
+                            "client_id": _stable(item.get("id")),
+                            "clientId": _stable(item.get("clientId")),
+                            "service_account": True,
+                        }
+                        for row in values
+                    )
+            except Exception as exc:
+                errors.append({"surface": "service_accounts", "error": type(exc).__name__})
+                failed_surfaces.add("service_accounts")
+                if not collection.get("allow_partial", False):
+                    raise RuntimeError("Keycloak collection failed for service_accounts") from exc
         data["service_accounts"], pages["service_accounts"] = service_rows, service_pages
 
     completed = [
@@ -406,7 +455,6 @@ class _HTTPClient:
             raise RuntimeError("Keycloak client secret environment variable is not configured")
         self.secret = os.environ[env_name]
         self.client_id = str(connection["client_id"])
-        self._refresh_used = False
         self.token = self._token()
 
     def _open(self, request: urllib.request.Request) -> Any:
@@ -454,15 +502,21 @@ class _HTTPClient:
             headers={"Authorization": f"Bearer {self.token}", "Accept": "application/json"},
             method="GET",
         )
-        try:
-            with self._open(request) as response:
-                value = json.loads(response.read())
-        except KeycloakError as exc:
-            if exc.status_code != 401 or self._refresh_used:
-                raise
-            self._refresh_used = True
-            self.token = self._token()
-            return self._get(path, params)
+        for attempt in range(2):
+            try:
+                with self._open(request) as response:
+                    value = json.loads(response.read())
+                break
+            except KeycloakError as exc:
+                if exc.status_code != 401 or attempt:
+                    raise
+                self.token = self._token()
+                request = urllib.request.Request(  # noqa: S310
+                    f"{self.base}/admin/realms/{urllib.parse.quote(self.realm, safe='')}"
+                    f"/{path}?{query}",
+                    headers={"Authorization": f"Bearer {self.token}", "Accept": "application/json"},
+                    method="GET",
+                )
         return value if isinstance(value, list) else [value] if isinstance(value, dict) else []
 
     def check_realm(self) -> None:

@@ -1,6 +1,19 @@
 name: eare-keycloak-crashtest
 
 services:
+  openldap:
+    image: osixia/openldap:1.5.0
+    environment:
+      LDAP_ORGANISATION: EARE
+      LDAP_DOMAIN: eare.test
+      LDAP_ADMIN_PASSWORD: ${EARE_LDAP_PASSWORD:?set in .env.runtime}
+      LDAP_TLS: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://127.0.0.1:389 -D cn=admin,dc=eare,dc=test -w \"$$LDAP_ADMIN_PASSWORD\" -b dc=eare,dc=test -s base >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
   keycloak-db:
     image: postgres:16-alpine
     environment:
@@ -30,11 +43,12 @@ services:
     depends_on:
       keycloak-db:
         condition: service_healthy
+      openldap:
+        condition: service_healthy
     ports:
       - "127.0.0.1:8180:8080"
     networks:
       - default
-      - openldap
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
       interval: 5s
@@ -72,7 +86,7 @@ services:
       eare-api:
         condition: service_healthy
     ports:
-      - "0.0.0.0:4175:80"
+      - "127.0.0.1:4175:80"
 
 volumes:
   keycloak-db-data:
@@ -83,6 +97,3 @@ volumes:
 networks:
   default:
     name: eare-keycloak-crashtest_default
-  openldap:
-    external: true
-    name: web_default

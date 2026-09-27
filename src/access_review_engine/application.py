@@ -283,10 +283,7 @@ def _apply_google_authoritative_scope(scope: dict[str, object], previous_scopes:
             item.get("authoritative_scope") or item
             for item in reversed(list(previous_scopes))
             if isinstance(item, dict)
-            and (
-                isinstance(item.get("authoritative_scope"), dict)
-                or item.get("connector_type") == "keycloak"
-            )
+            and _is_google_scope(item.get("authoritative_scope") or item)
         ),
         None,
     )
@@ -300,6 +297,13 @@ def _canonical_google_scope(scope: dict[str, object]) -> dict[str, object]:
     if connector == "google_workspace":
         return {"connector_type": connector, "customer_id": str(scope.get("customer_id") or "").strip(), "surfaces": sorted(str(item) for item in scope.get("surfaces", []) if str(item).strip())}
     return {"connector_type": connector, "scope": str(scope.get("scope") or "").strip(), "surfaces": sorted(str(item) for item in scope.get("surfaces", []) if str(item).strip())}
+
+
+def _is_google_scope(scope: object) -> bool:
+    return isinstance(scope, dict) and scope.get("connector_type") in {
+        "google_workspace",
+        "gcp_iam",
+    }
 
 
 def _apply_keycloak_authoritative_scope(scope: dict[str, object], previous_scopes: Iterable[dict[str, object]]) -> None:
