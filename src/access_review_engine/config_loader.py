@@ -9,7 +9,7 @@ from access_review_engine.source_mapping import validate_business_mapping
 class ConfigError(ValueError):
     pass
 
-SUPPORTED_TYPES = {"active_directory", "openldap", "google_workspace", "gcp_iam"}
+SUPPORTED_TYPES = {"active_directory", "openldap", "google_workspace", "gcp_iam", "keycloak"}
 SENSITIVE_KEY_PARTS = ("password", "secret", "token", "private_key")
 ALLOWED_SECRET_REFERENCE_KEYS = {
     "username_env",
@@ -18,6 +18,7 @@ ALLOWED_SECRET_REFERENCE_KEYS = {
     "token_env",
     "token_file_env",
     "private_key_file_env",
+    "client_secret_env",
 }
 
 def connector_path(name: str, directory: str | Path = "config/connectors") -> Path:
@@ -44,8 +45,10 @@ def validate_connector(data: Any, expected_name: str | None = None) -> None:
         required = ("uri", "base_dn")
     elif kind == "google_workspace":
         required = ("customer_id", "delegated_admin")
-    else:
+    elif kind == "gcp_iam":
         required = ("scope",)
+    else:
+        required = ("base_url", "realm", "client_id")
     missing = [key for key in required if not connection.get(key)]
     if missing:
         raise ConfigError("Missing connection settings: " + ", ".join(missing))
@@ -54,6 +57,17 @@ def validate_connector(data: Any, expected_name: str | None = None) -> None:
     collection = data.get("collection", {})
     if not isinstance(collection, dict):
         raise ConfigError("Connector collection settings must be a mapping")
+    if kind == "keycloak":
+        base_url = str(connection["base_url"]).lower()
+        if not (base_url.startswith("https://") or base_url.startswith("http://")):
+            raise ConfigError("Keycloak connection.base_url must use http:// or https://")
+        credentials = data.get("credentials") or {}
+        if not isinstance(credentials, dict) or not isinstance(credentials.get("client_secret_env"), str) or not credentials["client_secret_env"].strip():
+            raise ConfigError("Keycloak requires credentials.client_secret_env")
+        if "page_size" in collection and (not isinstance(collection["page_size"], int) or collection["page_size"] <= 0):
+            raise ConfigError("Keycloak collection.page_size must be a positive integer")
+        if "timeout" in collection and (not isinstance(collection["timeout"], (int, float)) or collection["timeout"] <= 0):
+            raise ConfigError("Keycloak collection.timeout must be positive")
     if "allow_anonymous" in collection and not isinstance(collection["allow_anonymous"], bool):
         raise ConfigError("collection.allow_anonymous must be a boolean")
     if "read_only_account" in collection and not isinstance(collection["read_only_account"], bool):
@@ -105,7 +119,7 @@ def secret_environment(data: dict[str, Any]) -> dict[str, str]:
     if not isinstance(credentials, dict):
         raise ConfigError("credentials must be a YAML mapping")
     result: dict[str, str] = {}
-    for key, target in (("username_env", "username"), ("password_env", "password"), ("password_file_env", "password_file")):
+    for key, target in (("username_env", "username"), ("password_env", "password"), ("password_file_env", "password_file"), ("client_secret_env", "client_secret")):
         variable = credentials.get(key)
         if variable:
             if not isinstance(variable, str) or variable not in os.environ:
@@ -122,4 +136,7 @@ def template(provider: str, kind: str) -> dict[str, Any]:
         return {"provider": provider, "type": kind, "connection": {"customer_id": "my_customer", "delegated_admin": ""}, "credentials": {"service_account_file_env": "EARE_WORKSPACE_CREDENTIALS_FILE"}, "collection": {"users": True, "groups": True, "memberships": True, "admin_roles": True, "admin_role_assignments": True, "page_size": 200, "allow_partial": False, "read_only_account": True}}
     if kind == "gcp_iam":
         return {"provider": provider, "type": kind, "connection": {"scope": "projects/"}, "credentials": {"application_default": True}, "collection": {"iam_allow_policies": True, "service_accounts": True, "allow_partial": False, "read_only_account": True}}
+    if kind == "keycloak":
+        surfaces = ("users", "groups", "memberships", "clients", "realm_roles", "client_roles", "user_role_mappings", "group_role_mappings", "composite_roles", "service_accounts")
+        return {"provider": provider, "type": kind, "connection": {"base_url": "https://", "realm": "", "client_id": "eare-collector"}, "credentials": {"client_secret_env": "EARE_KEYCLOAK_CLIENT_SECRET"}, "collection": {**{surface: True for surface in surfaces}, "page_size": 100, "timeout": 30, "allow_partial": False, "read_only_account": True}}
     raise ConfigError(f"Unsupported connector type: {kind}")

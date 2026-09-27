@@ -26,6 +26,7 @@ _CAPABILITIES = {
     "openldap": _DIRECTORY_CAPABILITIES,
     "google_workspace": ConnectorCapabilities(False, False, False, True, True),
     "gcp_iam": ConnectorCapabilities(False, False, False, True, True),
+    "keycloak": ConnectorCapabilities(False, False, False, True, True),
 }
 _UNSUPPORTED = ConnectorCapabilities(False, False, False, False, False)
 

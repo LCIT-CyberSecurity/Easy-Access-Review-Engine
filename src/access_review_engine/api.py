@@ -793,7 +793,7 @@ def create_app(db_path: str | None = None):
         if result.returncode:
             raise HTTPException(status_code=502, detail="Source connection test failed")
         google_diagnostics = None
-        if str(candidate.get("type")) in {"google_workspace", "gcp_iam"} and result.stdout.strip():
+        if str(candidate.get("type")) in {"google_workspace", "gcp_iam", "keycloak"} and result.stdout.strip():
             try:
                 google_diagnostics = json.loads(result.stdout.splitlines()[-1])
             except (TypeError, ValueError):

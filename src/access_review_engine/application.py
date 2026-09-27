@@ -260,6 +260,8 @@ def _provider_import_scope(
 
     if provider_type == ProviderType.OPENLDAP:
         _apply_openldap_authoritative_scope(source, previous_scopes)
+    elif provider_type == "keycloak":
+        _apply_keycloak_authoritative_scope(source, previous_scopes)
     elif provider_type in {"google_workspace", "gcp_iam"}:
         if "authoritative_scope" not in source and source.get("connector_type") in {"google_workspace", "gcp_iam"}:
             source["authoritative_scope"] = {
@@ -276,7 +278,18 @@ def _apply_google_authoritative_scope(scope: dict[str, object], previous_scopes:
         scope["completeness"] = str(Completeness.SCOPED)
         return
     canonical = _canonical_google_scope(declared)
-    previous = next((item.get("authoritative_scope") for item in reversed(list(previous_scopes)) if isinstance(item, dict) and isinstance(item.get("authoritative_scope"), dict)), None)
+    previous = next(
+        (
+            item.get("authoritative_scope") or item
+            for item in reversed(list(previous_scopes))
+            if isinstance(item, dict)
+            and (
+                isinstance(item.get("authoritative_scope"), dict)
+                or item.get("connector_type") == "keycloak"
+            )
+        ),
+        None,
+    )
     scope["authoritative_scope"] = canonical
     if isinstance(previous, dict) and _canonical_google_scope(previous) != canonical and scope.get("completeness") == str(Completeness.FULL):
         scope["completeness"] = str(Completeness.SCOPED)
@@ -287,6 +300,17 @@ def _canonical_google_scope(scope: dict[str, object]) -> dict[str, object]:
     if connector == "google_workspace":
         return {"connector_type": connector, "customer_id": str(scope.get("customer_id") or "").strip(), "surfaces": sorted(str(item) for item in scope.get("surfaces", []) if str(item).strip())}
     return {"connector_type": connector, "scope": str(scope.get("scope") or "").strip(), "surfaces": sorted(str(item) for item in scope.get("surfaces", []) if str(item).strip())}
+
+
+def _apply_keycloak_authoritative_scope(scope: dict[str, object], previous_scopes: Iterable[dict[str, object]]) -> None:
+    declared = scope.get("authoritative_scope")
+    if not isinstance(declared, dict):
+        declared = {key: scope[key] for key in ("connector_type", "realm", "surfaces") if key in scope}
+    canonical = {"connector_type": "keycloak", "realm": str(declared.get("realm") or "").strip(), "surfaces": sorted(str(item) for item in declared.get("surfaces", []) if str(item).strip())}
+    scope["authoritative_scope"] = canonical
+    previous = next((item.get("authoritative_scope") for item in reversed(list(previous_scopes)) if isinstance(item, dict) and isinstance(item.get("authoritative_scope"), dict)), None)
+    if isinstance(previous, dict) and str(previous.get("realm") or "").strip() != canonical["realm"]:
+        raise ValueError("KEYCLOAK_REALM_SCOPE_CHANGED")
 
 
 def _apply_openldap_authoritative_scope(

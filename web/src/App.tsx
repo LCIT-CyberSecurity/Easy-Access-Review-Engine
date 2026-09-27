@@ -5564,6 +5564,7 @@ function Sources({ principal }: { principal: Principal }) {
             <option value="openldap">OpenLDAP</option>
             <option value="google_workspace">Google Workspace</option>
             <option value="gcp_iam">Google Cloud IAM</option>
+            <option value="keycloak">Keycloak</option>
               </select>
             </label>
             <h4>CONNECTION</h4>
@@ -5586,6 +5587,13 @@ function Sources({ principal }: { principal: Principal }) {
               <>
                 <label>Project scope<input required pattern="projects/[a-z0-9-]+" value={s((editing.connection as Row | undefined)?.scope, "")} onChange={(e) => updateNested("connection", "scope", e.target.value)} /></label>
                 <p className="field-note">Application Default Credentials are preferred. The collector requests IAM read-only data only.</p>
+              </>
+            ) : editing.type === "keycloak" ? (
+              <>
+                <label>Base URL<input required type="url" placeholder="https://keycloak.example.com" value={s((editing.connection as Row | undefined)?.base_url, "")} onChange={(e) => updateNested("connection", "base_url", e.target.value)} /></label>
+                <label>Realm<input required value={s((editing.connection as Row | undefined)?.realm, "")} onChange={(e) => updateNested("connection", "realm", e.target.value)} /></label>
+                <label>Client ID<input required value={s((editing.connection as Row | undefined)?.client_id, "")} onChange={(e) => updateNested("connection", "client_id", e.target.value)} /></label>
+                <p className="field-note">The collector uses the Keycloak Admin REST API in read-only mode. Production endpoints must use HTTPS.</p>
               </>
             ) : (
               <>
@@ -5645,6 +5653,16 @@ function Sources({ principal }: { principal: Principal }) {
                 ))}
                 <p className="field-note">{ui("source.readOnlyGoogle")}</p>
               </section>
+            ) : editing.type === "keycloak" ? (
+              <section className="source-coverage">
+                <h4>{ui("source.coverageTitle")}</h4>
+                {["users", "groups", "memberships", "clients", "realm_roles", "client_roles", "user_role_mappings", "group_role_mappings", "composite_roles", "service_accounts"].map((key) => (
+                  <label className="checkbox-label" key={key}><input type="checkbox" checked={(editing.collection as Row | undefined)?.[key] !== false} onChange={(e) => updateNested("collection", key, e.target.checked)} />{key.replaceAll("_", " ")}</label>
+                ))}
+                <label>Page size<input type="number" min="1" value={Number((editing.collection as Row | undefined)?.page_size ?? 100)} onChange={(e) => updateNested("collection", "page_size", Number(e.target.value))} /></label>
+                <label>Timeout (seconds)<input type="number" min="1" value={Number((editing.collection as Row | undefined)?.timeout ?? 30)} onChange={(e) => updateNested("collection", "timeout", Number(e.target.value))} /></label>
+                <label className="checkbox-label"><input type="checkbox" checked={(editing.collection as Row | undefined)?.allow_partial === true} onChange={(e) => updateNested("collection", "allow_partial", e.target.checked)} />Allow scoped collection</label>
+              </section>
             ) : null}
             <h4>COLLECTION ACCOUNT</h4>
             <label className="checkbox-label" data-guide-target="read-only-account">
@@ -5697,6 +5715,10 @@ function Sources({ principal }: { principal: Principal }) {
               <h4>GOOGLE CREDENTIAL REFERENCE</h4>
               <label>Service-account file environment variable<input placeholder="EARE_WORKSPACE_CREDENTIALS_FILE" value={s((editing.credentials as Row | undefined)?.service_account_file_env, "")} onChange={(e) => updateNested("credentials", "service_account_file_env", e.target.value || undefined)} /></label>
               {editing.type === "gcp_iam" ? <label className="checkbox-label"><input type="checkbox" checked={(editing.credentials as Row | undefined)?.application_default !== false} onChange={(e) => updateNested("credentials", "application_default", e.target.checked)} />Use Application Default Credentials</label> : null}
+            </> : editing.type === "keycloak" ? <>
+              <h4>KEYCLOAK CREDENTIAL REFERENCE</h4>
+              <label>Client secret environment variable<input required placeholder="EARE_KEYCLOAK_CLIENT_SECRET" value={s((editing.credentials as Row | undefined)?.client_secret_env, "")} onChange={(e) => updateNested("credentials", "client_secret_env", e.target.value || undefined)} /></label>
+              <p className="field-note">Only the environment variable name is stored; the secret is never displayed or persisted.</p>
             </> : <>
             <h4>SECRET REFERENCES</h4>
             <label>
