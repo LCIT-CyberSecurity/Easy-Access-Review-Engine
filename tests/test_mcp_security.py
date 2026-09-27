@@ -184,6 +184,57 @@ def test_mcp_read_tools_leave_business_tables_and_files_unchanged(tmp_path: Path
     assert tuple(watched.rglob("*")) == files_before
 
 
+def test_official_all_tools_preserve_business_state_and_files(tmp_path: Path) -> None:
+    from access_review_engine.api import create_app
+    import httpx2
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    db = tmp_path / "eare.db"
+    snapshot = Snapshot(
+        providers=[Provider("gcp-prod", "generic")], identities=[], resources=[], accesses=[],
+        access_assignments=[], source_import_ids=["internal"],
+    )
+    campaign = Campaign("MCP report", snapshot.id, scope={"type": "providers", "values": ["gcp-prod"]}, id="mcp-report")
+    item = ReviewItem(
+        campaign_id=campaign.id, identity_provider="gcp-prod", identity_identifier="alice", identity_status="active",
+        access_provider="gcp-prod", access_name="roles/viewer", control_object={}, permission={}, target=None,
+        description="read-only", origin=None, expected=False, observed=True, classification="unexpected", findings=[],
+        account_owner=None, access_owner=None, reviewer=None, id="mcp-item",
+    )
+    with Repository(db) as repo:
+        repo.upsert("snapshots", snapshot)
+        repo.upsert("campaigns", campaign)
+        repo.upsert("review_items", item)
+        repo.upsert("decisions", Decision(item.id, "pending"))
+    conn = _system(db)
+    token = create_mcp_token(conn, "alice")["token"]
+    tables = ("providers", "identities", "accesses", "access_assignments", "access_relations", "snapshots", "campaigns", "review_items", "decisions", "golden_sources", "golden_source_versions", "remediation_actions")
+    with Repository(db) as repo:
+        before = tuple((table, repo.list_payloads(table)) for table in tables)
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    app = create_app(str(db))
+
+    async def exercise() -> None:
+        async with app.router.lifespan_context(app):
+            transport = httpx2.ASGITransport(app=app)
+            async with httpx2.AsyncClient(transport=transport, base_url="http://127.0.0.1:4173", headers={"Authorization": f"Bearer {token}", "Host": "127.0.0.1:4173"}) as client:
+                async with streamable_http_client("http://127.0.0.1:4173/mcp", http_client=client) as streams:
+                    async with ClientSession(*streams) as session:
+                        await session.initialize()
+                        await session.call_tool("eare_get_current_user", {})
+                        await session.call_tool("eare_list_reports", {})
+                        for name in ("eare_get_report_summary", "eare_get_report_details", "eare_get_report_findings", "eare_get_report_decisions", "eare_get_report_remediation_summary"):
+                            await session.call_tool(name, {"report_id": campaign.id})
+
+    asyncio.run(exercise())
+    with Repository(db) as repo:
+        after = tuple((table, repo.list_payloads(table)) for table in tables)
+    assert after == before
+    assert tuple(watched.rglob("*")) == ()
+
+
 def test_unauthorized_report_does_not_disclose_existence(tmp_path: Path) -> None:
     service = McpReportService(str(tmp_path / "unused.db"))
     with pytest.raises(ReportNotFound):
