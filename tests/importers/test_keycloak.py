@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import yaml
+
+import pytest
+from access_review_engine.application import import_file_to_repository
 from access_review_engine.importers.keycloak import import_keycloak_zip
 from access_review_engine.services import calculate_effective_accesses
+from access_review_engine.storage import Repository
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "keycloak"
 
@@ -14,6 +20,54 @@ def _artifact(tmp_path: Path) -> Path:
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
         for path in sorted(FIXTURE.iterdir()):
             archive.writestr(path.name, path.read_bytes())
+    return output
+
+
+def _custom_artifact(
+    tmp_path: Path,
+    *,
+    manifest_changes: dict | None = None,
+    omitted: set[str] | None = None,
+    row_changes: dict[str, list[dict]] | None = None,
+) -> Path:
+    manifest = yaml.safe_load((FIXTURE / "manifest.yaml").read_text())
+    manifest.update(manifest_changes or {})
+    rows = {}
+    for path in FIXTURE.iterdir():
+        if path.name in {"manifest.yaml", "collection-errors.json"}:
+            continue
+        rows[path.name] = [json.loads(line) for line in path.read_text().splitlines() if line]
+    rows.update(row_changes or {})
+    counts = {
+        surface: len(rows[filename])
+        for surface, filename in {
+            "users": "users.jsonl",
+            "groups": "groups.jsonl",
+            "memberships": "group-memberships.jsonl",
+            "clients": "clients.jsonl",
+            "realm_roles": "realm-roles.jsonl",
+            "client_roles": "client-roles.jsonl",
+            "user_role_mappings": "user-role-mappings.jsonl",
+            "group_role_mappings": "group-role-mappings.jsonl",
+            "composite_roles": "composite-role-relations.jsonl",
+            "service_accounts": "service-accounts.jsonl",
+        }.items()
+        if filename in rows
+    }
+    manifest["counts"] = counts
+    output = tmp_path / "custom-keycloak.zip"
+    with ZipFile(output, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.yaml", yaml.safe_dump(manifest, sort_keys=False))
+        for path in sorted(FIXTURE.iterdir()):
+            if path.name in (omitted or set()) or path.name == "manifest.yaml":
+                continue
+            if path.name == "collection-errors.json":
+                archive.writestr(path.name, path.read_bytes())
+            else:
+                archive.writestr(
+                    path.name,
+                    "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows[path.name]),
+                )
     return output
 
 
@@ -32,7 +86,9 @@ def test_keycloak_v0_normalizes_objects_and_preserves_native_ids(tmp_path: Path)
         == "disabled"
     )
     assert {item.control_object.native_id for item in result.accesses if item.control_object} >= {
-        "rr-accountant", "cr-crm-admin", "cr-erp-admin"
+        "rr-accountant",
+        "cr-crm-admin",
+        "cr-erp-admin",
     }
     assert (
         len(
@@ -114,3 +170,258 @@ def test_keycloak_v0_replay_is_deterministic(tmp_path: Path) -> None:
         }
 
     assert projection(first) == projection(second)
+
+
+def test_full_contract_requires_all_surfaces_and_completed_files(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="must complete every V1 surface"):
+        import_keycloak_zip(
+            _custom_artifact(
+                tmp_path,
+                manifest_changes={"requested_surfaces": ["users"], "completed_surfaces": ["users"]},
+            )
+        )
+    with pytest.raises(ValueError, match="missing group-role-mappings.jsonl"):
+        import_keycloak_zip(_custom_artifact(tmp_path, omitted={"group-role-mappings.jsonl"}))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"requested_surfaces": ["users", "users"]},
+        {"requested_surfaces": ["users", "not-a-surface"]},
+        {"completed_surfaces": ["users", "clients"], "requested_surfaces": ["users"]},
+        {"completeness": "made-up"},
+    ],
+)
+def test_surface_contract_rejects_unknown_duplicate_or_invalid_values(
+    tmp_path: Path, changes: dict
+) -> None:
+    with pytest.raises(ValueError, match="invalid"):
+        import_keycloak_zip(_custom_artifact(tmp_path, manifest_changes=changes))
+
+
+def test_full_rejects_unresolved_references_and_unknown_client(tmp_path: Path) -> None:
+    mappings = [
+        {"id": "um-1", "user_id": "u-alice", "role_kind": "realm", "role_id": "missing"},
+        {"id": "um-2", "user_id": "u-bob", "role_kind": "realm", "role_id": "rr-accountant"},
+        {
+            "id": "um-3",
+            "user_id": "u-backup",
+            "role_kind": "client",
+            "role_id": "cr-backup",
+            "client_id": "c-crm",
+        },
+    ]
+    with pytest.raises(ValueError, match="unresolved structural references"):
+        import_keycloak_zip(
+            _custom_artifact(
+                tmp_path,
+                row_changes={"user-role-mappings.jsonl": mappings},
+            )
+        )
+    roles = [
+        {"id": "cr-sales", "client_id": "missing-client", "name": "Sales", "role_kind": "client"},
+        {"id": "cr-backup", "client_id": "c-crm", "name": "Backup-Operator", "role_kind": "client"},
+        {"id": "cr-crm-admin", "client_id": "c-crm", "name": "admin", "role_kind": "client"},
+        {"id": "cr-erp-admin", "client_id": "c-erp", "name": "admin", "role_kind": "client"},
+        {"id": "cr-erp-read", "client_id": "c-erp", "name": "Read", "role_kind": "client"},
+    ]
+    with pytest.raises(ValueError, match="unresolved structural references"):
+        import_keycloak_zip(_custom_artifact(tmp_path, row_changes={"client-roles.jsonl": roles}))
+
+
+def test_service_account_can_be_standalone_and_client_target_is_human_readable(
+    tmp_path: Path,
+) -> None:
+    users = [row for row in _rows("users.jsonl") if row["id"] != "u-backup"]
+    result = import_keycloak_zip(
+        _custom_artifact(
+            tmp_path,
+            row_changes={"users.jsonl": users},
+        )
+    )
+    service = next(item for item in result.identities if item.native_id == "u-backup")
+    assert service.type == "technical_account"
+    crm_admin = next(
+        item for item in result.accesses if item.name == "client:c-crm:role:cr-crm-admin"
+    )
+    assert crm_admin.target.component == {"identifier": "c-crm"}
+    assert crm_admin.control_object.metadata["client_display_name"] == "CRM"
+
+
+def _rows(filename: str) -> list[dict]:
+    return [json.loads(line) for line in (FIXTURE / filename).read_text().splitlines() if line]
+
+
+def test_rename_keeps_native_identity_access_and_client_keys(tmp_path: Path) -> None:
+    renamed = import_keycloak_zip(
+        _custom_artifact(
+            tmp_path,
+            row_changes={
+                "users.jsonl": [
+                    {
+                        **row,
+                        "username": "alice.renamed" if row["id"] == "u-alice" else row["username"],
+                    }
+                    for row in _rows("users.jsonl")
+                ],
+                "groups.jsonl": [
+                    {
+                        **row,
+                        "name": "Finance Corporate" if row["id"] == "g-finance" else row["name"],
+                    }
+                    for row in _rows("groups.jsonl")
+                ],
+                "realm-roles.jsonl": [
+                    {
+                        **row,
+                        "name": "Finance Accountant"
+                        if row["id"] == "rr-accountant"
+                        else row["name"],
+                    }
+                    for row in _rows("realm-roles.jsonl")
+                ],
+                "clients.jsonl": [
+                    {**row, "name": "CRM Renamed", "clientId": "crm-renamed"}
+                    if row["id"] == "c-crm"
+                    else row
+                    for row in _rows("clients.jsonl")
+                ],
+            },
+        )
+    )
+    assert (
+        next(item for item in renamed.identities if item.native_id == "u-alice").identifier
+        == "alice.renamed"
+    )
+    assert (
+        next(item for item in renamed.identities if item.native_id == "g-finance").native_id
+        == "g-finance"
+    )
+    role = next(
+        item
+        for item in renamed.accesses
+        if item.control_object and item.control_object.native_id == "rr-accountant"
+    )
+    assert role.name == "realm:production:role:rr-accountant"
+    client_role = next(
+        item
+        for item in renamed.accesses
+        if item.control_object and item.control_object.native_id == "cr-sales"
+    )
+    assert client_role.name == "client:c-crm:role:cr-sales"
+
+
+def test_duplicate_identical_rows_dedupe_and_conflicts_reject(tmp_path: Path) -> None:
+    users = _rows("users.jsonl")
+    with pytest.raises(ValueError, match="conflicting duplicate"):
+        import_keycloak_zip(
+            _custom_artifact(
+                tmp_path,
+                row_changes={"users.jsonl": [*users, {**users[0], "email": "other@example.test"}]},
+            )
+        )
+    result = import_keycloak_zip(
+        _custom_artifact(tmp_path, row_changes={"users.jsonl": [*users, users[0]]})
+    )
+    assert len([item for item in result.identities if item.native_id == "u-alice"]) == 1
+
+
+def test_archive_bounds_reject_oversized_record(tmp_path: Path) -> None:
+    rows = _rows("users.jsonl")
+    rows[0]["oversized"] = "x" * 2_000_001
+    with pytest.raises(ValueError, match="JSONL record"):
+        import_keycloak_zip(_custom_artifact(tmp_path, row_changes={"users.jsonl": rows}))
+
+
+def test_keycloak_artifact_persists_and_scoped_replay_does_not_delete(tmp_path: Path) -> None:
+    db = tmp_path / "eare.db"
+    full = _artifact(tmp_path)
+    with Repository(db) as repo:
+        import_file_to_repository(repo, full)
+        assignments = repo.list_payloads_by_provider("access_assignments", "keycloak-v0")
+        assert any(row["access_name"] == "client:c-crm:role:cr-sales" for row in assignments)
+        first_counts = {
+            table: len(repo.list_payloads_by_provider(table, "keycloak-v0"))
+            for table in ("identities", "accesses", "access_assignments", "access_relations")
+        }
+        import_file_to_repository(repo, full)
+        assert {
+            table: len(repo.list_payloads_by_provider(table, "keycloak-v0"))
+            for table in first_counts
+        } == first_counts
+        renamed = _custom_artifact(
+            tmp_path,
+            row_changes={
+                "users.jsonl": [
+                    {**row, "username": "alice.renamed"}
+                    if row["id"] == "u-alice"
+                    else row
+                    for row in _rows("users.jsonl")
+                ],
+                "groups.jsonl": [
+                    {**row, "name": "Finance Corporate"}
+                    if row["id"] == "g-finance"
+                    else row
+                    for row in _rows("groups.jsonl")
+                ],
+            },
+        )
+        import_file_to_repository(repo, renamed)
+        identities = repo.list_payloads_by_provider("identities", "keycloak-v0")
+        assert len([row for row in identities if row["native_id"] == "u-alice"]) == 1
+        assert (
+            next(row for row in identities if row["native_id"] == "u-alice")["identifier"]
+            == "alice.renamed"
+        )
+        accesses = repo.list_payloads_by_provider("accesses", "keycloak-v0")
+        assert (
+            len(
+                [
+                    row
+                    for row in accesses
+                    if row.get("control_object", {}).get("native_id") == "rr-accountant"
+                ]
+            )
+            == 1
+        )
+
+    scoped = _custom_artifact(
+        tmp_path,
+        manifest_changes={
+            "completeness": "scoped",
+            "requested_surfaces": [
+                "users",
+                "groups",
+                "memberships",
+                "clients",
+                "realm_roles",
+                "client_roles",
+                "group_role_mappings",
+                "composite_roles",
+                "service_accounts",
+            ],
+            "completed_surfaces": [
+                "users",
+                "groups",
+                "memberships",
+                "clients",
+                "realm_roles",
+                "client_roles",
+                "group_role_mappings",
+                "composite_roles",
+                "service_accounts",
+            ],
+        },
+        row_changes={"user-role-mappings.jsonl": []},
+    )
+    with Repository(db) as repo:
+        import_file_to_repository(repo, scoped)
+        assignments = repo.list_payloads_by_provider("access_assignments", "keycloak-v0")
+        assert any(row["access_name"] == "client:c-crm:role:cr-sales" for row in assignments)
+
+    full_removed = _custom_artifact(tmp_path, row_changes={"user-role-mappings.jsonl": []})
+    with Repository(db) as repo:
+        import_file_to_repository(repo, full_removed)
+        assignments = repo.list_payloads_by_provider("access_assignments", "keycloak-v0")
+        assert not any(row["access_name"] == "client:c-crm:role:cr-sales" for row in assignments)

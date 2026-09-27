@@ -19,6 +19,10 @@ from access_review_engine.domain import (
 from access_review_engine.importers.ad import ImportResult, import_ad_zip
 from access_review_engine.importers.gcp_iam import import_gcp_iam_zip
 from access_review_engine.importers.google_workspace import import_google_workspace_zip
+from access_review_engine.importers.keycloak import (
+    KEYCLOAK_V1_REQUIRED_SURFACES,
+    import_keycloak_zip,
+)
 from access_review_engine.importers.openldap import (
     DEFAULT_OPENLDAP_FILTER,
     _canonical_dn,
@@ -75,6 +79,8 @@ def import_file_to_repository(
                     row["name"]: row["type"] for row in repo.list_payloads("providers")
                 },
             )
+        elif source_type == "keycloak":
+            result = import_keycloak_zip(file_path)
         else:
             raise ValueError(f"Unsupported ZIP source_type: {source_type or 'missing'}")
     else:
@@ -219,6 +225,15 @@ def _is_authoritative_full(result: ImportResult) -> bool:
             surfaces == required
             and scope.get("completeness") in {None, Completeness.FULL, "full"}
             and not scope.get("collection_errors")
+        )
+    if result.provider.type == "keycloak":
+        surfaces = set(scope.get("surfaces", []))
+        return (
+            surfaces == set(KEYCLOAK_V1_REQUIRED_SURFACES)
+            and scope.get("connector_type") == "keycloak"
+            and scope.get("completeness") in {None, Completeness.FULL, "full"}
+            and not scope.get("collection_errors")
+            and not scope.get("unresolved_references")
         )
     return (
         result.batch.completeness == Completeness.FULL
