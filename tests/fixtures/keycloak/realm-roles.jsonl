@@ -1,0 +1,4 @@
+{"id":"rr-accountant","name":"Accountant","role_kind":"realm"}
+{"id":"rr-invoice-read","name":"Invoice-Read","role_kind":"realm"}
+{"id":"rr-role-x","name":"Role-X","role_kind":"realm"}
+{"id":"rr-admin","name":"admin","role_kind":"realm"}

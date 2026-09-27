@@ -1,0 +1,4 @@
+{"id":"g-finance","name":"Finance","path":"/Finance","enabled":true}
+{"id":"g-france","name":"Finance-France","path":"/Finance/Finance-France","enabled":true}
+{"id":"g-a","name":"Group-A","path":"/Group-A","enabled":true}
+{"id":"g-b","name":"Group-B","path":"/Group-B","enabled":true}

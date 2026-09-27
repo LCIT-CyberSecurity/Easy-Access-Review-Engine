@@ -1,0 +1,4 @@
+{"id":"gm-1","group_id":"g-finance","role_kind":"realm","role_id":"rr-accountant"}
+{"id":"gm-2","group_id":"g-a","role_kind":"realm","role_id":"rr-role-x"}
+{"id":"gm-3","group_id":"g-b","role_kind":"realm","role_id":"rr-role-x"}
+{"id":"gm-4","group_id":"g-finance","role_kind":"realm","role_id":"rr-admin"}

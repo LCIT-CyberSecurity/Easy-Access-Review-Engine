@@ -1,0 +1,6 @@
+{"id":"comp-1","parent_kind":"realm","parent_role_id":"rr-accountant","child_kind":"realm","child_role_id":"rr-invoice-read"}
+{"id":"comp-2","parent_kind":"realm","parent_role_id":"rr-invoice-read","child_kind":"realm","child_role_id":"rr-role-x"}
+{"id":"comp-3","parent_kind":"realm","parent_role_id":"rr-admin","child_kind":"realm","child_role_id":"rr-accountant"}
+{"id":"comp-4","parent_kind":"realm","parent_role_id":"rr-admin","child_kind":"realm","child_role_id":"rr-role-x"}
+{"id":"comp-5","parent_kind":"realm","parent_role_id":"rr-accountant","child_kind":"realm","child_role_id":"rr-role-x"}
+{"id":"comp-6","parent_kind":"realm","parent_role_id":"rr-role-x","child_kind":"realm","child_role_id":"rr-accountant"}
