@@ -3947,6 +3947,10 @@ function CampaignDetail() {
       )}{" "}
       {tab === "findings" && (
         <>
+          <Filter v={findingSearch} onChange={setFindingSearch}>
+            <MultiSelectFilter values={findingClassifications} onChange={setFindingClassifications} options={["unexpected", "missing", "no_reference", "unknown_due_to_scope", "expected_and_observed"]} placeholder="Classification" />
+            <MultiSelectFilter values={findingDecisions} onChange={setFindingDecisions} options={["pending", "approve", "revoke", "not_applicable"]} placeholder="Decision" />
+          </Filter>
           <div className="metrics">
             <div className="metric metric-alert">
               <div className="metric-label">Unexpected access</div>
@@ -3970,10 +3974,6 @@ function CampaignDetail() {
                 <h2>Accesses requiring attention</h2>
                 <span className="muted">{filteredDecisionFindings.length} matching access(es)</span>
               </div>
-              <Filter v={findingSearch} onChange={setFindingSearch}>
-                <MultiSelectFilter values={findingClassifications} onChange={setFindingClassifications} options={["unexpected", "missing", "no_reference", "unknown_due_to_scope", "expected_and_observed"]} placeholder="Classification" />
-                <MultiSelectFilter values={findingDecisions} onChange={setFindingDecisions} options={["pending", "approve", "revoke", "not_applicable"]} placeholder="Decision" />
-              </Filter>
               <Table
                 cols={["Type", "Identity", "Access", "Source", "Decision"]}
                 rows={filteredDecisionFindings.map((row) => [
