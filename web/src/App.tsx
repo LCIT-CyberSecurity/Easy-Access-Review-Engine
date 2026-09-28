@@ -1121,6 +1121,31 @@ function SelectFilter({
     </select>
   );
 }
+function MultiSelectFilter({
+  values,
+  onChange,
+  options,
+  placeholder,
+}: {
+  values: string[];
+  onChange: (values: string[]) => void;
+  options: string[];
+  placeholder: string;
+}) {
+  return (
+    <select
+      className="filter-button"
+      multiple
+      title={values.length ? values.map((value) => value.replaceAll("_", " ")).join(", ") : placeholder}
+      value={values}
+      onChange={(event) => onChange(Array.from(event.target.selectedOptions, (option) => option.value))}
+    >
+      {options.map((option) => (
+        <option key={option} value={option}>{option.replaceAll("_", " ")}</option>
+      ))}
+    </select>
+  );
+}
 function ProviderFilter({
   value,
   onChange,
@@ -3624,6 +3649,9 @@ function CampaignDetail() {
     [tab, setTab] = useState(searchParams.get("tab") === "overview" ? "overview" : "reviews"),
     [selected, setSelected] = useState<Row | null>(null),
     [selectedFinding, setSelectedFinding] = useState<Row | null>(null),
+    [findingSearch, setFindingSearch] = useState(""),
+    [findingClassifications, setFindingClassifications] = useState<string[]>([]),
+    [findingDecisions, setFindingDecisions] = useState<string[]>([]),
     [confirmAction, setConfirmAction] = useState<string | null>(null),
     toast = useToast(),
     m = useMutation({
@@ -3676,6 +3704,14 @@ function CampaignDetail() {
       }, {}),
     ).map(([, value]) => value)
       .sort((a, b) => b.pending - a.pending || s(a.identity.identity_display_name, s(a.identity.identity_identifier)).localeCompare(s(b.identity.identity_display_name, s(b.identity.identity_identifier)))),
+    findingNeedle = findingSearch.trim().toLocaleLowerCase(),
+    filteredDecisionFindings = decisionFindings.filter((row) => {
+      const text = [row.identity_display_name, row.identity_identifier, row.access_display_name, row.access_name, row.access_provider].map((value) => s(value)).join(" ").toLocaleLowerCase();
+      return (!findingNeedle || text.includes(findingNeedle))
+        && (!findingClassifications.length || findingClassifications.includes(s(row.classification)))
+        && (!findingDecisions.length || findingDecisions.includes(s(row.decision, "pending")));
+    }),
+    filteredTechnicalFindings = findings.filter((finding) => !findingNeedle || s(finding).toLocaleLowerCase().includes(findingNeedle)),
     unexpectedCount = reviews.filter((row) => row.classification === "unexpected").length,
     revokedCount = reviews.filter((row) => row.decision === "revoke").length,
     status = s(c?.status),
@@ -3932,11 +3968,15 @@ function CampaignDetail() {
             <section className="panel campaign-findings-priority">
               <div className="panel-title">
                 <h2>Accesses requiring attention</h2>
-                <span className="muted">Unexpected and revoked</span>
+                <span className="muted">{filteredDecisionFindings.length} matching access(es)</span>
               </div>
+              <Filter v={findingSearch} onChange={setFindingSearch}>
+                <MultiSelectFilter values={findingClassifications} onChange={setFindingClassifications} options={["unexpected", "missing", "no_reference", "unknown_due_to_scope", "expected_and_observed"]} placeholder="Classification" />
+                <MultiSelectFilter values={findingDecisions} onChange={setFindingDecisions} options={["pending", "approve", "revoke", "not_applicable"]} placeholder="Decision" />
+              </Filter>
               <Table
                 cols={["Type", "Identity", "Access", "Source", "Decision"]}
-                rows={decisionFindings.map((row) => [
+                rows={filteredDecisionFindings.map((row) => [
                   <Status v={row.classification === "unexpected" ? "unexpected" : "revoke"} />,
                   <button className="link-button" onClick={() => setSelected(row)}>{s(row.identity_display_name, s(row.identity_identifier))}</button>,
                   s(row.access_display_name, s(row.access_name)),
@@ -3954,7 +3994,7 @@ function CampaignDetail() {
               </div>
               <Table
                 cols={["Finding", "Campaign"]}
-                rows={findings.map((f) => [
+                rows={filteredTechnicalFindings.map((f) => [
                   <button
                     className="link-button"
                     onClick={() =>
