@@ -17,6 +17,10 @@ EARE helps you:
 
 The goal is practical: save a lot of manual review time, improve reliability, reduce spreadsheet-driven errors, accelerate audit preparation, and strengthen operational security.
 
+## MCP Read-Only Reports
+
+EARE can expose authorized structured report data to compatible AI clients through a strictly read-only MCP endpoint. The MCP interface cannot modify EARE or connected systems and does not expose report files. It is disabled by default and uses separate per-user credentials: users generate their own key, while administrators only authorize or revoke access. Hosts and Origins are explicitly configurable; source import IDs and raw snapshot internals are not exposed. See [docs/mcp.md](docs/mcp.md).
+
 ## Why EARE?
 
 Access reviews are often slow, fragile, and tied to manual exports. The same questions keep coming back:

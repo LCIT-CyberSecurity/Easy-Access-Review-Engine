@@ -1355,6 +1355,56 @@ function ApiTokenPanel({ menuOpen }: { menuOpen: boolean }) {
   );
 }
 
+export const mcpAccessStatus = (enabled: boolean, authorized: boolean): string =>
+  !authorized ? "MCP access is disabled by an administrator." : !enabled ? "MCP server is currently disabled." : "MCP access is available.";
+
+export function McpTokenOnce({ menuOpen, token }: { menuOpen: boolean; token: string }) {
+  return menuOpen && token ? <div className="api-key-once"><strong>Copy this key now. It will not be displayed again.</strong><code>{token}</code></div> : null;
+}
+
+function McpTokenPanel({ menuOpen }: { menuOpen: boolean }) {
+  const client = useQueryClient();
+  const [issuedKey, setIssuedKey] = useState("");
+  useEffect(() => {
+    if (!menuOpen) setIssuedKey("");
+  }, [menuOpen]);
+  const status = useQuery({ queryKey: ["my-mcp-token"], queryFn: () => getJson("me/mcp-token") });
+  const issue = useMutation({
+    mutationFn: () => postJson("me/mcp-token"),
+    onSuccess: async (result) => {
+      setIssuedKey(s(result.token, ""));
+      await client.invalidateQueries({ queryKey: ["my-mcp-token"] });
+    },
+  });
+  const revoke = useMutation({
+    mutationFn: () => deleteJson("me/mcp-token"),
+    onSuccess: async () => {
+      setIssuedKey("");
+      await client.invalidateQueries({ queryKey: ["my-mcp-token"] });
+    },
+  });
+  const token = (status.data?.token ?? {}) as Row;
+  const authorized = Boolean(status.data?.mcp_access_enabled), globallyEnabled = Boolean(status.data?.mcp_enabled);
+  return (
+    <div className="user-menu-section">
+      <span className="user-menu-label"><KeyRound size={13} /> MCP access</span>
+      {status.isLoading ? <small className="muted">Loading MCP key status…</small> : null}
+      {!status.isLoading && (!authorized || !globallyEnabled) ? <small className="muted">{mcpAccessStatus(globallyEnabled, authorized)}</small> : null}
+      {authorized && globallyEnabled ? (
+        <>
+          {token.active ? <small className="muted">{s(token.prefix)} · created {s(token.created_at)} · expires {s(token.expires_at)} · last used {s(token.last_used_at, "never")}</small> : <small className="muted">No active MCP key.</small>}
+          {issuedKey ? <><McpTokenOnce menuOpen={menuOpen} token={issuedKey} /><button className="button subtle" type="button" onClick={() => { if (navigator.clipboard) void navigator.clipboard.writeText(issuedKey); }}>Copy key</button></> : null}
+          {(issue.error || revoke.error) ? <small className="form-error">{s(issue.error || revoke.error)}</small> : null}
+          <div className="button-row">
+            <button className="button subtle" type="button" disabled={issue.isPending} onClick={() => issue.mutate()}>{token.active ? "Generate new MCP key" : "Generate MCP key"}</button>
+            {token.active ? <button className="button subtle" type="button" disabled={revoke.isPending} onClick={() => revoke.mutate()}>Revoke key</button> : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function guideStorageKey(principal: Principal, suffix: string): string {
   return `eare.guide.${suffix}.${principal.subject}`;
 }
@@ -1569,6 +1619,7 @@ function UserMenu({ principal, onSignOut }: { principal: Principal; onSignOut: (
           </span>
         </div>
         <ApiTokenPanel menuOpen={menuOpen} />
+        <McpTokenPanel menuOpen={menuOpen} />
         <div className="user-menu-section">
           <span className="user-menu-label">
             <Palette size={13} /> {ui("settings.settings")}
@@ -5994,6 +6045,7 @@ const blankUser = (source = LOCAL_SOURCE): Row => ({
   password: "",
   enabled: true,
   api_access_enabled: false,
+  mcp_access_enabled: false,
   auth_source: source,
 });
 function Confirm({
@@ -6076,6 +6128,19 @@ export function ExternalApiDocumentation({ enabled, onToggle, pending = false }:
   );
 }
 
+function McpDocumentation({ enabled, onToggle, pending = false }: { enabled: boolean; onToggle?: (enabled: boolean) => void; pending?: boolean }) {
+  return (
+    <section className="panel" aria-labelledby="mcp-title">
+      <div className="section-heading">
+        <div><span className="eyebrow">MCP Server</span><h2 id="mcp-title">Read-only report access</h2><p className="muted">Expose authorized structured EARE reports to compatible AI clients. MCP does not modify EARE or connected systems.</p></div>
+        <strong>{enabled ? "Enabled" : "Disabled"}</strong>
+      </div>
+      <p className="field-note">Endpoint: <code>/mcp</code>. Access is disabled by default and uses separate <code>eare_mcp_</code> credentials.</p>
+      <button className="button subtle" type="button" onClick={() => onToggle?.(!enabled)} disabled={!onToggle || pending}>{enabled ? "Disable MCP server" : "Enable MCP server"}</button>
+    </section>
+  );
+}
+
 function UsersPage() {
   const c = useQueryClient(),
     q = useQuery({ queryKey: ["system"], queryFn: () => getJson("system") }),
@@ -6122,13 +6187,18 @@ function UsersPage() {
       },
       onError: (e) => setError(s(e, "Unable to update external API setting")),
     }),
+    globalMcp = useMutation({
+      mutationFn: (enabled: boolean) => putJson("system/settings/mcp", { enabled }),
+      onSuccess: async (d) => { setError(""); setNotice(`MCP server ${d.mcp_enabled ? "enabled" : "disabled"}`); await c.invalidateQueries({ queryKey: ["system"] }); },
+      onError: (e) => setError(s(e, "Unable to update MCP setting")),
+    }),
     lifecycle = useMutation({
       mutationFn: ({ action, user }: { action: string; user: Row }) =>
         postJson(
           `system/users/${encodeURIComponent(s(user.username))}/${action}`,
           action === "reset-password" ? { password: newPassword } : undefined,
         ),
-      onSuccess: async (_d, variables) => {
+      onSuccess: async (d, variables) => {
         const name = s(variables.user.display_name, s(variables.user.username));
         setConfirming(null);
         setNewPassword("");
@@ -6140,6 +6210,8 @@ function UsersPage() {
               ? `${name} can sign in again`
               : variables.action === "api-token/revoke"
                 ? `${name}'s API key was revoked`
+              : variables.action === "mcp-token/revoke"
+                ? `${name}'s MCP key was revoked`
                 : `New password set for ${name}. They must change it at their next sign-in.`,
         );
         await c.invalidateQueries({ queryKey: ["system"] });
@@ -6211,6 +6283,7 @@ function UsersPage() {
         onToggle={(enabled) => globalApi.mutate(enabled)}
         pending={globalApi.isPending}
       />
+      <McpDocumentation enabled={Boolean(q.data?.mcp_enabled)} onToggle={(enabled) => globalMcp.mutate(enabled)} pending={globalMcp.isPending} />
       {!directories.length && (
         <p className="muted">
           Only local accounts can sign in today. Configure a directory in Authentication to import accounts
@@ -6221,7 +6294,7 @@ function UsersPage() {
       {error && !open && !confirming && <p className="form-error">{error}</p>}
       <Filter v={search} onChange={setSearch} />
       <Table
-        cols={["User", "Username", "Signs in with", "Role", "Authorized domains", "API access", "Pending reviews", "Status", "Actions"]}
+        cols={["User", "Username", "Signs in with", "Role", "Authorized domains", "API access", "MCP access", "Pending reviews", "Status", "Actions"]}
         q={q}
         rows={users.map((r) => [
           s(r.display_name),
@@ -6234,6 +6307,7 @@ function UsersPage() {
             <small className="field-note">Per-user authorization</small>
             {r.api_token_active ? <small className="field-note">{s(r.api_token_prefix)} · last used {s(r.api_token_last_used_at, "never")}</small> : null}
           </div>,
+          <div><Status v={r.mcp_access_enabled ? "enabled" : "disabled"} /><small className="field-note">Read-only reports</small>{r.mcp_token_active ? <small className="field-note">{s(r.mcp_token_prefix)} · last used {s(r.mcp_token_last_used_at, "never")}</small> : null}</div>,
           Number(r.pending_reviews) > 0 ? s(r.pending_reviews) : "—",
           <>
             <Status v={r.enabled ? "enabled" : "disabled"} />
@@ -6252,6 +6326,7 @@ function UsersPage() {
                 ...(r.api_token_active
                   ? [{ label: "Revoke API key", danger: true, onClick: () => confirmUserAction("api-token/revoke", r) }]
                   : []),
+                ...(r.mcp_token_active ? [{ label: "Revoke MCP key", danger: true, onClick: () => confirmUserAction("mcp-token/revoke", r) }] : []),
                 ...(Number(r.pending_reviews) > 0
                   ? [{ label: "Reassign reviews", onClick: () => confirmUserAction("reassign", r) }]
                   : []),
@@ -6481,6 +6556,9 @@ function UsersPage() {
               API access enabled for this user
             </label>
             <p className="field-note">Allows this user to generate an API key when the External User API is globally enabled. Disabling API access revokes existing API keys.</p>
+            <h4>MCP REPORT ACCESS</h4>
+            <label className="check-row"><input type="checkbox" checked={Boolean(form.mcp_access_enabled)} onChange={(e) => setForm({ ...form, mcp_access_enabled: e.target.checked })} /> MCP access enabled for this user</label>
+            <p className="field-note">Allows this user to query authorized structured reports through MCP. MCP is read-only; disabling access revokes existing MCP keys.</p>
             <h4>STATUS</h4>
             {form.id ? (
               <div className="status-row">

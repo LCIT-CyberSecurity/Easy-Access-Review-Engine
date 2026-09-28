@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, reportBarPercent, sourceSupportsAttributeMapping, splitPermissions } from "./App";
+import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, sourceSupportsAttributeMapping, splitPermissions } from "./App";
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {
@@ -36,6 +36,17 @@ describe("External User API controls", () => {
     expect(html).toContain('href="/swagger"');
     expect(html).toContain('href="/openapi.json"');
     expect(html).toContain("noopener noreferrer");
+  });
+});
+
+describe("MCP self-service controls", () => {
+  it("distinguishes global and per-user disablement", () => {
+    expect(mcpAccessStatus(false, true)).toBe("MCP server is currently disabled.");
+    expect(mcpAccessStatus(true, false)).toBe("MCP access is disabled by an administrator.");
+  });
+  it("removes the one-time plaintext from closed-menu output", () => {
+    expect(renderToStaticMarkup(createElement(McpTokenOnce, { menuOpen: true, token: "eare_mcp_test" }))).toContain("eare_mcp_test");
+    expect(renderToStaticMarkup(createElement(McpTokenOnce, { menuOpen: false, token: "eare_mcp_test" }))).not.toContain("eare_mcp_test");
   });
 });
 
