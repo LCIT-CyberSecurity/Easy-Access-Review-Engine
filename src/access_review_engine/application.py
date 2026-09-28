@@ -174,7 +174,7 @@ def persist_import_result(
         _resolve_non_authoritative_unresolved_observations(repo)
         if authoritative and resolved_authoritative:
             snapshot_assignments = _load_assignments(repo, result.provider.name)
-        elif not authoritative and references_renamed:
+        elif not authoritative and (references_renamed or result.provider.type == "keycloak"):
             snapshot_assignments = _load_assignments(repo, result.provider.name)
 
         authentication_posture = result.authentication_posture

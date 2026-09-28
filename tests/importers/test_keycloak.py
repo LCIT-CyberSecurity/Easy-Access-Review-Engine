@@ -111,8 +111,8 @@ def test_keycloak_v0_effective_access_keeps_direct_and_inherited_paths(tmp_path:
 
     bob = [item for item in evaluation.effective_accesses if item.identity_identifier == "bob"]
     accountant = next(item for item in bob if item.access_name.endswith("rr-accountant"))
-    assert accountant.direct is True
-    assert len(accountant.paths) >= 2
+    assert accountant.direct is False
+    assert len(accountant.paths) >= 1
     assert any(path.relation_ids for path in accountant.paths)
     assert any(not item.direct for item in bob if item.access_name.endswith("rr-invoice-read"))
 

@@ -349,9 +349,7 @@ def collect(
                     )
                     composite_pages += count
                     for child in children:
-                        child_kind = _stable(child.get("role_kind"))
-                        if not child_kind:
-                            child_kind = "client" if child.get("clientRole") else "realm"
+                        child_kind = "client" if child.get("clientRole") else "realm"
                         composites.append(
                             {
                                 "id": (
@@ -363,7 +361,9 @@ def collect(
                                 "child_kind": child_kind,
                                 "child_role_id": _stable(child.get("id")),
                                 "child_client_id": _stable(
-                                    child.get("containerId") or child.get("client_id")
+                                    (child.get("containerId") or child.get("client_id"))
+                                    if child_kind == "client"
+                                    else ""
                                 ),
                             }
                         )
@@ -590,13 +590,11 @@ class _HTTPClient:
                 {},
             )
         if surface == "composites":
-            role, owner = kwargs["role"], kwargs.get("client")
-            prefix = (
-                "clients/"
-                f"{owner['id']}/roles/{urllib.parse.quote(role['name'], safe='')}/composites"
-                if owner
-                else f"roles/{urllib.parse.quote(role['name'], safe='')}/composites"
-            )
+            role = kwargs["role"]
+            role_id = _stable(role.get("id"))
+            if not role_id:
+                raise KeycloakError("Keycloak composite role is missing its native id")
+            prefix = f"roles-by-id/{urllib.parse.quote(role_id, safe='')}/composites"
             return self._get(prefix, {"first": first, "max": page_size})
         raise ValueError(f"Unsupported Keycloak surface: {surface}")
 

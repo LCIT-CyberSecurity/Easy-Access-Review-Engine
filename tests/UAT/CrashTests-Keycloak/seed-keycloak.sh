@@ -111,7 +111,6 @@ assign_client() {
   [[ -n "$uid" ]] && kc add-roles -r "$realm" --uid "$uid" --cclientid "$client_name" \
     --rolename "$2" >/dev/null
 }
-assign_realm bob accountant
 assign_client alice sales "$crm"
 backup_user=$(kc get "clients/$backup/service-account-user" -r "$realm" --fields username --format csv --noquotes | tail -1)
 [[ "$backup_user" == service-account-svc-backup ]] || { echo "svc-backup service account missing" >&2; exit 1; }

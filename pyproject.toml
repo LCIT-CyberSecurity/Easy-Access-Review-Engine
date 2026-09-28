@@ -47,7 +47,7 @@ mypy_path = "src"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 markers = [
   "live_google: opt-in tests requiring configured Google lab credentials",
 ]

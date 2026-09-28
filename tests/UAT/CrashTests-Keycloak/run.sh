@@ -40,6 +40,103 @@ if latest.get("completeness") != expected:
 PY
 }
 
+assert_effective_roles() {
+  local file=$1 expected=$2
+  python3 - "$file" "$expected" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+expected = set(sys.argv[2].split(",")) if sys.argv[2] else set()
+observed = {
+    str(item.get("access_display_name") or item.get("access_name"))
+    for item in payload.get("effective_accesses", [])
+}
+for role in expected:
+    if not any(role.casefold() in value.casefold() for value in observed):
+        raise SystemExit(f"expected effective role {role!r} not found in {sorted(observed)!r}")
+PY
+}
+
+assert_effective_roles_absent() {
+  local file=$1 forbidden=$2
+  python3 - "$file" "$forbidden" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+forbidden = set(sys.argv[2].split(",")) if sys.argv[2] else set()
+observed = {
+    str(item.get("access_display_name") or item.get("access_name"))
+    for item in payload.get("effective_accesses", [])
+}
+for role in forbidden:
+    if any(role.casefold() in value.casefold() for value in observed):
+        raise SystemExit(f"forbidden effective role {role!r} remains in {sorted(observed)!r}")
+PY
+}
+
+assert_scoped_safety() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+def latest(path):
+    payload = json.load(open(path, encoding="utf-8"))
+    return max(payload.get("items", []), key=lambda item: item.get("created_at", ""))
+
+baseline = latest(sys.argv[1])
+scoped = latest(sys.argv[2])
+scoped_identities = {row["identifier"]: row for row in scoped["identities"]}
+for identifier in ("alice", "bob", "service-account-svc-backup"):
+    row = scoped_identities.get(identifier)
+    if row is None or row.get("status") == "deleted":
+        raise SystemExit(f"baseline identity was deleted or lost during scoped import: {identifier}")
+
+for access_name in (
+    "group:",
+    "accountant",
+    "invoice-read",
+    "Backup-Operator",
+):
+    baseline_names = {
+        row["name"] for row in baseline["accesses"]
+        if access_name.casefold() in str(row.get("display_name") or row.get("name")).casefold()
+    }
+    scoped_names = {row["name"] for row in scoped["accesses"]}
+    if not baseline_names.issubset(scoped_names):
+        raise SystemExit(f"baseline access disappeared during scoped import: {access_name}")
+
+def assignment_key(row):
+    return (
+        row.get("provider"),
+        row.get("access_name"),
+        row.get("identity_provider"),
+        row.get("identity_identifier"),
+    )
+
+def relation_key(row):
+    return (
+        row.get("parent_provider"),
+        row.get("parent_access_name"),
+        row.get("child_provider"),
+        row.get("child_access_name"),
+    )
+
+baseline_assignments = {assignment_key(row) for row in baseline["access_assignments"]}
+scoped_assignments = {assignment_key(row) for row in scoped["access_assignments"]}
+if not baseline_assignments.issubset(scoped_assignments):
+    raise SystemExit("a baseline assignment disappeared during scoped import")
+baseline_relations = {relation_key(row) for row in baseline["access_relations"]}
+scoped_relations = {relation_key(row) for row in scoped["access_relations"]}
+if not baseline_relations.issubset(scoped_relations):
+    raise SystemExit("a baseline relation disappeared during scoped import")
+
+if any(row.get("status") == "deleted" for row in scoped["identities"]):
+    raise SystemExit("scoped import created a deleted identity")
+PY
+}
+
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 1; }
 
 before_4173=$(docker ps --format '{{.Names}} {{.Ports}}' | grep '4173->' || true)
@@ -114,6 +211,8 @@ start_sync
 curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > initial-snapshots.json
 curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > initial-imports.json
 assert_latest_import initial-imports.json full
+curl -fsS -b "$cookie" "$api_url/api/identities/bob/accesses" > baseline-bob-effective.json
+assert_effective_roles baseline-bob-effective.json "accountant,invoice-read"
 initial_snapshot_id="$sync_snapshot_id"
 test -n "$initial_snapshot_id"
 
@@ -131,15 +230,17 @@ charlie=$(user_id charlie)
 bob=$(user_id bob)
 erp=$(client_id erp)
 erp_admin_role=$(kc get "clients/$erp/roles/admin" -r "$realm" --fields id --format csv --noquotes | tail -1)
-accountant_role=$(kc get roles/accountant -r "$realm" --fields id --format csv --noquotes | tail -1)
 finance=$(kc get groups -r "$realm" -q search=Finance --fields id --format csv --noquotes | tail -1)
+finance_access="group:${finance}:member"
 kc add-roles -r "$realm" --uid "$charlie" --cid "$erp" --roleid "$erp_admin_role" >/dev/null
-kc remove-roles -r "$realm" --uid "$bob" --rolename accountant >/dev/null
+kc delete "users/$bob/groups/$finance" -r "$realm" >/dev/null
 
 start_sync
 curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > observed-snapshots.json
 curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > observed-imports.json
 assert_latest_import observed-imports.json full
+curl -fsS -b "$cookie" "$api_url/api/identities/bob/accesses" > drift-bob-effective.json
+assert_effective_roles_absent drift-bob-effective.json "accountant,invoice-read"
 observed_snapshot_id="$sync_snapshot_id"
 test -n "$observed_snapshot_id" && test "$observed_snapshot_id" != "$initial_snapshot_id"
 
@@ -161,11 +262,11 @@ for item in json.load(open(sys.argv[1], encoding="utf-8"))["reviews"]:
         break
 PY
 )
-missing_id=$(python3 - campaign-detail.json "$accountant_role" <<'PY'
+missing_id=$(python3 - campaign-detail.json "$finance_access" <<'PY'
 import json
 import sys
 for item in json.load(open(sys.argv[1], encoding="utf-8"))["reviews"]:
-    if item.get("classification") == "missing" and item.get("identity_identifier") == "bob" and item.get("access_name", "").endswith(sys.argv[2]):
+    if item.get("classification") == "missing" and item.get("identity_identifier") == "bob" and item.get("access_name") == sys.argv[2]:
         print(item["id"])
         break
 PY
@@ -206,6 +307,19 @@ start_sync
 curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > partial-snapshots.json
 curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > partial-imports.json
 assert_latest_import partial-imports.json scoped
+assert_scoped_safety observed-snapshots.json partial-snapshots.json
+curl -fsS -b "$cookie" "$api_url/api/identities/bob/accesses" > partial-bob-effective.json
+assert_effective_roles_absent partial-bob-effective.json "accountant,invoice-read"
+
+python3 - partial-imports.json <<'PY'
+import json
+import sys
+latest = max(json.load(open(sys.argv[1], encoding="utf-8"))["items"], key=lambda item:item.get("completed_at", ""))
+if latest["completeness"] != "scoped":
+    raise SystemExit("partial import was not scoped")
+if not latest.get("scope", {}).get("collection_errors"):
+    raise SystemExit("partial import did not expose collection_errors")
+PY
 
 kc add-roles -r "$realm" --uid "$collector_user" --cclientid realm-management \
   --rolename query-users --rolename view-users >/dev/null
@@ -217,6 +331,13 @@ start_sync
 curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > restored-snapshots.json
 curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > restored-imports.json
 assert_latest_import restored-imports.json full
+python3 - restored-imports.json <<'PY'
+import json
+import sys
+latest = max(json.load(open(sys.argv[1], encoding="utf-8"))["items"], key=lambda item:item.get("completed_at", ""))
+if latest["completeness"] != "full":
+    raise SystemExit("restored import was not full")
+PY
 
 after_4173=$(docker ps --format '{{.Names}} {{.Ports}}' | grep '4173->' || true)
 test "$before_4173" = "$after_4173"

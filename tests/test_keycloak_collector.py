@@ -60,7 +60,10 @@ class FakeKeycloak:
             ],
             "composite_roles": [{"id": "rr-invoice", "name": "invoice-read", "role_kind": "realm"}],
             "service_accounts": [],
-            "composites": [{"id": "rr-invoice", "name": "invoice-read", "role_kind": "realm"}],
+            "composites": [
+                {"id": f"rr-invoice-{index}", "name": f"invoice-read-{index}", "role_kind": "realm"}
+                for index in range(5)
+            ],
         }
 
     def check_realm(self) -> None:
@@ -261,12 +264,12 @@ def test_http_client_builds_read_only_admin_api_paths(monkeypatch) -> None:
     client.list("client_roles", 0, 2, client={"id": "c/1"})
     client.list("user_role_mappings", 0, 2, subject={"id": "u/1"})
     client.list("group_role_mappings", 0, 2, subject={"id": "g/1"})
-    client.list("composites", 0, 2, role={"name": "accountant"})
+    client.list("composites", 0, 2, role={"id": "rr-accountant", "name": "accountant"})
     client.list(
         "composites",
         0,
         2,
-        role={"name": "sales"},
+        role={"id": "cr-sales", "name": "sales"},
         client={"id": "c/1"},
     )
     client.list("service_accounts", 0, 1, client={"id": "c/1"})
@@ -279,10 +282,92 @@ def test_http_client_builds_read_only_admin_api_paths(monkeypatch) -> None:
         "clients/c%2F1/roles",
         "users/u%2F1/role-mappings",
         "groups/g%2F1/role-mappings",
-        "roles/accountant/composites",
-        "clients/c/1/roles/sales/composites",
+        "roles-by-id/rr-accountant/composites",
+        "roles-by-id/cr-sales/composites",
         "clients/c%2F1/service-account-user",
     ]
+
+
+def test_composites_paginate_by_native_role_id_without_repeating_pages(tmp_path: Path) -> None:
+    fake = FakeKeycloak()
+    manifest = collect(_config(), tmp_path / "composites.zip", fake)
+
+    assert manifest["pages"]["composite_roles"] == 3
+    composite_calls = [call for call in fake.calls if call[0] == "composites"]
+    assert [page for _, page, _ in composite_calls] == [0, 1, 2]
+    assert len(composite_calls) == len(set((surface, page) for surface, page, _ in composite_calls))
+
+
+class NativeCompositeClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, dict[str, object]]] = []
+        self.clients = [
+            {"id": "c-crm", "clientId": "crm"},
+            {"id": "c-erp", "clientId": "erp"},
+        ]
+        self.realm_roles = [{"id": "rr-parent", "name": "realm-parent", "composite": True}]
+        self.client_roles = [
+            {"id": "cr-parent", "name": "client-parent", "composite": True},
+        ]
+        self.composites = {
+            "rr-parent": [
+                {"id": "rr-child", "clientRole": False, "containerId": "realm-id"},
+                {"id": "cr-child", "clientRole": True, "containerId": "c-crm"},
+            ],
+            "cr-parent": [
+                {"id": "cr-child-2", "clientRole": True, "containerId": "c-erp"},
+            ],
+        }
+
+    def check_realm(self) -> None:
+        return None
+
+    def list(
+        self, surface: str, page: int, page_size: int, **kwargs: object
+    ) -> list[dict[str, object]]:
+        self.calls.append((surface, page, kwargs))
+        if surface == "clients":
+            values = self.clients
+        elif surface == "realm_roles":
+            values = self.realm_roles
+        elif surface == "client_roles":
+            values = self.client_roles
+        elif surface == "composites":
+            values = self.composites[str(kwargs["role"]["id"])]  # type: ignore[index]
+        else:
+            values = []
+        return values[page * page_size : (page + 1) * page_size]
+
+
+def test_composite_kind_uses_native_payload_for_realm_and_client_parents(
+    tmp_path: Path,
+) -> None:
+    config = _config()
+    config["collection"] = {
+        "clients": True,
+        "realm_roles": True,
+        "client_roles": True,
+        "composite_roles": True,
+        "page_size": 2,
+    }
+    fake = NativeCompositeClient()
+    output = tmp_path / "native-composites.zip"
+    manifest = collect(config, output, fake)
+
+    assert manifest["completeness"] == "full"
+    with ZipFile(output) as archive:
+        rows = [
+            json.loads(line)
+            for line in archive.read("composite-role-relations.jsonl").splitlines()
+        ]
+    assert {
+        (row["parent_kind"], row["child_kind"], row["child_client_id"])
+        for row in rows
+    } == {
+        ("realm", "realm", ""),
+        ("realm", "client", "c-crm"),
+        ("client", "client", "c-erp"),
+    }
 
 
 class FailingSurface(FakeKeycloak):
