@@ -2799,6 +2799,10 @@ def create_app(db_path: str | None = None):
             }
         for row in rows:
             row["finding_tracking"] = tracking.get(_finding_tracking_key(campaign, row), {})
+            access = row.get("access") if isinstance(row.get("access"), dict) else {}
+            identity = row.get("identity") if isinstance(row.get("identity"), dict) else {}
+            row["access_display_name"] = access.get("display_name") or row.get("access_name")
+            row["identity_display_name"] = identity.get("display_name") or row.get("identity_identifier")
         if status:
             rows = [row for row in rows if row.get("classification") == status]
         if provider:

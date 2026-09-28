@@ -1244,7 +1244,8 @@ function Pager({
   );
 }
 type SortState = { sort: string; order: string; toggle: (field: string) => void };
-type FilterState = { values: Row; set: (field: string, value: string) => void };
+type FilterOption = string | { value: string; label: string };
+type FilterState = { values: Row; set: (field: string, value: string) => void; options?: Record<string, FilterOption[]> };
 /** A column header that sorts and filters from one menu, the way a spreadsheet does. */
 function ColumnMenu({
   label,
@@ -1260,6 +1261,9 @@ function ColumnMenu({
   const [open, setOpen] = useState(false),
     active = sorting?.sort === field,
     filtered = s(filtering?.values[field], ""),
+    options = filtering?.options?.[field] ?? [],
+    optionEntries = options.map((option) => typeof option === "string" ? { value: option, label: option.replaceAll("_", " ") } : option),
+    selectedOptions = filtered.split("|").filter(Boolean),
     sortAs = (want: string) => {
       if (!sorting) return;
       if (sorting.sort !== field) sorting.toggle(field);
@@ -1279,7 +1283,7 @@ function ColumnMenu({
       {open ? (
         <>
           <div className="menu-backdrop" onClick={() => setOpen(false)} />
-          <div className="menu-panel">
+          <div className="menu-panel" onClick={(event) => event.stopPropagation()}>
             {sorting ? (
               <div className="menu-row">
                 <button className="text-button" onClick={() => sortAs("asc")}>
@@ -1292,13 +1296,30 @@ function ColumnMenu({
             ) : null}
             {filtering ? (
               <>
-                <input
-                  autoFocus
-                  placeholder={ui("table.filter", { label: label.toLowerCase() })}
-                  value={filtered}
-                  onChange={(e) => filtering.set(field, e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && setOpen(false)}
-                />
+                {options.length ? (
+                  <div className="column-filter-options">
+                    {optionEntries.map((option) => (
+                      <label key={option.value} className="setting-option" onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedOptions.includes(option.value)}
+                          onChange={(event) => filtering.set(field, event.target.checked
+                            ? [...selectedOptions, option.value].join("|")
+                            : selectedOptions.filter((value) => value !== option.value).join("|"))}
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : (
+                  <input
+                    autoFocus
+                    placeholder={ui("table.filter", { label: label.toLowerCase() })}
+                    value={filtered}
+                    onChange={(e) => filtering.set(field, e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && setOpen(false)}
+                  />
+                )}
                 <div className="menu-row">
                   <button className="text-button" onClick={() => filtering.set(field, "")}>
                     Clear filter
@@ -2976,6 +2997,26 @@ function List({ path, title, principal }: { path: string; title: string; princip
       campaignRows.find((item) => s(item.id) === campaign)?.display_name,
       s(campaignRows.find((item) => s(item.id) === campaign)?.name, "Current state"),
     ),
+    findingItems = arr(x.q.data?.items),
+    findingFiltering: FilterState = findings
+      ? {
+          ...x.filtering,
+          options: Object.fromEntries([
+            ["identity_display_name", findingItems.map((row) => ({
+              value: s(row.identity_display_name, s(row.identity_identifier)),
+              label: s(row.identity_display_name, s(row.identity_identifier)),
+            })).filter((option) => option.value !== "—")],
+            ["access_display_name", findingItems.map((row) => ({
+              value: s(row.access_display_name, s(row.access_name)),
+              label: s(row.access_display_name, s(row.access_name)),
+            })).filter((option) => option.value !== "—")],
+            ["access_provider", findingItems.map((row) => s(row.access_provider)).filter(Boolean)],
+            ["classification", findingItems.map((row) => s(row.classification)).filter(Boolean)],
+          ].map(([field, values]) => [field, Array.from(
+            new Map((values as FilterOption[]).map((option) => [typeof option === "string" ? option : option.value, option])).values(),
+          ).sort((left, right) => (typeof left === "string" ? left : left.label).localeCompare(typeof right === "string" ? right : right.label))])),
+        }
+      : x.filtering,
     exportParams = new URLSearchParams({ provider, status, action, campaign });
   return (
     <>
@@ -3033,11 +3074,11 @@ function List({ path, title, principal }: { path: string; title: string; princip
           }
           fields={
             findings
-            ? ["identity_identifier", "access_name", "access_provider", "classification", null, null, null]
+            ? ["identity_display_name", "access_display_name", "access_provider", "classification", null, null, null]
             : ["identity_display_name", "action", "access_display_name", "campaign_id", "comment", "decided_by", "status"]
           }
         sorting={x.sorting}
-        filtering={x.filtering}
+        filtering={findingFiltering}
         q={x.q}
         rows={(x.q.data?.items ?? []).map((r) =>
           findings
@@ -3652,6 +3693,28 @@ function CampaignDetail() {
     [findingSearch, setFindingSearch] = useState(""),
     [findingClassifications, setFindingClassifications] = useState<string[]>([]),
     [findingDecisions, setFindingDecisions] = useState<string[]>([]),
+    [findingSort, setFindingSort] = useState(""),
+    [findingOrder, setFindingOrder] = useState("asc"),
+    findingColumns = useColumnFilters(),
+    technicalColumns = useColumnFilters(),
+    [technicalSort, setTechnicalSort] = useState(""),
+    [technicalOrder, setTechnicalOrder] = useState("asc"),
+    technicalSorting: SortState = {
+      sort: technicalSort,
+      order: technicalOrder,
+      toggle: (field: string) => {
+        setTechnicalOrder(technicalSort === field && technicalOrder === "asc" ? "desc" : "asc");
+        setTechnicalSort(field);
+      },
+    },
+    findingSorting: SortState = {
+      sort: findingSort,
+      order: findingOrder,
+      toggle: (field: string) => {
+        setFindingOrder(findingSort === field && findingOrder === "asc" ? "desc" : "asc");
+        setFindingSort(field);
+      },
+    },
     [confirmAction, setConfirmAction] = useState<string | null>(null),
     toast = useToast(),
     m = useMutation({
@@ -3691,6 +3754,25 @@ function CampaignDetail() {
       }, {}),
     ).sort((a, b) => b[1] - a[1]),
     decisionFindings = reviews.filter((row) => row.classification === "unexpected" || row.decision === "revoke"),
+    findingClassificationOptions = [...new Set(decisionFindings.map((row) => s(row.classification)).filter(Boolean))].sort(),
+    findingDecisionOptions = [...new Set(decisionFindings.map((row) => s(row.decision, "pending")))].sort(),
+    findingFiltering: FilterState = {
+      ...findingColumns.filtering,
+      options: Object.fromEntries([
+        ["classification", decisionFindings.map((row) => s(row.classification)).filter(Boolean)],
+        ["identity_display_name", decisionFindings.map((row) => s(row.identity_display_name, s(row.identity_identifier))).filter(Boolean)],
+        ["access_display_name", decisionFindings.map((row) => s(row.access_display_name, s(row.access_name))).filter(Boolean)],
+        ["access_provider", decisionFindings.map((row) => s(row.access_provider)).filter(Boolean)],
+        ["decision", decisionFindings.map((row) => s(row.decision, "pending"))],
+      ].map(([field, values]) => [field, [...new Set(values as string[])].sort()])),
+    },
+    technicalFiltering: FilterState = {
+      ...technicalColumns.filtering,
+      options: {
+        finding: [...new Set(findings.map((finding) => s(finding)).filter(Boolean))].sort(),
+        campaign: [s(c?.name)].filter(Boolean),
+      },
+    },
     identityRows = Object.entries(
       reviews.reduce<Record<string, { identity: Row; total: number; approve: number; revoke: number; notApplicable: number; pending: number }>>((acc, row) => {
         const key = `${s(row.identity_provider)}:${s(row.identity_identifier)}`;
@@ -3707,11 +3789,40 @@ function CampaignDetail() {
     findingNeedle = findingSearch.trim().toLocaleLowerCase(),
     filteredDecisionFindings = decisionFindings.filter((row) => {
       const text = [row.identity_display_name, row.identity_identifier, row.access_display_name, row.access_name, row.access_provider].map((value) => s(value)).join(" ").toLocaleLowerCase();
+      const columnsMatch = Object.entries(findingFiltering.values).every(([field, value]) => {
+        const selected = s(value).split("|").filter(Boolean);
+        const visibleValue = field === "identity_display_name"
+          ? s(row.identity_display_name, s(row.identity_identifier))
+          : field === "access_display_name"
+            ? s(row.access_display_name, s(row.access_name))
+            : s(row[field], field === "decision" ? "pending" : "");
+        return !selected.length || selected.includes(visibleValue);
+      });
       return (!findingNeedle || text.includes(findingNeedle))
         && (!findingClassifications.length || findingClassifications.includes(s(row.classification)))
-        && (!findingDecisions.length || findingDecisions.includes(s(row.decision, "pending")));
+        && (!findingDecisions.length || findingDecisions.includes(s(row.decision, "pending")))
+        && columnsMatch;
+    }).sort((a, b) => {
+      if (!findingSort) return 0;
+      const left = s(a[findingSort]).toLocaleLowerCase();
+      const right = s(b[findingSort]).toLocaleLowerCase();
+      return (left.localeCompare(right) || 0) * (findingOrder === "asc" ? 1 : -1);
     }),
-    filteredTechnicalFindings = findings.filter((finding) => !findingNeedle || s(finding).toLocaleLowerCase().includes(findingNeedle)),
+    filteredTechnicalFindings = findings
+      .map((finding) => ({ finding: s(finding), campaign: s(c?.name) }))
+      .filter((row) => {
+        const technicalRow = row as Record<string, string>;
+        const matchesColumns = Object.entries(technicalFiltering.values).every(([field, value]) => {
+          const selected = s(value).split("|").filter(Boolean);
+          return !selected.length || selected.includes(s(technicalRow[field]));
+        });
+        return (!findingNeedle || row.finding.toLocaleLowerCase().includes(findingNeedle)) && matchesColumns;
+      })
+      .sort((a, b) => {
+        if (!technicalSort) return 0;
+        const left = a as Record<string, string>, right = b as Record<string, string>;
+        return s(left[technicalSort]).localeCompare(s(right[technicalSort])) * (technicalOrder === "asc" ? 1 : -1);
+      }),
     unexpectedCount = reviews.filter((row) => row.classification === "unexpected").length,
     revokedCount = reviews.filter((row) => row.decision === "revoke").length,
     status = s(c?.status),
@@ -3948,8 +4059,8 @@ function CampaignDetail() {
       {tab === "findings" && (
         <>
           <Filter v={findingSearch} onChange={setFindingSearch}>
-            <MultiSelectFilter values={findingClassifications} onChange={setFindingClassifications} options={["unexpected", "missing", "no_reference", "unknown_due_to_scope", "expected_and_observed"]} placeholder="Classification" />
-            <MultiSelectFilter values={findingDecisions} onChange={setFindingDecisions} options={["pending", "approve", "revoke", "not_applicable"]} placeholder="Decision" />
+            <MultiSelectFilter values={findingClassifications} onChange={setFindingClassifications} options={findingClassificationOptions} placeholder="Classification" />
+            <MultiSelectFilter values={findingDecisions} onChange={setFindingDecisions} options={findingDecisionOptions} placeholder="Decision" />
           </Filter>
           <div className="metrics">
             <div className="metric metric-alert">
@@ -3976,6 +4087,9 @@ function CampaignDetail() {
               </div>
               <Table
                 cols={["Type", "Identity", "Access", "Source", "Decision"]}
+                fields={["classification", "identity_display_name", "access_display_name", "access_provider", "decision"]}
+                sorting={findingSorting}
+                filtering={findingFiltering}
                 rows={filteredDecisionFindings.map((row) => [
                   <Status v={row.classification === "unexpected" ? "unexpected" : "revoke"} />,
                   <button className="link-button" onClick={() => setSelected(row)}>{s(row.identity_display_name, s(row.identity_identifier))}</button>,
@@ -3994,16 +4108,19 @@ function CampaignDetail() {
               </div>
               <Table
                 cols={["Finding", "Campaign"]}
-                rows={filteredTechnicalFindings.map((f) => [
+                fields={["finding", "campaign"]}
+                sorting={technicalSorting}
+                filtering={technicalFiltering}
+                rows={filteredTechnicalFindings.map((row) => [
                   <button
                     className="link-button"
                     onClick={() =>
-                      setSelectedFinding({ classification: "campaign finding", findings: [f], campaign_id: id })
+                      setSelectedFinding({ classification: "campaign finding", findings: [row.finding], campaign_id: id })
                     }
                   >
-                    {s(f)}
+                    {row.finding}
                   </button>,
-                  s(c.name),
+                  row.campaign,
                 ])}
               />
             </section>
