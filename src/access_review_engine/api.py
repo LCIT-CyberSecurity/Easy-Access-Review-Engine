@@ -1484,6 +1484,18 @@ def create_app(db_path: str | None = None):
                 assignments = set(active.assignments) if active else set()
                 assignments |= {entry(row) for row in payload.get("add", [])}
                 assignments -= {entry(row) for row in payload.get("remove", [])}
+                remove_access = payload.get("remove_access")
+                if remove_access is not None:
+                    if not isinstance(remove_access, dict):
+                        raise HTTPException(status_code=400, detail="remove_access must be an object")
+                    provider = str(remove_access.get("access_provider") or "").strip()
+                    access_name = str(remove_access.get("access_name") or "").strip()
+                    if not provider or not access_name:
+                        raise HTTPException(status_code=400, detail="remove_access requires access_provider and access_name")
+                    assignments = {
+                        item for item in assignments
+                        if (item.access_provider, item.access_name) != (provider, access_name)
+                    }
                 origin, comment = "manual", str(payload.get("comment") or "Edited in the WebUI")
             if active is not None and assignments == set(active.assignments):
                 raise HTTPException(status_code=409, detail="This change leaves the Golden Source unchanged")

@@ -311,6 +311,35 @@ def test_golden_sources_are_scoped_and_version_assignments_are_paginated(tmp_pat
     assert api.get(f"/api/v1/golden-sources/{other_source.id}", headers=headers).status_code == 403
 
 
+def test_golden_access_remove_removes_all_holders_for_an_access(tmp_path):
+    client, db = _setup(tmp_path)
+    source = create_golden_source("Finance")
+    version = create_golden_version(
+        source,
+        [
+            GoldenSourceAssignment("ad-france", "GG_FINANCE_RW", "ad-france", "alice"),
+            GoldenSourceAssignment("ad-france", "GG_FINANCE_RW", "ad-france", "bob"),
+            GoldenSourceAssignment("ad-france", "GG_FINANCE_RO", "ad-france", "carol"),
+        ],
+        "manual",
+    )
+    source.active_version_id = version.id
+    with Repository(db) as repo:
+        repo.upsert("golden_sources", source)
+        repo.upsert("golden_source_versions", version)
+
+    _login(client, "admin", "administrator-password")
+    response = client.post(
+        "/api/golden-sources/Finance/assignments",
+        json={"remove_access": {"access_provider": "ad-france", "access_name": "GG_FINANCE_RW"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["assignments"] == 1
+    current = client.get("/api/golden-sources/Finance/assignments")
+    assert current.status_code == 200
+    assert [row["access_name"] for row in current.json()["items"]] == ["GG_FINANCE_RO"]
+
+
 def test_legacy_system_database_migrates_with_external_api_disabled(tmp_path):
     db = tmp_path / "legacy-system.db"
     conn = sqlite3.connect(db)

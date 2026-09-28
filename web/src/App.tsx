@@ -5265,7 +5265,11 @@ function Golden() {
           danger
           pending={edit.isPending}
           cancel={() => setRemoving(null)}
-          confirm={() => edit.mutate({ remove: removing.remove_assignments ?? [removing] })}
+          confirm={() => edit.mutate(
+            removing.remove_access
+              ? { remove_access: { access_provider: removing.access_provider, access_name: removing.access_name } }
+              : { remove: removing.remove_assignments ?? [removing] },
+          )}
         />
       )}
     </>
