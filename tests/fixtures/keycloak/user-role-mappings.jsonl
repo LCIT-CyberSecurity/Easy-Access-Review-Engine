@@ -1,3 +1,2 @@
 {"id":"um-1","user_id":"u-alice","role_kind":"client","role_id":"cr-sales","client_id":"c-crm"}
-{"id":"um-2","user_id":"u-bob","role_kind":"realm","role_id":"rr-accountant"}
 {"id":"um-3","user_id":"u-backup","role_kind":"client","role_id":"cr-backup","client_id":"c-crm"}

@@ -58,7 +58,7 @@ def build_command(config: dict[str, object], output: Path, root: str | Path | No
         if collection.get("allow_anonymous") is True: env["ALLOW_ANONYMOUS"] = "1"
         if config.get("_check_only"): env["CHECK_ONLY"] = "1"
         return ["bash", str(base / "exporters/openldap/export-openldap.sh"), str(output)], env
-    if kind in {"google_workspace", "gcp_iam"}:
+    if kind in {"google_workspace", "gcp_iam", "keycloak"}:
         return [sys.executable, "-m", f"access_review_engine.collectors.{kind}", "--config", str(config.get("_path", "")), "--output", str(output)], os.environ.copy()
     raise ValueError(f"Unsupported connector type: {kind}")
 
@@ -66,7 +66,7 @@ def run_exporter(config: dict[str, object], output: str | Path, root: str | Path
     path = Path(output).resolve()
     temporary_config: Path | None = None
     effective_config = config
-    if str(config.get("type")) in {"google_workspace", "gcp_iam"} and not config.get("_path"):
+    if str(config.get("type")) in {"google_workspace", "gcp_iam", "keycloak"} and not config.get("_path"):
         handle = tempfile.NamedTemporaryFile(prefix="eare-google-check-", suffix=".yaml", mode="w", encoding="utf-8", delete=False)
         temporary_config = Path(handle.name)
         try:

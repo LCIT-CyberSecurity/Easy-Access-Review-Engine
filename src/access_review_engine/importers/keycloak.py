@@ -578,6 +578,8 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
         }
     )
     scope["completeness"] = completeness
+    if errors:
+        scope["collection_errors"] = errors
     if unresolved:
         scope["unresolved_references"] = unresolved
     checksum_manifest = json.loads(json.dumps(manifest, default=str))

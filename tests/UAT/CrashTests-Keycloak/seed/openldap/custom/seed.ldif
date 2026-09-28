@@ -1,0 +1,91 @@
+dn: ou=people,dc=eare,dc=test
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=eare,dc=test
+objectClass: organizationalUnit
+ou: groups
+
+dn: uid=alice,ou=people,dc=eare,dc=test
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice Martin
+sn: Martin
+givenName: Alice
+mail: alice@eare.test
+userPassword: alice-password
+
+dn: uid=bob,ou=people,dc=eare,dc=test
+objectClass: inetOrgPerson
+uid: bob
+cn: Bob Leroy
+sn: Leroy
+givenName: Bob
+mail: bob@eare.test
+userPassword: bob-password
+
+dn: uid=charlie,ou=people,dc=eare,dc=test
+objectClass: inetOrgPerson
+uid: charlie
+cn: Charlie Bernard
+sn: Bernard
+givenName: Charlie
+mail: charlie@eare.test
+userPassword: charlie-password
+
+dn: uid=diane,ou=people,dc=eare,dc=test
+objectClass: inetOrgPerson
+uid: diane
+cn: Diane Robert
+sn: Robert
+givenName: Diane
+mail: diane@eare.test
+userPassword: diane-password
+
+dn: uid=eric,ou=people,dc=eare,dc=test
+objectClass: inetOrgPerson
+uid: eric
+cn: Eric Smith
+sn: Smith
+givenName: Eric
+mail: eric@eare.test
+userPassword: eric-password
+
+dn: uid=frank,ou=people,dc=eare,dc=test
+objectClass: inetOrgPerson
+uid: frank
+cn: Frank Jones
+sn: Jones
+givenName: Frank
+mail: frank@eare.test
+userPassword: frank-password
+
+dn: uid=grace,ou=people,dc=eare,dc=test
+objectClass: inetOrgPerson
+uid: grace
+cn: Grace Brown
+sn: Brown
+givenName: Grace
+mail: grace@eare.test
+userPassword: grace-password
+
+dn: cn=Finance,ou=groups,dc=eare,dc=test
+objectClass: groupOfNames
+cn: Finance
+member: uid=alice,ou=people,dc=eare,dc=test
+member: uid=bob,ou=people,dc=eare,dc=test
+
+dn: cn=Sales,ou=groups,dc=eare,dc=test
+objectClass: groupOfNames
+cn: Sales
+member: uid=charlie,ou=people,dc=eare,dc=test
+
+dn: cn=Support,ou=groups,dc=eare,dc=test
+objectClass: groupOfNames
+cn: Support
+member: uid=diane,ou=people,dc=eare,dc=test
+
+dn: cn=IT,ou=groups,dc=eare,dc=test
+objectClass: groupOfNames
+cn: IT
+member: uid=eric,ou=people,dc=eare,dc=test

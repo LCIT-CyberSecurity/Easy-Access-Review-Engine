@@ -35,7 +35,7 @@ counts:
   clients: 2
   realm_roles: 4
   client_roles: 5
-  user_role_mappings: 3
+  user_role_mappings: 2
   group_role_mappings: 4
   composite_roles: 6
   service_accounts: 1
