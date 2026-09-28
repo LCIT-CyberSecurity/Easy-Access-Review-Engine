@@ -288,7 +288,7 @@ def ensure_bootstrap_user(conn: sqlite3.Connection) -> None:
     """Provision the first local administrator, with environment overrides."""
     if conn.execute("SELECT 1 FROM system_users LIMIT 1").fetchone() is None:
         username = os.environ.get("EARE_ADMIN_USERNAME", "admin").strip().lower() or "admin"
-        password = os.environ.get("EARE_ADMIN_PASSWORD") or "admin"
+        password = os.environ.get("EARE_ADMIN_PASSWORD") or "SecretPassword"
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, must_change_password, session_version, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",

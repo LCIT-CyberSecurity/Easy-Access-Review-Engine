@@ -21,6 +21,8 @@ services:
       - ../.env
     environment:
       EARE_DB_PATH: /data/access-review.db
+      EARE_ADMIN_USERNAME: ${EARE_ADMIN_USERNAME:-admin}
+      EARE_ADMIN_PASSWORD: ${EARE_ADMIN_PASSWORD:-SecretPassword}
     volumes:
       - eare-aurora-data:/data
     expose:

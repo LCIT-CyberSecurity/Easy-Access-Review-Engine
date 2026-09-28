@@ -3621,7 +3621,7 @@ function CampaignDetail() {
     [searchParams] = useSearchParams(),
     q = useQuery({ queryKey: ["campaign", id], queryFn: () => getJson("campaigns/" + id) }),
     c = q.data?.campaign as Row | undefined,
-    [tab, setTab] = useState(searchParams.get("tab") === "reviews" ? "reviews" : "overview"),
+    [tab, setTab] = useState(searchParams.get("tab") === "overview" ? "overview" : "reviews"),
     [selected, setSelected] = useState<Row | null>(null),
     [selectedFinding, setSelectedFinding] = useState<Row | null>(null),
     [confirmAction, setConfirmAction] = useState<string | null>(null),
@@ -3663,6 +3663,19 @@ function CampaignDetail() {
       }, {}),
     ).sort((a, b) => b[1] - a[1]),
     decisionFindings = reviews.filter((row) => row.classification === "unexpected" || row.decision === "revoke"),
+    identityRows = Object.entries(
+      reviews.reduce<Record<string, { identity: Row; total: number; approve: number; revoke: number; notApplicable: number; pending: number }>>((acc, row) => {
+        const key = `${s(row.identity_provider)}:${s(row.identity_identifier)}`;
+        const entry = (acc[key] ??= { identity: row, total: 0, approve: 0, revoke: 0, notApplicable: 0, pending: 0 });
+        entry.total += 1;
+        if (row.decision === "approve") entry.approve += 1;
+        else if (row.decision === "revoke") entry.revoke += 1;
+        else if (row.decision === "not_applicable") entry.notApplicable += 1;
+        else entry.pending += 1;
+        return acc;
+      }, {}),
+    ).map(([, value]) => value)
+      .sort((a, b) => b.pending - a.pending || s(a.identity.identity_display_name, s(a.identity.identity_identifier)).localeCompare(s(b.identity.identity_display_name, s(b.identity.identity_identifier)))),
     unexpectedCount = reviews.filter((row) => row.classification === "unexpected").length,
     revokedCount = reviews.filter((row) => row.decision === "revoke").length,
     status = s(c?.status),
@@ -3862,7 +3875,27 @@ function CampaignDetail() {
         </>
       )}
       {tab === "reviews" && (
-        <Table
+        <>
+          <section className="panel">
+            <div className="panel-title">
+              <h2>Decision status by identity</h2>
+              <span className="muted">Each count is an access review</span>
+            </div>
+            <Table
+              cols={["Identity", "Reviews", "Approved", "Revoked", "N/A", "Pending"]}
+              rows={identityRows.map((row) => [
+                <button className="link-button" onClick={() => setSelected(row.identity)}>
+                  {s(row.identity.identity_display_name, s(row.identity.identity_identifier))}
+                </button>,
+                row.total,
+                row.approve,
+                row.revoke,
+                row.notApplicable,
+                row.pending,
+              ])}
+            />
+          </section>
+          <Table
           cols={["Identity", "Access", "Classification", "Decision", "Decide"]}
           rows={reviews.map((r) => [
             <button className="link-button" onClick={() => setSelected(r)}>
@@ -3874,6 +3907,7 @@ function CampaignDetail() {
             <RowDecision item={r} done={() => q.refetch()} />,
           ])}
         />
+        </>
       )}{" "}
       {tab === "findings" && (
         <>

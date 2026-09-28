@@ -144,10 +144,11 @@ rm -f .env.runtime
 ./reset.sh
 
 umask 077
+eare_admin_password=${EARE_ADMIN_PASSWORD:-SecretPassword}
 cat > .env.runtime <<EOF
 KEYCLOAK_DB_PASSWORD=$(openssl rand -hex 24)
 KEYCLOAK_ADMIN_PASSWORD=$(openssl rand -hex 24)
-EARE_ADMIN_PASSWORD=$(openssl rand -hex 24)
+EARE_ADMIN_PASSWORD=$eare_admin_password
 EARE_SESSION_SECRET=$(openssl rand -hex 32)
 EARE_KEYCLOAK_CLIENT_SECRET=EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK
 EARE_LDAP_PASSWORD=$(openssl rand -hex 24)

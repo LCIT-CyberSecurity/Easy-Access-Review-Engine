@@ -23,7 +23,7 @@ def test_system_user_password_is_hashed_and_authentication_is_explicit():
     assert c.execute("SELECT password_hash FROM system_users WHERE username='admin'").fetchone()[0] != 'a-secure-password'
 
 
-def test_default_bootstrap_creates_hashed_admin_admin():
+def test_default_bootstrap_creates_hashed_admin_with_required_password_change():
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     init_system(c)
@@ -34,8 +34,11 @@ def test_default_bootstrap_creates_hashed_admin_admin():
     finally:
         if old_username is not None: os.environ["EARE_ADMIN_USERNAME"] = old_username
         if old_password is not None: os.environ["EARE_ADMIN_PASSWORD"] = old_password
-    assert authenticate_user(c, "admin", "admin")["role"] == "ADMIN"
-    assert c.execute("SELECT password_hash FROM system_users").fetchone()[0] != "admin"
+    first = authenticate_user(c, "admin", "SecretPassword")
+    assert first["role"] == "ADMIN"
+    assert first["must_change_password"] is True
+    assert authenticate_user(c, "admin", "admin") is None
+    assert c.execute("SELECT password_hash FROM system_users").fetchone()[0] != "SecretPassword"
 
 
 def test_bootstrap_environment_overrides_and_normal_policy():
@@ -63,13 +66,13 @@ def test_bootstrap_requires_password_change_then_clears_it():
     c.row_factory = sqlite3.Row
     init_system(c)
     ensure_bootstrap_user(c)
-    first = authenticate_user(c, "admin", "admin")
+    first = authenticate_user(c, "admin", "SecretPassword")
     assert first["must_change_password"] is True
     with pytest.raises(ValueError):
         change_password(c, "admin", "short")
     updated = change_password(c, "admin", "a-secure-password")
     assert updated["must_change_password"] is False
-    assert authenticate_user(c, "admin", "admin") is None
+    assert authenticate_user(c, "admin", "SecretPassword") is None
     assert authenticate_user(c, "admin", "a-secure-password")["must_change_password"] is False
 
 

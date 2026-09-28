@@ -184,7 +184,7 @@ if TestClient is not None:
 
     def test_default_admin_bootstrap_login():
         client = _client()
-        _login(client, "admin", "admin")
+        _login(client, "admin", "SecretPassword")
 
 
     def test_web_source_configuration_is_validated_and_persisted_without_plaintext_secrets(tmp_path):
