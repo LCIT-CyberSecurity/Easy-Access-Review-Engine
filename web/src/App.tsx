@@ -4936,8 +4936,19 @@ function Golden() {
                   const permissionOptions = capabilityOptions.length
                     ? capabilityOptions.map((option) => s(option.id, s(option.label)))
                     : DEFAULT_GOLDEN_CAPABILITIES;
-                  const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "";
+                  const target = (r.access_target ?? {}) as Row;
+                  const service = (target.service ?? {}) as Row;
+                  const technicalPermission = s(r.access_permission, "").toLowerCase();
+                  const accessLabel = s(r.access_display_name, s(r.access_name));
+                  const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || (s(r.access_provider) === "keycloak-integration" ? [s(service.identifier, "Keycloak"), s(service.realm)].filter(Boolean).join(" · ") : "");
                   const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
+                  const permissionLabel = businessPermission
+                    ? joinPermissions(splitPermissions(businessPermission))
+                    : technicalPermission === "role"
+                      ? `Role assignment · ${accessLabel}`
+                      : technicalPermission === "member"
+                        ? `Group membership · ${accessLabel}`
+                        : "Not provided";
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
                   const ownerDisplay = owner ? ownerDisplayLabel(owner, arr(ownerOptions.data?.items), s(r.access_provider)) : "";
                   const applicationCell = editing
@@ -4951,7 +4962,7 @@ function Golden() {
                     : <button className="link-button" title={splitPermissions(application).join(", ")} onClick={() => requestAccessEdit(r)}>{applicationSummary(application) || "—"}</button>;
                   const permissionCell = editing
                     ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>Observed: {contextValue(r.business_context, "business_permission", "source") || "—"}</small></div>
-                    : <button className="link-button" onClick={() => requestAccessEdit(r)}>{businessPermission ? joinPermissions(splitPermissions(businessPermission)) : "Not provided"}</button>;
+                    : <button className="link-button" onClick={() => requestAccessEdit(r)}>{permissionLabel}</button>;
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.access_display_name, s(r.access_name))}
@@ -4961,6 +4972,8 @@ function Golden() {
                         description: r.access_description,
                         permission: r.access_permission,
                         target: r.access_target,
+                        access_display_name: r.access_display_name,
+                        access_name: r.access_name,
                       })}
                     </Sub>,
                     applicationCell,
