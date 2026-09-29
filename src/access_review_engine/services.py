@@ -957,7 +957,7 @@ def open_campaign(
     identities = {identity_key(identity): identity for identity in snapshot.identities}
     accesses = {access_key(access): access for access in snapshot.accesses}
     items: list[ReviewItem] = []
-    for row in snapshot.comparison_states:
+    for row in reviewable_comparison_states(snapshot):
         access = accesses.get((str(row["access_provider"]), str(row["access_name"])))
         identity = identities.get((str(row["identity_provider"]), str(row["identity_identifier"])))
         reviewer = _resolve_reviewer(access, identity, campaign, fallback_reviewer)
@@ -990,6 +990,19 @@ def open_campaign(
 
     campaign.opened_at = now_utc()
     return campaign, items
+
+
+def reviewable_comparison_states(snapshot: Snapshot) -> list[dict[str, object]]:
+    """Exclude composite role containers from review rows while retaining their children."""
+    composite_parents = {
+        (relation.parent_provider, relation.parent_access_name)
+        for relation in snapshot.access_relations
+        if relation.origin.raw.get("composite") is True
+    }
+    return [
+        row for row in snapshot.comparison_states
+        if (str(row["access_provider"]), str(row["access_name"])) not in composite_parents
+    ]
 
 
 def _resolve_reviewer(

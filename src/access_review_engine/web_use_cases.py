@@ -18,7 +18,7 @@ from typing import Any
 from access_review_engine.application import import_file_to_repository, load_classification_rules
 from access_review_engine.campaign_authorization import normalize_campaign_scope
 from access_review_engine.domain import Campaign, Finding, GoldenSourceVersion, Snapshot
-from access_review_engine.services import compare_snapshot, open_campaign
+from access_review_engine.services import compare_snapshot, open_campaign, reviewable_comparison_states
 from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY, connector_business_mapping
 from access_review_engine.storage import Repository
 
@@ -117,6 +117,8 @@ def prepare_campaign_review(
             raise ValueError(f"Selected Access was not found in the Snapshot or Golden Source: {provider}/{name}")
         rows = [row for row in rows if (str(row.get("access_provider")), str(row.get("access_name"))) in selected]
     prepared = deepcopy(snapshot)
+    prepared.comparison_states = rows
+    rows = reviewable_comparison_states(prepared)
     prepared.comparison_states = rows
     return CampaignPreparation(prepared, golden_version, rows)
 

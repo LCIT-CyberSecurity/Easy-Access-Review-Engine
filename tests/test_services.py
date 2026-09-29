@@ -5,6 +5,8 @@ import pytest
 from access_review_engine.domain import (
     Access,
     AccessAssignment,
+    AccessRelation,
+    AccessRelationType,
     Campaign,
     ComparisonState,
     ControlObject,
@@ -229,6 +231,23 @@ def test_campaign_rejects_pending_promotion_and_close() -> None:
         close_campaign(campaign, items, [])
     with pytest.raises(ValueError):
         promote_campaign(create_golden_source("corp"), campaign, items, [], None)
+
+
+def test_campaign_reviews_effective_children_instead_of_composite_parent() -> None:
+    identity = Identity("keycloak", "alice", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)
+    parent = _access("default-roles-demo", OwnerRef("local", "admin"))
+    child = _access("invoice-read", OwnerRef("local", "admin"))
+    assignment = AccessAssignment("keycloak", parent.name, "keycloak", identity.identifier, Origin("role", True, False))
+    child_assignment = AccessAssignment("keycloak", child.name, "keycloak", identity.identifier, Origin("role", True, False))
+    relation = AccessRelation(
+        "keycloak", parent.name, "keycloak", child.name, AccessRelationType.GRANTS,
+        Origin("role", False, True, raw={"composite": True}),
+    )
+    snapshot = create_snapshot([], [identity], [], [parent, child], [assignment, child_assignment], ["import-1"], access_relations=[relation])
+
+    _, items = open_campaign(Campaign("composite", snapshot.id, allow_unresolved_reviewers=True), snapshot)
+
+    assert [item.access_name for item in items] == [child.name]
 
 
 def test_decision_comment_requirements() -> None:

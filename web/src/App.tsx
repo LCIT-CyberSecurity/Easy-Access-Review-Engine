@@ -368,11 +368,14 @@ function BusinessContext({ context, manualStatus, includeOwner = true }: { conte
 const describeAccess = (row: Row): string => {
   const described = s(row.description, "");
   if (described) return described;
+  const permissionPayload = (row.permission ?? {}) as Row;
   const permission = permissionText(row.permission),
+    accessName = s(row.access_display_name, s(row.access_name)),
     target = targetText(row.target);
-  if (permission.toLowerCase() === "member") return "Group membership";
+  if (s(permissionPayload.identifier).toLowerCase() === "member" || permission.toLowerCase() === "member") return accessName ? `Group membership · ${accessName}` : "Group membership";
+  if (s(permissionPayload.identifier).toLowerCase() === "role" || permission.toLowerCase() === "role") return accessName ? `Role assignment · ${accessName}` : "Role assignment";
   if (permission && target) return `${permission} on ${target}`;
-  return permission || target || "";
+  return permission || target || accessName || "";
 };
 const describeIdentity = (row: Row): string =>
   [s(row.display_name, ""), s(row.description, ""), s(row.email, "")].filter(Boolean).join(" · ");
