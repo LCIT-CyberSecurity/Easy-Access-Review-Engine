@@ -87,6 +87,10 @@ def _add_review_provenance(
     evaluations: dict[str, dict[tuple[str, str, str, str], dict[str, Any]]] = {}
     snapshot_accesses: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
     snapshot_identities: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    access_display_names = {
+        (str(item.get("provider")), str(item.get("name"))): str(item.get("display_name") or item.get("name") or "")
+        for item in repo.list_payloads("accesses")
+    }
     golden_versions = {
         str(payload.get("id")): hydrate_golden_version(payload)
         for payload in repo.list_payloads("golden_source_versions")
@@ -155,7 +159,7 @@ def _add_review_provenance(
                 derived_accesses.append({
                     "provider": effective_key[2],
                     "name": effective_key[3],
-                    "display_name": child.get("display_name") or effective_key[3],
+                    "display_name": child.get("display_name") or access_display_names.get((effective_key[2], effective_key[3])) or effective_key[3],
                     "permission": child.get("permission"),
                     "target": child.get("target"),
                 })
