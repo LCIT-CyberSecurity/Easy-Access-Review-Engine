@@ -178,7 +178,7 @@ EARE_LDAP_PASSWORD="$EARE_LDAP_PASSWORD" \
 until curl -fsS "$api_url/api/health" >/dev/null; do sleep 2; done
 
 cookie=$(mktemp)
-trap 'rm -f "$cookie"; rm -f .env.runtime' EXIT
+trap 'rm -f "$cookie" authz-export.zip; rm -f .env.runtime' EXIT
 login_payload=$(printf '{"username":"admin","password":"%s"}' "$EARE_ADMIN_PASSWORD")
 curl -fsS -c "$cookie" -H 'Content-Type: application/json' -d "$login_payload" "$api_url/api/auth/login" >/dev/null
 curl -fsS -b "$cookie" -c "$cookie" -H 'Content-Type: application/json' \
@@ -209,6 +209,43 @@ start_sync() {
 }
 
 start_sync
+docker exec "$api_container" python -c 'import json; from access_review_engine.collectors.keycloak import collect; collect({"provider":"keycloak-uat-direct","connection":{"base_url":"http://keycloak:8080","realm":"eare-crashtest","client_id":"eare-collector"},"credentials":{"client_secret_env":"EARE_KEYCLOAK_CLIENT_SECRET"},"collection":{"page_size":100,"timeout":30,"allow_partial":False}}, "/tmp/authz-export.zip")'
+docker cp "$api_container:/tmp/authz-export.zip" authz-export.zip >/dev/null
+python3 - authz-export.zip <<'PY'
+import json
+import sys
+from zipfile import ZipFile
+import yaml
+
+with ZipFile(sys.argv[1]) as archive:
+    manifest = yaml.safe_load(archive.read("manifest.yaml"))
+    crm = next(
+        row for row in manifest["authorization_services"].values()
+        if row.get("clientId") == "crm"
+    )
+    if crm["status"] != "not_enabled":
+        raise SystemExit("CRM Authorization Services was not recorded as disabled")
+    erp = next(
+        row for row in manifest["authorization_services"].values()
+        if row.get("clientId") == "erp"
+    )
+    if erp["status"] != "collected":
+        raise SystemExit(f"ERP Authorization Services status: {erp['status']}")
+    for filename in (
+        "authorization-resources.jsonl",
+        "authorization-scopes.jsonl",
+        "authorization-policies.jsonl",
+        "authorization-permissions.jsonl",
+    ):
+        if not archive.read(filename).strip():
+            raise SystemExit(f"empty Authorization Services artifact: {filename}")
+    policies = [
+        json.loads(line)
+        for line in archive.read("authorization-policies.jsonl").splitlines()
+    ]
+    if not any(row.get("name") == "ERP-complex-policy" for row in policies):
+        raise SystemExit("complex ERP policy was not preserved")
+PY
 curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > initial-snapshots.json
 curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > initial-imports.json
 assert_latest_import initial-imports.json full

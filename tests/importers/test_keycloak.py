@@ -249,6 +249,105 @@ def test_service_account_can_be_standalone_and_client_target_is_human_readable(
     assert crm_admin.control_object.metadata["client_display_name"] == "CRM"
 
 
+def _v2_artifact(tmp_path: Path) -> Path:
+    output = _artifact(tmp_path)
+    v2 = tmp_path / "keycloak-v2.zip"
+    authz = {
+        "authorization-resources.jsonl": [
+            {
+                "id": "resource-invoices",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "Invoices",
+            },
+            {
+                "id": "resource-contacts",
+                "client_uuid": "c-crm",
+                "clientId": "crm",
+                "name": "Contacts",
+            },
+        ],
+        "authorization-scopes.jsonl": [
+            {"id": "scope-read", "client_uuid": "c-erp", "clientId": "erp", "name": "read"},
+            {
+                "id": "scope-download",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "download-report",
+            },
+        ],
+        "authorization-policies.jsonl": [
+            {
+                "id": "policy-erp-read",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "ERP Reader",
+                "type": "role",
+                "logic": "POSITIVE",
+                "config": {"roles": [{"id": "cr-erp-read"}]},
+            },
+            {
+                "id": "policy-erp-complex",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "ERP Dynamic",
+                "type": "aggregate",
+                "decisionStrategy": "UNANIMOUS",
+            },
+        ],
+        "authorization-permissions.jsonl": [
+            {
+                "id": "permission-erp-read",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "Invoices read",
+                "resourceIds": ["resource-invoices"],
+                "scopes": ["scope-read"],
+                "policies": ["policy-erp-read"],
+            },
+            {
+                "id": "permission-erp-complex",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "Invoices dynamic",
+                "resourceIds": ["resource-invoices"],
+                "scopes": ["scope-download"],
+                "policies": ["policy-erp-complex"],
+            },
+        ],
+    }
+    with ZipFile(output) as source, ZipFile(v2, "w", ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            target.writestr(info.filename, source.read(info.filename))
+        for filename, rows in authz.items():
+            target.writestr(filename, "".join(json.dumps(row) + "\n" for row in rows))
+    return v2
+
+
+def test_keycloak_v2_authz_derives_only_safe_functional_rights(tmp_path: Path) -> None:
+    result = import_keycloak_zip(_v2_artifact(tmp_path))
+
+    assert result.functional_access_models is not None
+    model = next(
+        item
+        for item in result.functional_access_models
+        if item.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert model.completeness == "complete"
+    assert len(model.rights) == 1
+    assert model.rights[0].capability_id == "read"
+    assert model.rights[0].target.resource["identifier"] == "resource-invoices"
+    assert model.rights[0].native_permission == "scope:scope-read"
+    assert model.rights[0].provenance == "mapped"
+    assert not any(item.capability_id == "download-report" for item in model.rights)
+
+
+def test_keycloak_v1_artifact_without_authz_remains_unchanged(tmp_path: Path) -> None:
+    result = import_keycloak_zip(_artifact(tmp_path))
+    assert result.batch.completeness == "full"
+    assert result.functional_access_models == []
+
+
 def _rows(filename: str) -> list[dict]:
     return [json.loads(line) for line in (FIXTURE / filename).read_text().splitlines() if line]
 

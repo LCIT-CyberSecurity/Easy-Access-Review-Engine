@@ -38,7 +38,14 @@ SURFACE_FILES = {
     "group_role_mappings": "group-role-mappings.jsonl",
     "composite_roles": "composite-role-relations.jsonl",
     "service_accounts": "service-accounts.jsonl",
+    "authorization_resources": "authorization-resources.jsonl",
+    "authorization_scopes": "authorization-scopes.jsonl",
+    "authorization_policies": "authorization-policies.jsonl",
+    "authorization_permissions": "authorization-permissions.jsonl",
 }
+AUTHZ_SURFACES = tuple(
+    surface for surface in SURFACE_FILES if surface.startswith("authorization_")
+)
 
 
 class KeycloakError(RuntimeError):
@@ -114,7 +121,11 @@ def collect(
     page_size = int(collection.get("page_size", 100))
     if page_size <= 0:
         raise ValueError("Keycloak collection.page_size must be positive")
-    requested = [surface for surface in SURFACE_FILES if collection.get(surface, True)]
+    requested = [
+        surface
+        for surface in SURFACE_FILES
+        if surface not in AUTHZ_SURFACES and collection.get(surface, True)
+    ]
     if client is None:
         client = _build_client(config)
     if config.get("_check_only"):
@@ -178,7 +189,9 @@ def collect(
         }
 
     started = datetime.now(UTC).isoformat()
-    data: dict[str, list[dict[str, Any]]] = {surface: [] for surface in requested}
+    data: dict[str, list[dict[str, Any]]] = {
+        surface: [] for surface in (*requested, *AUTHZ_SURFACES)
+    }
     pages: dict[str, int] = {}
     errors: list[dict[str, str]] = []
     failed_surfaces: set[str] = set()
@@ -406,6 +419,52 @@ def collect(
                     raise RuntimeError("Keycloak collection failed for service_accounts") from exc
         data["service_accounts"], pages["service_accounts"] = service_rows, service_pages
 
+    # Authorization Services is client-scoped and optional. Most clients do
+    # not expose a resource server, so disabled is a normal state.
+    authz_status: dict[str, dict[str, Any]] = {}
+    for item in clients:
+        client_uuid = _stable(item.get("id"))
+        client_id = _stable(item.get("clientId"))
+        status: dict[str, Any] = {
+            "status": "not_enabled",
+            "client_uuid": client_uuid,
+            "clientId": client_id,
+        }
+        if not item.get("authorizationServicesEnabled", False):
+            authz_status[client_uuid] = status
+            continue
+        status["status"] = "collected"
+        for surface in AUTHZ_SURFACES:
+            data.setdefault(surface, [])
+            try:
+                values, count = _pages(
+                    client,
+                    surface,
+                    page_size,
+                    client=item,
+                    realm=connection["realm"],
+                )
+                data[surface].extend(
+                    {
+                        **row,
+                        "realm": connection["realm"],
+                        "client_uuid": client_uuid,
+                        "clientId": client_id,
+                        "client_display_name": _stable(item.get("name")) or client_id,
+                    }
+                    for row in values
+                )
+                pages[surface] = pages.get(surface, 0) + count
+            except Exception as exc:
+                status["status"] = "error"
+                status.setdefault("errors", []).append(
+                    {"surface": surface, "error": type(exc).__name__}
+                )
+                errors.append(
+                    {"surface": f"{surface}:{client_uuid}", "error": type(exc).__name__}
+                )
+        authz_status[client_uuid] = status
+
     completed = [
         surface for surface in requested if not any(error["surface"] == surface for error in errors)
     ]
@@ -418,15 +477,19 @@ def collect(
         "provider": config["provider"],
         "realm": connection["realm"],
         "base_url": connection.get("base_url"),
-        "collector_version": "1",
+        "collector_version": "2",
         "started_at": started,
         "completed_at": datetime.now(UTC).isoformat(),
         "requested_surfaces": requested,
         "completed_surfaces": completed,
         "counts": {surface: len(data.get(surface, [])) for surface in requested},
+        "authorization_counts": {
+            surface: len(data.get(surface, [])) for surface in AUTHZ_SURFACES
+        },
         "pages": pages,
         "collection_errors": errors,
         "completeness": completeness,
+        "authorization_services": authz_status,
         "authoritative_scope": {
             "connector_type": "keycloak",
             "realm": str(connection["realm"]),
@@ -588,6 +651,18 @@ class _HTTPClient:
                 "clients/"
                 f"{urllib.parse.quote(kwargs['client']['id'], safe='')}/service-account-user",
                 {},
+            )
+        if surface.startswith("authorization_"):
+            client_id = urllib.parse.quote(kwargs["client"]["id"], safe="")
+            suffix = {
+                "authorization_resources": "resource-server/resource",
+                "authorization_scopes": "resource-server/scope",
+                "authorization_policies": "resource-server/policy",
+                "authorization_permissions": "resource-server/permission",
+            }[surface]
+            return self._get(
+                f"clients/{client_id}/authz/{suffix}",
+                {"first": first, "max": page_size},
             )
         if surface == "composites":
             role = kwargs["role"]

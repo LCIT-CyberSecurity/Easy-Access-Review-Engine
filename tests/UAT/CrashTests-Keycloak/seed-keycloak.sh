@@ -61,6 +61,8 @@ create_client() {
 
 crm=$(create_client crm CRM)
 erp=$(create_client erp ERP)
+kc update "clients/$crm" -r "$realm" -s authorizationServicesEnabled=false >/dev/null
+kc update "clients/$erp" -r "$realm" -s authorizationServicesEnabled=true >/dev/null
 collector=$(client_id eare-collector)
 if [[ -z "$collector" ]]; then
   collector=$(kc create clients -r "$realm" -s clientId=eare-collector -s name=EARE -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true -s "secret=$collector_secret" -i)
@@ -74,6 +76,52 @@ for spec in "$crm:sales" "$crm:support" "$crm:admin" "$erp:read" "$erp:finance" 
   IFS=: read -r owner role <<<"$spec"
   kc get "clients/$owner/roles/$role" -r "$realm" >/dev/null 2>&1 || kc create "clients/$owner/roles" -r "$realm" -s "name=$role" >/dev/null
 done
+erp_accountant=$(kc get "clients/$erp/roles/ERP-Accountant" -r "$realm" --fields id --format csv --noquotes | tail -1)
+if [[ -z "$erp_accountant" ]]; then
+  erp_accountant=$(kc create "clients/$erp/roles" -r "$realm" -s name=ERP-Accountant -i)
+fi
+
+authz_resource() {
+  local client=$1 name=$2 id
+  id=$(kc get "clients/$client/authz/resource-server/resource" -r "$realm" -q name="$name" --fields id --format csv --noquotes | tail -1)
+  [[ -n "$id" ]] || id=$(kc create "clients/$client/authz/resource-server/resource" -r "$realm" -s "name=$name" -i)
+  printf '%s' "$id"
+}
+authz_scope() {
+  local client=$1 name=$2 id
+  id=$(kc get "clients/$client/authz/resource-server/scope" -r "$realm" -q name="$name" --fields id --format csv --noquotes | tail -1)
+  [[ -n "$id" ]] || id=$(kc create "clients/$client/authz/resource-server/scope" -r "$realm" -s "name=$name" -i)
+  printf '%s' "$id"
+}
+authz_policy() {
+  local client=$1 name=$2 role_id=$3 id
+  id=$(kc get "clients/$client/authz/resource-server/policy" -r "$realm" -q name="$name" --fields id --format csv --noquotes | tail -1)
+  if [[ -z "$id" ]]; then
+    id=$(kc create "clients/$client/authz/resource-server/policy/role" -r "$realm" \
+      -s "name=$name" -s "config.roles=[{\"id\":\"$role_id\"}]" -i)
+  fi
+  printf '%s' "$id"
+}
+invoices=$(authz_resource "$erp" Invoices)
+suppliers=$(authz_resource "$erp" Suppliers)
+read_scope=$(authz_scope "$erp" read)
+approve_scope=$(authz_scope "$erp" approve)
+accountant_policy=$(authz_policy "$erp" ERP-Accountant-policy "$erp_accountant")
+if ! kc get "clients/$erp/authz/resource-server/permission" -r "$realm" -q name=ERP-Invoices-permission >/dev/null 2>&1; then
+  kc create "clients/$erp/authz/resource-server/permission/resource" -r "$realm" \
+    -s name=ERP-Invoices-permission \
+    -s "resources=[\"$invoices\"]" \
+    -s "scopes=[\"$read_scope\",\"$approve_scope\"]" \
+    -s "policies=[\"$accountant_policy\"]" >/dev/null
+fi
+if ! kc get "clients/$erp/authz/resource-server/policy" -r "$realm" -q name=ERP-complex-policy >/dev/null 2>&1; then
+  complex_policy=$(kc create "clients/$erp/authz/resource-server/policy/aggregate" -r "$realm" \
+    -s name=ERP-complex-policy -s "config.policies=[\"$accountant_policy\"]" -i)
+  kc create "clients/$erp/authz/resource-server/permission/resource" -r "$realm" \
+    -s name=ERP-Suppliers-complex-permission \
+    -s "resources=[\"$suppliers\"]" -s "scopes=[\"$approve_scope\"]" \
+    -s "policies=[\"$complex_policy\"]" >/dev/null
+fi
 kc get "clients/$backup/roles/Backup-Operator" -r "$realm" >/dev/null 2>&1 || kc create "clients/$backup/roles" -r "$realm" -s name=Backup-Operator >/dev/null
 
 group_id() { kc get groups -r "$realm" -q search="$1" --fields id --format csv --noquotes | tail -1; }

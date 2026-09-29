@@ -469,3 +469,120 @@ def test_http_client_fails_after_second_401(monkeypatch) -> None:
         assert exc.status_code == 401
     else:
         raise AssertionError("a second 401 was swallowed")
+
+
+class AuthorizationKeycloak(FakeKeycloak):
+    def __init__(self, page_size: int = 2) -> None:
+        super().__init__(page_size)
+        self.rows["clients"] = [
+            {"id": "client-crm-uuid", "clientId": "crm", "name": "CRM"},
+            {
+                "id": "client-erp-uuid",
+                "clientId": "erp",
+                "name": "ERP",
+                "authorizationServicesEnabled": True,
+            },
+        ]
+        self.rows.update(
+            {
+                "authorization_resources": [
+                    {"id": "resource-invoices", "name": "Invoices"},
+                    {"id": "resource-suppliers", "name": "Suppliers"},
+                    {"id": "resource-extra", "name": "Extra"},
+                ],
+                "authorization_scopes": [
+                    {"id": "scope-read", "name": "read"},
+                    {"id": "scope-approve", "name": "approve"},
+                    {"id": "scope-write", "name": "write"},
+                ],
+                "authorization_policies": [
+                    {"id": "policy-accountant", "name": "Accountant", "type": "role"}
+                ],
+                "authorization_permissions": [
+                    {
+                        "id": "permission-invoices",
+                        "name": "Invoice management",
+                        "resourceIds": ["resource-invoices"],
+                        "scopes": ["scope-read", "scope-approve"],
+                        "policies": ["policy-accountant"],
+                    }
+                ],
+            }
+        )
+
+    def list(self, surface: str, page: int, page_size: int, **kwargs: object):
+        if surface.startswith("authorization_"):
+            if kwargs["client"]["id"] != "client-erp-uuid":  # type: ignore[index]
+                return []
+            values = self.rows[surface]
+            return values[page * page_size : (page + 1) * page_size]
+        return super().list(surface, page, page_size, **kwargs)
+
+
+def test_authorization_services_is_optional_and_keeps_native_client_identity(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "authz.zip"
+    fake = AuthorizationKeycloak(page_size=2)
+    manifest = collect(_config(), output, fake)
+
+    assert manifest["completeness"] == "full"
+    assert manifest["authorization_services"]["client-crm-uuid"]["status"] == "not_enabled"
+    assert manifest["authorization_services"]["client-erp-uuid"]["status"] == "collected"
+    with ZipFile(output) as archive:
+        resources = [
+            json.loads(line)
+            for line in archive.read("authorization-resources.jsonl").splitlines()
+        ]
+        assert len(resources) == 3
+        assert {row["client_uuid"] for row in resources} == {"client-erp-uuid"}
+        assert "EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK" not in archive.read(
+            "manifest.yaml"
+        ).decode()
+
+
+def test_authorization_http_paths_are_read_only_and_use_client_uuid(monkeypatch) -> None:
+    config = _config()
+    monkeypatch.setenv("EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "secret-canary")
+    monkeypatch.setattr(_HTTPClient, "_token", lambda _self: "token")
+    client = _HTTPClient(config)
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def fake_get(path: str, params: dict[str, object]):
+        captured.append((path, params))
+        return []
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    for surface in (
+        "authorization_resources",
+        "authorization_scopes",
+        "authorization_policies",
+        "authorization_permissions",
+    ):
+        client.list(surface, 0, 2, client={"id": "erp/uuid"})
+    assert [path for path, _ in captured] == [
+        "clients/erp%2Fuuid/authz/resource-server/resource",
+        "clients/erp%2Fuuid/authz/resource-server/scope",
+        "clients/erp%2Fuuid/authz/resource-server/policy",
+        "clients/erp%2Fuuid/authz/resource-server/permission",
+    ]
+    assert all(params == {"first": 0, "max": 2} for _, params in captured)
+    assert all("secret-canary" not in repr(value) for value in captured)
+
+
+class ForbiddenAuthorizationKeycloak(AuthorizationKeycloak):
+    def list(self, surface: str, page: int, page_size: int, **kwargs: object):
+        if surface == "authorization_resources":
+            raise KeycloakError("forbidden", 403)
+        return super().list(surface, page, page_size, **kwargs)
+
+
+def test_enabled_authorization_services_forbidden_is_explicit_and_scoped(tmp_path: Path) -> None:
+    manifest = collect(_config(), tmp_path / "forbidden.zip", ForbiddenAuthorizationKeycloak())
+
+    assert manifest["authorization_services"]["client-erp-uuid"]["status"] == "error"
+    assert manifest["completeness"] == "scoped"
+    assert any(
+        error["surface"] == "authorization_resources:client-erp-uuid"
+        for error in manifest["collection_errors"]
+    )

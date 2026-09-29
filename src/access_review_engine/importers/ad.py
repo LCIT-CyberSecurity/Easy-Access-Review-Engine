@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import TextIOWrapper
 from pathlib import Path
+from typing import Any
 from zipfile import BadZipFile, ZipFile
 
 from access_review_engine.domain import (
@@ -63,6 +64,7 @@ class ImportResult:
     assignments: list[AccessAssignment]
     access_relations: list[AccessRelation] | None = None
     authentication_posture: AuthenticationPosture | None = None
+    functional_access_models: list[Any] | None = None
 
 
 def import_ad_zip(
