@@ -320,6 +320,10 @@ export const reviewTargetText = (row: Row): { label: string; technical: string }
   }
   return { label: targetText(row.target) || accessName || "—", technical: "" };
 };
+export const reviewDerivedAccessText = (row: Row): string =>
+  Array.isArray(row.derived_accesses)
+    ? row.derived_accesses.map((item: Row) => s(item.display_name, s(item.name))).filter(Boolean).join(", ")
+    : "";
 const contextField = (context: unknown, field: string): Row => {
   const root = (context ?? {}) as Row;
   return ((((root.fields ?? {}) as Row)[field] ?? {}) as Row);
@@ -4104,7 +4108,7 @@ function CampaignDetail() {
               <Sub>{s(r.identity_provider)}</Sub>
             </button>,
             <div><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>{reviewPermissionText(r.permission)}</Sub></div>,
-            <div><strong>{reviewTargetText(r).label}</strong>{reviewTargetText(r).technical ? <Sub>Technical: {reviewTargetText(r).technical}</Sub> : null}</div>,
+            <div><strong>{reviewTargetText(r).label}</strong>{reviewDerivedAccessText(r) ? <Sub>Includes: {reviewDerivedAccessText(r)}</Sub> : null}{reviewTargetText(r).technical ? <Sub>Technical: {reviewTargetText(r).technical}</Sub> : null}</div>,
             <div>{ownerText(r.access_owner ?? r.account_owner)}<Sub>{r.access_owner || r.account_owner ? "Owner of the access/group" : "No owner resolved"}</Sub></div>,
             <div>{ownerText(r.reviewer)}<Sub>{r.reviewer ? "Responsible reviewer" : "No reviewer assigned"}</Sub></div>,
             <Status v={r.decision ?? "pending"} />,

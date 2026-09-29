@@ -142,6 +142,24 @@ def _add_review_provenance(
         effective = evaluations.get(snapshot_id, {}).get(key)
         row["direct"] = bool(effective and effective.get("direct"))
         row["paths"] = list(effective.get("paths", [])) if effective else []
+        derived_accesses: list[dict[str, Any]] = []
+        if effective:
+            for effective_key, candidate in evaluations.get(snapshot_id, {}).items():
+                if (
+                    candidate.get("direct")
+                    or effective_key[:2] != key[:2]
+                    or effective_key == key
+                ):
+                    continue
+                child = snapshot_accesses.get((effective_key[2], effective_key[3]), {})
+                derived_accesses.append({
+                    "provider": effective_key[2],
+                    "name": effective_key[3],
+                    "display_name": child.get("display_name") or effective_key[3],
+                    "permission": child.get("permission"),
+                    "target": child.get("target"),
+                })
+        row["derived_accesses"] = sorted(derived_accesses, key=lambda item: str(item["display_name"]).casefold())
         observed_access = snapshot_accesses.get(snapshot_id, {}).get((key[2], key[3]), {})
         access_id = str(observed_access.get("id") or "")
         campaign_id = str(row.get("campaign_id") or "")

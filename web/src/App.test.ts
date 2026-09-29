@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
+import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {
@@ -40,6 +40,7 @@ describe("Campaign review labels", () => {
     expect(role.label).toBe("eare-crashtest · Role default-roles-eare-crashtest");
     expect(role.technical).toContain("role-id");
     expect(reviewPermissionText({ identifier: "member" })).toBe("Group membership");
+    expect(reviewDerivedAccessText({ derived_accesses: [{ display_name: "view-profile" }, { display_name: "offline_access" }] })).toBe("view-profile, offline_access");
   });
 });
 
