@@ -299,6 +299,27 @@ const ownerText = (v: unknown): string => {
   const owner = v as Row;
   return s(owner.display_name, s(owner.identity, s(owner.identifier, s(owner.username, "Not assigned"))));
 };
+export const reviewPermissionText = (permission: unknown): string => {
+  const value = (permission ?? {}) as Row;
+  if (s(value.identifier).toLowerCase() === "member") return "Group membership";
+  if (s(value.identifier).toLowerCase() === "role") return "Role assignment";
+  return permissionText(permission) || "—";
+};
+export const reviewTargetText = (row: Row): { label: string; technical: string } => {
+  const target = (row.target ?? {}) as Row;
+  const service = (target.service ?? {}) as Row;
+  const component = (target.component ?? {}) as Row;
+  const resource = (target.resource ?? {}) as Row;
+  const provider = s(row.access_provider);
+  const accessName = s(row.access_display_name, s(row.access_name));
+  if (provider === "keycloak-integration" || s(service.identifier).toLowerCase() === "keycloak") {
+    const kind = s(row.permission && (row.permission as Row).identifier).toLowerCase() === "member" ? "Group" : "Role";
+    const realm = s(service.realm, s(component.display_name, s(component.identifier, "Keycloak realm")));
+    const technical = [refText(resource), refText(component), refText(service)].filter(Boolean).join(" · ");
+    return { label: `${realm} · ${kind} ${accessName}`, technical };
+  }
+  return { label: targetText(row.target) || accessName || "—", technical: "" };
+};
 const contextField = (context: unknown, field: string): Row => {
   const root = (context ?? {}) as Row;
   return ((((root.fields ?? {}) as Row)[field] ?? {}) as Row);
@@ -4082,8 +4103,8 @@ function CampaignDetail() {
               {s(r.identity_display_name, s(r.identity_identifier))}
               <Sub>{s(r.identity_provider)}</Sub>
             </button>,
-            <div><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>Permission: {permissionText(r.permission) || "—"}</Sub></div>,
-            targetText(r.target) || "—",
+            <div><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>{reviewPermissionText(r.permission)}</Sub></div>,
+            <div><strong>{reviewTargetText(r).label}</strong>{reviewTargetText(r).technical ? <Sub>Technical: {reviewTargetText(r).technical}</Sub> : null}</div>,
             <div>{ownerText(r.access_owner ?? r.account_owner)}<Sub>{r.access_owner || r.account_owner ? "Owner of the access/group" : "No owner resolved"}</Sub></div>,
             <div>{ownerText(r.reviewer)}<Sub>{r.reviewer ? "Responsible reviewer" : "No reviewer assigned"}</Sub></div>,
             <Status v={r.decision ?? "pending"} />,

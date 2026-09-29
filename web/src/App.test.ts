@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
+import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {
@@ -25,6 +25,21 @@ describe("ActionMenu", () => {
 describe("Campaign date defaults", () => {
   it("formats the local date for date inputs", () => {
     expect(todayDateInputValue(new Date(2026, 8, 29))).toBe("2026-09-29");
+  });
+});
+
+describe("Campaign review labels", () => {
+  it("explains Keycloak role and group targets without hiding technical identifiers", () => {
+    const role = reviewTargetText({
+      access_provider: "keycloak-integration",
+      access_display_name: "default-roles-eare-crashtest",
+      permission: { identifier: "role" },
+      target: { service: { identifier: "Keycloak", realm: "eare-crashtest" }, component: { identifier: "realm" }, resource: { identifier: "role-id" } },
+    });
+    expect(reviewPermissionText({ identifier: "role" })).toBe("Role assignment");
+    expect(role.label).toBe("eare-crashtest · Role default-roles-eare-crashtest");
+    expect(role.technical).toContain("role-id");
+    expect(reviewPermissionText({ identifier: "member" })).toBe("Group membership");
   });
 });
 
