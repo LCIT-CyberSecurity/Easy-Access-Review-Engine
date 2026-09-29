@@ -37,6 +37,7 @@ from access_review_engine.domain import (
     JsonDict,
     ObjectRef,
     OwnerRef,
+    Origin,
     RemediationAction,
     RemediationActionType,
     ReviewItem,
@@ -446,13 +447,56 @@ def compare_snapshot(
 ) -> list[dict[str, object]]:
     identities = {identity_key(identity): identity for identity in snapshot.identities}
     accesses = {access_key(access): access for access in snapshot.accesses}
-    observed_assignments = {assignment.comparison_key(): assignment for assignment in snapshot.access_assignments}
+    observed_assignment_list = list(snapshot.access_assignments)
+    direct_keys = {assignment.comparison_key() for assignment in observed_assignment_list}
+    assignments_by_id = {assignment.id: assignment for assignment in observed_assignment_list}
+    relation_by_id = {relation.id: relation for relation in snapshot.access_relations}
+    effective = calculate_effective_accesses(
+        snapshot.access_assignments,
+        snapshot.access_relations,
+        snapshot.accesses,
+    )
+    for effective_access in effective.effective_accesses:
+        effective_key = (
+            effective_access.access_provider,
+            effective_access.access_name,
+            effective_access.identity_provider,
+            effective_access.identity_identifier,
+        )
+        if effective_access.direct or effective_key in direct_keys or not effective_access.paths:
+            continue
+        path = effective_access.paths[0]
+        source_assignment = assignments_by_id.get(path.assignment_id)
+        composite_path = any(
+            relation_by_id.get(relation_id)
+            and relation_by_id[relation_id].origin.raw.get("composite") is True
+            for relation_id in path.relation_ids
+        )
+        if source_assignment is None or not composite_path:
+            continue
+        observed_assignment_list.append(
+            AccessAssignment(
+                effective_access.access_provider,
+                effective_access.access_name,
+                effective_access.identity_provider,
+                effective_access.identity_identifier,
+                Origin(
+                    source_assignment.origin.assignment_type,
+                    False,
+                    True,
+                    source=f"derived:{source_assignment.id}",
+                    raw={"derived": True, "composite": True},
+                ),
+                id=f"derived:{source_assignment.id}:{effective_access.access_provider}:{effective_access.access_name}",
+            )
+        )
+    observed_assignments = {assignment.comparison_key(): assignment for assignment in observed_assignment_list}
     observed_legacy = set(observed_assignments)
     observed_legacy_aliases: set[tuple[str, str, str, str]] = set()
     observed_legacy_without_stable: set[tuple[str, str, str, str]] = set()
     observed_stable: dict[tuple[str, str, str, str], tuple[str, str, str, str] | None] = {}
     assignment_origins: dict[tuple[str, str, str, str], list[AccessAssignment]] = {}
-    for assignment in snapshot.access_assignments:
+    for assignment in observed_assignment_list:
         legacy_key = assignment.comparison_key()
         assignment_origins.setdefault(legacy_key, []).append(assignment)
         access = accesses.get((assignment.provider, assignment.access_name))

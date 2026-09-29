@@ -237,13 +237,14 @@ def test_campaign_reviews_effective_children_instead_of_composite_parent() -> No
     identity = Identity("keycloak", "alice", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)
     parent = _access("default-roles-demo", OwnerRef("local", "admin"))
     child = _access("invoice-read", OwnerRef("local", "admin"))
+    parent.provider = "keycloak"
+    child.provider = "keycloak"
     assignment = AccessAssignment("keycloak", parent.name, "keycloak", identity.identifier, Origin("role", True, False))
-    child_assignment = AccessAssignment("keycloak", child.name, "keycloak", identity.identifier, Origin("role", True, False))
     relation = AccessRelation(
         "keycloak", parent.name, "keycloak", child.name, AccessRelationType.GRANTS,
         Origin("role", False, True, raw={"composite": True}),
     )
-    snapshot = create_snapshot([], [identity], [], [parent, child], [assignment, child_assignment], ["import-1"], access_relations=[relation])
+    snapshot = create_snapshot([], [identity], [], [parent, child], [assignment], ["import-1"], access_relations=[relation])
 
     _, items = open_campaign(Campaign("composite", snapshot.id, allow_unresolved_reviewers=True), snapshot)
 
