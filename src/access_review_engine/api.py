@@ -2137,6 +2137,8 @@ def create_app(db_path: str | None = None):
         if not allowed["name"] or not isinstance(allowed.get("snapshot_id"), str) or not allowed["snapshot_id"].strip():
             raise HTTPException(status_code=400, detail="Campaign name and snapshot_id are required")
         allowed["snapshot_id"] = allowed["snapshot_id"].strip()
+        if not draft_id and not str(allowed.get("due_at") or "").strip():
+            allowed["due_at"] = time.strftime("%Y-%m-%d")
         try:
             allowed["scope"] = normalize_campaign_scope(allowed.get("scope") or {"type": "all"})
         except CampaignScopeError as exc:

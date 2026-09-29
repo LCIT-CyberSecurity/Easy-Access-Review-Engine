@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, sourceSupportsAttributeMapping, splitPermissions } from "./App";
+import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {
@@ -19,6 +19,12 @@ describe("ActionMenu", () => {
     expect(html).toContain('aria-label="More actions for Alice"');
     expect(html).toContain("Reset password");
     expect(html).toContain("Disable");
+  });
+});
+
+describe("Campaign date defaults", () => {
+  it("formats the local date for date inputs", () => {
+    expect(todayDateInputValue(new Date(2026, 8, 29))).toBe("2026-09-29");
   });
 });
 

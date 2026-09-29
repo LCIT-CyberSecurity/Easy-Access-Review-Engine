@@ -101,6 +101,20 @@ def test_keycloak_v0_normalizes_objects_and_preserves_native_ids(tmp_path: Path)
         )
         == 2
     )
+    crm_admin = next(
+        item
+        for item in result.accesses
+        if item.control_object and item.control_object.native_id == "cr-crm-admin"
+    )
+    assert crm_admin.target is not None
+    assert crm_admin.target.component == {
+        "identifier": "c-crm",
+        "display_name": "CRM",
+    }
+    assert crm_admin.target.resource == {
+        "identifier": "cr-crm-admin",
+        "display_name": "admin",
+    }
 
 
 def test_keycloak_v0_effective_access_keeps_direct_and_inherited_paths(tmp_path: Path) -> None:
@@ -245,7 +259,10 @@ def test_service_account_can_be_standalone_and_client_target_is_human_readable(
     crm_admin = next(
         item for item in result.accesses if item.name == "client:c-crm:role:cr-crm-admin"
     )
-    assert crm_admin.target.component == {"identifier": "c-crm"}
+    assert crm_admin.target.component == {
+        "identifier": "c-crm",
+        "display_name": "CRM",
+    }
     assert crm_admin.control_object.metadata["client_display_name"] == "CRM"
 
 

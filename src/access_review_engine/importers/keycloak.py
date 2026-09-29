@@ -575,11 +575,15 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
                 component=(
                     {
                         "identifier": client_id,
+                        "display_name": _text(client or {}, "name", "clientId") or client_id,
                     }
                     if client_id
-                    else {"identifier": "realm"}
+                    else {"identifier": "realm", "display_name": realm}
                 ),
-                resource={"identifier": resource_identifier or native_id},
+                resource={
+                    "identifier": resource_identifier or native_id,
+                    "display_name": display_name,
+                },
             ),
             display_name=display_name,
         )

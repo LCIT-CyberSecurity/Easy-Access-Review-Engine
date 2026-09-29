@@ -15,6 +15,7 @@ from access_review_engine.domain import (
     GoldenSourceVersion,
     Identity,
     ProviderType,
+    target_semantically_equal,
 )
 from access_review_engine.importers.ad import ImportResult, import_ad_zip
 from access_review_engine.importers.gcp_iam import import_gcp_iam_zip
@@ -473,7 +474,7 @@ def _access_definitions_conflict(existing: Access, incoming: Access) -> bool:
     return (
         existing_target is not None
         and incoming_target is not None
-        and existing_target != incoming_target
+        and not target_semantically_equal(existing.target, incoming.target)
     ) or (
         existing_permission is not None
         and incoming_permission is not None

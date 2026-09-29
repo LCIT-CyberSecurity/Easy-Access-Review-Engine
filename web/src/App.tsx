@@ -90,6 +90,12 @@ const s = (v: unknown, f = "—") =>
 const ui = (key: string, options?: Record<string, string | number>) => String(i18n.t(key, options as never));
 const count = (rows: Row[], keep: (row: Row) => boolean) => rows.filter(keep).length;
 const DEFAULT_GOLDEN_CAPABILITIES = ["read", "write", "delete", "execute", "approve", "admin", "grant"];
+export const todayDateInputValue = (value = new Date()): string => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 /** A business permission may combine several rights ("read, write, execute"); it is stored as one list. */
 export const splitPermissions = (value: unknown): string[] =>
   Array.from(new Set(s(value, "").split(/[,;|]/).map((part) => part.trim()).filter(Boolean)));
@@ -286,6 +292,12 @@ const targetText = (v: unknown): string => {
   return [refText(target.resource), refText(target.component), refText(target.service)]
     .filter(Boolean)
     .join(" · ");
+};
+const ownerText = (v: unknown): string => {
+  if (!v) return "Not assigned";
+  if (typeof v === "string") return v;
+  const owner = v as Row;
+  return s(owner.display_name, s(owner.identity, s(owner.identifier, s(owner.username, "Not assigned"))));
 };
 const contextField = (context: unknown, field: string): Row => {
   const root = (context ?? {}) as Row;
@@ -3372,7 +3384,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
       pilot: principal.username,
       snapshot_id: "",
       golden_source_version_id: "",
-      due_at: "",
+      due_at: todayDateInputValue(),
       scope_type: "all",
     }),
     accessQuery = useQuery({
@@ -3716,6 +3728,7 @@ function CampaignDetail() {
       },
     },
     [confirmAction, setConfirmAction] = useState<string | null>(null),
+    [reviewView, setReviewView] = useState("pending"),
     toast = useToast(),
     m = useMutation({
       mutationFn: (a: string) => postJson("campaigns/" + id + "/" + a),
@@ -3825,6 +3838,12 @@ function CampaignDetail() {
       }),
     unexpectedCount = reviews.filter((row) => row.classification === "unexpected").length,
     revokedCount = reviews.filter((row) => row.decision === "revoke").length,
+    decided = reviews.filter((row) => Boolean(row.decision)),
+    visibleReviews = reviewView === "pending"
+      ? reviews.filter((row) => !row.decision)
+      : reviewView === "decided"
+        ? decided
+        : reviews,
     status = s(c?.status),
     pending = Number(c?.pending ?? reviews.filter((r) => !r.decision).length),
     ctas = campaignCtas(status, pending);
@@ -4042,18 +4061,36 @@ function CampaignDetail() {
               ])}
             />
           </section>
+          <div className="metrics">
+            <div className="metric metric-alert"><div className="metric-label">To review</div><strong>{pending}</strong><small>Only pending access reviews</small></div>
+            <div className="metric"><div className="metric-label">Processed</div><strong>{decided.length}</strong><small>Decision already recorded</small></div>
+            <div className="metric"><div className="metric-label">Progress</div><strong>{reviews.length ? Math.round((decided.length / reviews.length) * 100) : 100}%</strong><small>{decided.length} of {reviews.length} reviews processed</small></div>
+          </div>
+          <section className="panel">
+            <div className="panel-title">
+              <div><h2>Review queue</h2><span className="muted">Pending reviews are shown first.</span></div>
+              <div className="button-row">
+                {[["pending", `To review (${pending})`], ["all", `All (${reviews.length})`], ["decided", `Processed (${decided.length})`]].map(([value, label]) => (
+                  <button className={reviewView === value ? "button primary" : "button subtle"} key={value} onClick={() => setReviewView(value)}>{label}</button>
+                ))}
+              </div>
+            </div>
           <Table
-          cols={["Identity", "Access", "Classification", "Decision", "Decide"]}
-          rows={reviews.map((r) => [
+          cols={["Identity", "Access / permission", "Target", "Group/access owner", "Reviewer", "Status", "Action"]}
+          rows={visibleReviews.map((r) => [
             <button className="link-button" onClick={() => setSelected(r)}>
               {s(r.identity_display_name, s(r.identity_identifier))}
+              <Sub>{s(r.identity_provider)}</Sub>
             </button>,
-            s(r.access_display_name, s(r.access_name)),
-            <Status v={r.classification} />,
+            <div><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>Permission: {permissionText(r.permission) || "—"}</Sub></div>,
+            targetText(r.target) || "—",
+            <div>{ownerText(r.access_owner ?? r.account_owner)}<Sub>{r.access_owner || r.account_owner ? "Owner of the access/group" : "No owner resolved"}</Sub></div>,
+            <div>{ownerText(r.reviewer)}<Sub>{r.reviewer ? "Responsible reviewer" : "No reviewer assigned"}</Sub></div>,
             <Status v={r.decision ?? "pending"} />,
-            <RowDecision item={r} done={() => q.refetch()} />,
+            r.decision ? <span className="muted">Decision recorded</span> : <RowDecision item={r} done={() => q.refetch()} />,
           ])}
         />
+          </section>
         </>
       )}{" "}
       {tab === "findings" && (
