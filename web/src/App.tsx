@@ -293,6 +293,17 @@ const targetText = (v: unknown): string => {
     .filter(Boolean)
     .join(" · ");
 };
+export const keycloakApplicationText = (row: Row): string => {
+  const target = (row.target ?? {}) as Row;
+  const service = (target.service ?? {}) as Row;
+  const component = (target.component ?? {}) as Row;
+  const provider = s(row.access_provider).toLowerCase();
+  if (provider !== "keycloak-integration" && s(service.identifier).toLowerCase() !== "keycloak") return "";
+  if (s(component.identifier).toLowerCase() !== "realm") {
+    return s(component.display_name, s(component.identifier, ""));
+  }
+  return [s(service.identifier, "Keycloak"), s(service.realm)].filter(Boolean).join(" · ");
+};
 const ownerText = (v: unknown): string => {
   if (!v) return "Not assigned";
   if (typeof v === "string") return v;
@@ -4940,7 +4951,7 @@ function Golden() {
                   const service = (target.service ?? {}) as Row;
                   const technicalPermission = s(r.access_permission, "").toLowerCase();
                   const accessLabel = s(r.access_display_name, s(r.access_name));
-                  const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || (s(r.access_provider) === "keycloak-integration" ? [s(service.identifier, "Keycloak"), s(service.realm)].filter(Boolean).join(" · ") : "");
+                  const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || keycloakApplicationText(r);
                   const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
                   const permissionLabel = businessPermission
                     ? joinPermissions(splitPermissions(businessPermission))

@@ -547,6 +547,7 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
         client_id: str | None = None,
         client: dict[str, Any] | None = None,
         resource_identifier: str | None = None,
+        description: str | None = None,
     ) -> None:
         if name in access_by_key:
             return
@@ -586,6 +587,7 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
                 },
             ),
             display_name=display_name,
+            description=description,
         )
         accesses.append(access_by_key[name])
 
@@ -596,6 +598,7 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
             group_id,
             "keycloak_group",
             _text(row, "name") or group_id,
+            description=_text(row, "description") or None,
         )
     role_access: dict[tuple[str, str, str], str] = {}
     for row in realm_roles + client_roles:
@@ -621,6 +624,7 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
             label,
             client_id or None,
             clients_by_id.get(client_id) if client_id else None,
+            description=_text(row, "description") or None,
         )
         role_access[(kind, role_id, client_id)] = name
 
