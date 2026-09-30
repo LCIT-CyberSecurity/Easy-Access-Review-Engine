@@ -3331,7 +3331,9 @@ function CampaignWorkflow({ status, pending }: { status: string; pending: number
       </div>
       <p className="muted workflow-note">
         {status === "draft" ? "Prepare the scope, observed state, expected state and reviewers before opening." : null}
-        {status === "open" ? "Reviewers certify access rights. Close the campaign when every review is decided." : null}
+        {status === "open" ? (pending === 0
+          ? "All reviews are decided. Close the campaign to freeze the result."
+          : "Reviewers certify access rights. Close the campaign when every review is decided.") : null}
         {status === "closed" ? "The result is frozen. Remediation actions and the final report are now available." : null}
       </p>
     </section>
@@ -3926,7 +3928,7 @@ function CampaignDetail() {
               <NavLink className="button subtle" key={action} to={target}>{labels[action]}</NavLink>
             ) : (
               <button
-                className={action === "open" ? "button primary" : "button subtle"}
+                className={action === "open" || action === "close" ? "button primary" : "button subtle"}
                 key={action}
                 disabled={action === "close-disabled"}
                 title={action === "close-disabled" ? `${pending} reviews still need a decision` : undefined}
@@ -3939,6 +3941,18 @@ function CampaignDetail() {
         </div>
       </Head>
       <CampaignWorkflow status={status} pending={pending} />
+      {status === "open" && pending === 0 ? (
+        <section className="campaign-close-prompt" role="status" aria-live="polite">
+          <div>
+            <span className="eyebrow">Review complete</span>
+            <h2>All reviews are finished</h2>
+            <p>Every access review has a decision. Close the campaign to freeze the result and create any remediation actions.</p>
+          </div>
+          <button className="button primary" type="button" onClick={() => setConfirmAction("close")}>
+            Close campaign
+          </button>
+        </section>
+      ) : null}
       <div className="tabs">
         <button
           className={tab === "overview" ? "text-button active" : "text-button"}
