@@ -86,6 +86,21 @@ The reviewer-facing model has three possible completeness states:
   permissions, policies, relationships and source evidence remain available;
   this does not mean that the access has no rights.
 
+Collection completeness and semantic completeness are separate. A `full`
+collection can legitimately produce a `partial` or `not_defined` functional
+model. During resolution EARE also considers the Resource Server enforcement
+mode and decision strategies. `ENFORCING` is required for a complete claim;
+`PERMISSIVE` and `DISABLED` configurations downgrade the model because the
+collected permissions may not describe every effective decision. Permissions
+overlapping the same Resource + Scope are analysed together, so an unresolved
+policy on that pair prevents an unjustified `complete` result.
+
+A resource-based permission with no scope is retained as native evidence but
+does not invent a `read` (or any other) Capability. Multi-policy, multi-role
+and aggregate policies retain their referenced native role IDs and downgrade
+the affected Access when the relationship cannot be proven statically. EARE
+does not execute the Keycloak PDP, runtime context rules or JavaScript policies.
+
 Role names, resource names and scope names are never used as authorization
 rules. Native IDs are preferred for role-policy matching, so equal display
 names in separate clients do not collide. Positive single-role RBAC policies

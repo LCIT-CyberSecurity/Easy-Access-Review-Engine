@@ -1,9 +1,11 @@
 from access_review_engine.domain import (
     Access,
+    AccessRelation,
     Capability,
     ExpectedAccessModel,
     FunctionalModelCompleteness,
     FunctionalRight,
+    Origin,
     Provenance,
     Target,
 )
@@ -55,4 +57,63 @@ def test_functional_context_explains_model_without_statical_rights() -> None:
 
     assert context["functional_rights"] == []
     assert context["functional_completeness"] == "not_defined"
-    assert "dynamic or conditional" in context["functional_explanation"]
+    assert "cannot be fully determined statically" in context["functional_explanation"]
+
+
+def test_functional_context_aggregates_complete_and_partial_children_as_partial() -> None:
+    root = Access("root", "keycloak")
+    complete = Access("complete", "keycloak")
+    partial = Access("partial", "keycloak")
+    relations = [
+        AccessRelation(
+            "keycloak", "root", "keycloak", "complete", "grants", Origin("test", True, False)
+        ),
+        AccessRelation(
+            "keycloak", "root", "keycloak", "partial", "grants", Origin("test", True, False)
+        ),
+    ]
+    models = [
+        ExpectedAccessModel("keycloak", "complete", "complete", ()),
+        ExpectedAccessModel("keycloak", "partial", "partial", ()),
+    ]
+
+    context = functional_context(root, [root, complete, partial], relations, models)
+
+    assert context["functional_completeness"] == "partial"
+    assert "conditional" in context["functional_explanation"]
+
+
+def test_functional_context_aggregates_complete_and_not_defined_as_partial() -> None:
+    root = Access("root", "keycloak")
+    complete = Access("complete", "keycloak")
+    unknown = Access("unknown", "keycloak")
+    relations = [
+        AccessRelation(
+            "keycloak", "root", "keycloak", "complete", "grants", Origin("test", True, False)
+        ),
+        AccessRelation(
+            "keycloak", "root", "keycloak", "unknown", "grants", Origin("test", True, False)
+        ),
+    ]
+    models = [
+        ExpectedAccessModel("keycloak", "complete", "complete", ()),
+        ExpectedAccessModel("keycloak", "unknown", "not_defined", ()),
+    ]
+
+    context = functional_context(root, [root, complete, unknown], relations, models)
+
+    assert context["functional_completeness"] == "partial"
+
+
+def test_functional_context_only_not_defined_explains_existing_unknown_configuration() -> None:
+    root = Access("root", "keycloak")
+    child = Access("child", "keycloak")
+    relation = AccessRelation(
+        "keycloak", "root", "keycloak", "child", "grants", Origin("test", True, False)
+    )
+    model = ExpectedAccessModel("keycloak", "child", "not_defined", ())
+
+    context = functional_context(root, [root, child], [relation], [model])
+
+    assert context["functional_completeness"] == "not_defined"
+    assert "configuration exists" in context["functional_explanation"]

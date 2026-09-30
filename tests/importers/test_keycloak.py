@@ -535,6 +535,98 @@ def test_keycloak_v3_resolves_arbitrary_role_resource_and_scope_names(tmp_path: 
     assert any(capability.label == "perform_operation_xyz" for capability in result.capabilities)
 
 
+def test_keycloak_v3_resource_server_permissive_downgrades_without_discarding_safe_rights(
+    tmp_path: Path,
+) -> None:
+    artifact = _v2_artifact(tmp_path)
+    rows = [
+        {**row, "policyEnforcementMode": "PERMISSIVE"}
+        for row in _rows_from_zip(artifact, "authorization-resource-servers.jsonl")
+        if row.get("client_uuid") == "c-erp"
+    ]
+    result = import_keycloak_zip(
+        _replace_zip_rows(
+            tmp_path,
+            artifact,
+            {"authorization-resource-servers.jsonl": rows},
+            "permissive",
+        )
+    )
+    model = next(
+        item
+        for item in result.functional_access_models
+        if item.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert model.completeness == "partial"
+    assert model.rights
+
+
+def test_keycloak_v3_resource_permission_without_scope_has_no_invented_capability(
+    tmp_path: Path,
+) -> None:
+    artifact = _v2_artifact(tmp_path)
+    permissions = _rows_from_zip(artifact, "authorization-permissions.jsonl")
+    permissions.append(
+        {
+            "id": "permission-resource-only",
+            "client_uuid": "c-erp",
+            "clientId": "erp",
+            "name": "Invoices resource only",
+            "type": "resource",
+            "resourceIds": ["resource-invoices"],
+            "scopes": [],
+            "policies": ["policy-erp-read"],
+        }
+    )
+    result = import_keycloak_zip(
+        _replace_zip_rows(
+            tmp_path,
+            artifact,
+            {"authorization-permissions.jsonl": permissions},
+            "resource-only",
+        )
+    )
+    model = next(
+        item
+        for item in result.functional_access_models
+        if item.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert model.completeness == "partial"
+    assert not any(
+        right.native_permission.endswith("permission-resource-only") for right in model.rights
+    )
+    assert any(
+        item["permission_id"] == "permission-resource-only"
+        for item in result.batch.scope["authorization_complex_permissions"]
+    )
+
+
+def _rows_from_zip(path: Path, filename: str) -> list[dict]:
+    with ZipFile(path) as archive:
+        return [
+            json.loads(line)
+            for line in archive.read(filename).decode().splitlines()
+            if line
+        ]
+
+
+def _replace_zip_rows(
+    tmp_path: Path,
+    source: Path,
+    replacements: dict[str, list[dict]],
+    name: str,
+) -> Path:
+    output = tmp_path / f"{name}.zip"
+    with ZipFile(source) as source_zip, ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for info in source_zip.infolist():
+            if info.filename in replacements:
+                continue
+            target.writestr(info, source_zip.read(info.filename))
+        for filename, rows in replacements.items():
+            target.writestr(filename, "".join(json.dumps(row) + "\n" for row in rows))
+    return output
+
+
 def test_keycloak_v1_artifact_without_authz_remains_unchanged(tmp_path: Path) -> None:
     result = import_keycloak_zip(_artifact(tmp_path))
     assert result.batch.completeness == "full"

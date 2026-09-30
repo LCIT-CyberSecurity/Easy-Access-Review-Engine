@@ -340,7 +340,7 @@ export const functionalRightsText = (row: Row): string => {
   if (!rights.length) {
     return (typeof row.functional_explanation === "string" && row.functional_explanation) || (s(row.functional_completeness) === "partial"
       ? "Functional model partial — dynamic/complex policy not statically resolved"
-      : "Functional permissions not exposed by Keycloak");
+      : "Functional permissions not exposed by the source.");
   }
   const grouped = new Map<string, Set<string>>();
   for (const right of rights) {
@@ -2972,11 +2972,15 @@ function ReviewDrawer({
     what = s(item.access_display_name, s(item.access_name)),
     latest = (item.latest_decision ?? null) as Row | null,
     functionalRights = arr(item.functional_rights),
-    evidence = (functionalRights.find((right) => right.source_evidence)?.source_evidence ?? item.source_evidence ?? {}) as Row,
-    evidenceScopes = functionalRights
-      .map((right) => s((right.source_evidence as Row | undefined)?.scope_name))
-      .filter(Boolean)
-      .filter((value, index, values) => values.indexOf(value) === index);
+    evidenceGroups = [...functionalRights.reduce((groups, right) => {
+      const rightEvidence = (right.source_evidence as Row | undefined) ?? {};
+      const key = `${s(right.resource, "resource")}\0${s(rightEvidence.permission_id, "permission")}`;
+      const group = groups.get(key) ?? { rights: [], evidence: rightEvidence };
+      group.rights.push(right);
+      groups.set(key, group);
+      return groups;
+    }, new Map<string, { rights: Row[]; evidence: Row }>()).values()],
+    evidence = (item.source_evidence ?? {}) as Row;
   return (
     <Drawer title={who} close={close}>
       <section className="drawer-section">
@@ -2998,20 +3002,29 @@ function ReviewDrawer({
         {s(item.functional_completeness) === "partial" && functionalRights.length ? (
           <p className="muted">Some permissions depend on conditional or dynamic authorization rules.</p>
         ) : null}
-        {Object.keys(evidence).length ? (
+        {evidenceGroups.length ? evidenceGroups.map((group) => {
+          const groupEvidence = group.evidence;
+          const groupScopes = group.rights.map((right) => s((right.source_evidence as Row | undefined)?.scope_name)).filter(Boolean).filter((value, index, values) => values.indexOf(value) === index);
+          return (
+          <details className="functional-evidence">
+            <summary>{s(group.rights[0].resource, "Resource")} — technical authorization evidence</summary>
+            <dl>
+              {groupEvidence.client_id ? <><dt>Application client</dt><dd>{s(groupEvidence.client_id)}</dd></> : null}
+              {groupEvidence.permission_name ? <><dt>Permission</dt><dd>{s(groupEvidence.permission_name)}</dd></> : null}
+              {groupEvidence.policy_name ? <><dt>Policy</dt><dd>{s(groupEvidence.policy_name)}</dd></> : null}
+              {groupEvidence.resource_name ? <><dt>Resource</dt><dd>{s(groupEvidence.resource_name)}</dd></> : null}
+              {groupScopes.length ? <><dt>Scopes</dt><dd>{groupScopes.join(", ")}</dd></> : null}
+              {groupEvidence.permission_decision_strategy ? <><dt>Decision strategy</dt><dd>{s(groupEvidence.permission_decision_strategy)}</dd></> : null}
+            </dl>
+            {arr(groupEvidence.complex_permissions).length ? (
+              <p className="muted">Complex or dynamic permissions preserved: {arr(groupEvidence.complex_permissions).map((permission) => s(permission.name, s(permission.permission_id))).join(", ")}</p>
+            ) : null}
+          </details>
+          );
+        }) : Object.keys(evidence).length ? (
           <details className="functional-evidence">
             <summary>Technical authorization evidence</summary>
-            <dl>
-              {evidence.client_id ? <><dt>Application client</dt><dd>{s(evidence.client_id)}</dd></> : null}
-              {evidence.permission_name ? <><dt>Permission</dt><dd>{s(evidence.permission_name)}</dd></> : null}
-              {evidence.policy_name ? <><dt>Policy</dt><dd>{s(evidence.policy_name)}</dd></> : null}
-              {evidence.resource_name ? <><dt>Resource</dt><dd>{s(evidence.resource_name)}</dd></> : null}
-              {evidenceScopes.length ? <><dt>Scopes</dt><dd>{evidenceScopes.join(", ")}</dd></> : null}
-              {evidence.permission_decision_strategy ? <><dt>Decision strategy</dt><dd>{s(evidence.permission_decision_strategy)}</dd></> : null}
-            </dl>
-            {arr(evidence.complex_permissions).length ? (
-              <p className="muted">Complex or dynamic permissions preserved: {arr(evidence.complex_permissions).map((permission) => s(permission.name, s(permission.permission_id))).join(", ")}</p>
-            ) : null}
+            <p className="muted">Authorization evidence is available at source level.</p>
           </details>
         ) : null}
       </section>

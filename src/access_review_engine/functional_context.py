@@ -77,7 +77,7 @@ def functional_context(
     grants: list[dict[str, Any]] = []
     rights: dict[tuple[str, str, str], dict[str, Any]] = {}
     applications: set[str] = set()
-    completeness = "not_defined"
+    completeness_states: set[str] = set()
     model_seen = False
     while queue:
         key, depth, path = queue.popleft()
@@ -109,10 +109,7 @@ def functional_context(
         model = by_model.get(key)
         if model:
             model_seen = True
-            if model.completeness == "partial":
-                completeness = "partial"
-            elif model.completeness == "complete" and completeness == "not_defined":
-                completeness = "complete"
+            completeness_states.add(str(model.completeness))
             for right in model.rights:
                 target = right.target
                 resource = _label(target.resource)
@@ -145,13 +142,27 @@ def functional_context(
                     seen.add(child)
                     queue.append((child, depth + 1, (*path, child)))
     business_apps = {name for name in applications if not name.startswith("Keycloak realm ")}
+    if not model_seen:
+        completeness = "not_defined"
+    elif completeness_states == {"complete"}:
+        completeness = "complete"
+    elif completeness_states == {"not_defined"}:
+        completeness = "not_defined"
+    else:
+        # A complete child does not make a graph complete when another child
+        # has conditional/unknown authorization semantics.
+        completeness = "partial"
     explanation = ""
     if completeness == "not_defined":
         explanation = (
-            "Authorization rights depend on dynamic or conditional policies and cannot be "
-            "fully determined from the collected configuration."
+            "Authorization configuration exists, but the resulting rights cannot be fully "
+            "determined statically."
             if model_seen
             else "Functional permissions are not exposed by the source."
+        )
+    elif completeness == "partial":
+        explanation = (
+            "Some permissions depend on conditional, combined or dynamic authorization rules."
         )
     return {
         "application": ", ".join(sorted(business_apps or applications)),

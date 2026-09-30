@@ -368,6 +368,11 @@ def _authorization_models(
         for row in records["authorization-policies.jsonl"]
         if _text(row, "id")
     }
+    resource_servers = {
+        _text(row, "client_uuid", "clientId"): row
+        for row in records.get("authorization-resource-servers.jsonl", [])
+        if _text(row, "client_uuid", "clientId")
+    }
     system_capabilities = {item.id: item for item in SYSTEM_CAPABILITIES}
     capabilities: dict[str, Capability] = {}
     mappings: dict[tuple[str, str], PermissionCapabilityMapping] = {}
@@ -422,16 +427,75 @@ def _authorization_models(
         )
         return set().union(*(related_roles(client_uuid, ref, seen) for ref in references))
 
+    def referenced_roles(
+        client_uuid: str,
+        policy_id: str,
+        visited: set[str] | None = None,
+    ) -> set[str]:
+        """Return all native role references without claiming a grant is resolved."""
+        seen = visited or set()
+        if policy_id in seen or len(seen) >= 8:
+            return set()
+        seen = seen | {policy_id}
+        policy = policies.get((client_uuid, policy_id), {})
+        config = policy.get("config", {})
+        if isinstance(config, str):
+            try:
+                config = json.loads(config)
+            except json.JSONDecodeError:
+                config = {}
+        roles = config.get("roles", []) if isinstance(config, dict) else []
+        if isinstance(roles, str):
+            try:
+                roles = json.loads(roles)
+            except json.JSONDecodeError:
+                roles = []
+        result = {
+            (_text(role, "id", "roleId") if isinstance(role, dict) else str(role).strip())
+            for role in (roles if isinstance(roles, list) else [])
+            if (_text(role, "id", "roleId") if isinstance(role, dict) else str(role).strip())
+        }
+        references = _authorization_refs(policy.get("policies")) or _authorization_refs(
+            config.get("policies") if isinstance(config, dict) else None
+        )
+        for reference in references:
+            result.update(referenced_roles(client_uuid, reference, seen))
+        return result
+
+    permission_entries: list[tuple[dict[str, Any], str, list[str], list[str], list[str]]] = []
+    overlapping_complex: set[tuple[str, str]] = set()
     for permission in records["authorization-permissions.jsonl"]:
         client_uuid = _text(permission, "client_uuid", "clientId")
-        client = clients_by_id.get(client_uuid, {})
-        policies_for_permission = _authorization_refs(
-            permission.get("policies", permission.get("policyIds"))
-        )
+        policy_refs = _authorization_refs(permission.get("policies", permission.get("policyIds")))
         resource_refs = _authorization_refs(
             permission.get("resources", permission.get("resourceIds"))
         )
         scope_refs = _authorization_refs(permission.get("scopes", permission.get("scopeIds")))
+        strict_policy = (
+            policies.get((client_uuid, policy_refs[0])) if len(policy_refs) == 1 else None
+        )
+        strict_role = _role_policy_role(strict_policy or {}) if strict_policy else None
+        complex_permission = (
+            strict_role is None
+            or not resource_refs
+            or not scope_refs
+            or _text(resource_servers.get(client_uuid, {}), "policyEnforcementMode").upper()
+            not in {"", "ENFORCING"}
+        )
+        if complex_permission:
+            for resource_ref in resource_refs:
+                for scope_ref in scope_refs:
+                    overlapping_complex.add((client_uuid, resource_ref + "\0" + scope_ref))
+        permission_entries.append((permission, client_uuid, policy_refs, resource_refs, scope_refs))
+
+    for (
+        permission,
+        client_uuid,
+        policies_for_permission,
+        resource_refs,
+        scope_refs,
+    ) in permission_entries:
+        client = clients_by_id.get(client_uuid, {})
         policy = (
             policies.get((client_uuid, policies_for_permission[0]))
             if len(policies_for_permission) == 1
@@ -439,14 +503,20 @@ def _authorization_models(
         )
         role_ref = _role_policy_role(policy or {}) if policy else None
         if role_ref is None:
-            for policy_id in policies_for_permission:
-                for related_role in related_roles(client_uuid, policy_id):
-                    for key, name in role_access.items():
-                        if key[1] == related_role and key[2] in {"", client_uuid}:
-                            state = state_by_access.setdefault(
-                                name, {"complex": False, "seen": False}
-                            )
-                            state["complex"] = True
+            referenced = set().union(
+                *(referenced_roles(client_uuid, policy_id) for policy_id in policies_for_permission)
+            )
+            referenced.update(
+                related
+                for policy_id in policies_for_permission
+                for related in related_roles(client_uuid, policy_id)
+            )
+            for related_role in referenced:
+                for key, name in role_access.items():
+                    if key[1] == related_role and key[2] in {"", client_uuid}:
+                        state = state_by_access.setdefault(name, {"complex": False, "seen": False})
+                        state["complex"] = True
+                        state["seen"] = True
             continue
         role_key = next(
             (key for key in role_access if key[1] == role_ref and key[2] in {"", client_uuid}),
@@ -465,6 +535,11 @@ def _authorization_models(
         if not resource_refs or not scope_refs:
             state["complex"] = True
             continue
+        if _text(resource_servers.get(client_uuid, {}), "policyEnforcementMode").upper() not in {
+            "",
+            "ENFORCING",
+        }:
+            state["complex"] = True
         for resource_ref in resource_refs:
             resource = resources.get((client_uuid, resource_ref))
             if resource is None:
@@ -473,9 +548,14 @@ def _authorization_models(
             for scope_ref in scope_refs:
                 scope = scopes.get((client_uuid, scope_ref))
                 capability_mapping = scope_capabilities.get((client_uuid, scope_ref))
-                if scope is None or capability_mapping is None:
+                if (
+                    scope is None
+                    or capability_mapping is None
+                    or (client_uuid, resource_ref + "\0" + scope_ref) in overlapping_complex
+                ):
                     state["complex"] = True
-                    continue
+                    if scope is None or capability_mapping is None:
+                        continue
                 capability_id, native_permission = capability_mapping
                 policy_id = policies_for_permission[0]
                 authorization_metadata = {
@@ -555,7 +635,16 @@ def _complex_authorization_permissions(
         client_uuid = _text(permission, "client_uuid", "clientId")
         policy_refs = _authorization_refs(permission.get("policies", permission.get("policyIds")))
         policy = policies.get((client_uuid, policy_refs[0])) if len(policy_refs) == 1 else None
-        if policy is not None and _role_policy_role(policy) is not None:
+        resource_ids = _authorization_refs(
+            permission.get("resources", permission.get("resourceIds"))
+        )
+        scope_ids = _authorization_refs(permission.get("scopes", permission.get("scopeIds")))
+        if (
+            policy is not None
+            and _role_policy_role(policy) is not None
+            and resource_ids
+            and scope_ids
+        ):
             continue
         result.append(
             {
@@ -564,12 +653,8 @@ def _complex_authorization_permissions(
                 "permission_id": _text(permission, "id"),
                 "name": _text(permission, "name"),
                 "type": _text(permission, "type"),
-                "resource_ids": _authorization_refs(
-                    permission.get("resources", permission.get("resourceIds"))
-                ),
-                "scope_ids": _authorization_refs(
-                    permission.get("scopes", permission.get("scopeIds"))
-                ),
+                "resource_ids": resource_ids,
+                "scope_ids": scope_ids,
                 "policy_ids": policy_refs,
                 "decision_strategy": _text(
                     permission, "decisionStrategy", "decision_strategy"

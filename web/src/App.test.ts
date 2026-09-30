@@ -39,7 +39,7 @@ describe("Campaign review labels", () => {
       ],
     })).toBe("Invoices · Read, Approve; Suppliers · Read");
     expect(functionalRightsText({ application: "CRM", access_display_name: "CRM-Sales", functional_rights: [] }))
-      .toBe("Functional permissions not exposed by Keycloak");
+      .toBe("Functional permissions not exposed by the source.");
     expect(functionalRightsText({
       functional_rights: [],
       functional_completeness: "not_defined",
