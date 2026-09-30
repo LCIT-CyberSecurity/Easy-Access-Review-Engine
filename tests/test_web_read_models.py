@@ -254,6 +254,7 @@ def test_review_provenance_uses_campaign_snapshot_access_paths(tmp_path):
     assert rows["direct"]["direct"] is True
     assert rows["effective"]["direct"] is False
     assert [step["identifier"] for step in rows["effective"]["paths"][0]["access_chain"]] == ["crm-support", "application-users"]
+    assert rows["direct"]["derived_accesses"][0]["display_name"] == "application-users"
 
 
 def test_campaign_aggregates_include_more_than_five_hundred_reviews(tmp_path):

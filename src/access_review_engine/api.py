@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from contextlib import asynccontextmanager
 import base64
 import csv
 import difflib
-import unicodedata
 import hashlib
 import hmac
 import io
@@ -16,9 +13,13 @@ import sqlite3
 import tempfile
 import threading
 import time
-import yaml
+import unicodedata
+from contextlib import asynccontextmanager
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 try:
     from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
@@ -30,56 +31,160 @@ except ModuleNotFoundError:  # pragma: no cover
     Body = Depends = Request = Response = HTTPException = HTMLResponse = StreamingResponse = None  # type: ignore[assignment,misc]
     get_swagger_ui_html = HTTPAuthorizationCredentials = HTTPBearer = None  # type: ignore[assignment,misc]
 
+from access_review_engine.access_context import (
+    access_context_for_payload,
+    access_enrichment,
+    capture_campaign_access_contexts,
+    save_access_enrichment,
+    split_multi_value,
+)
 from access_review_engine.application import import_file_to_repository
-from access_review_engine.access_context import access_context_for_payload, access_enrichment, capture_campaign_access_contexts, save_access_enrichment, split_multi_value
-from access_review_engine.campaign_authorization import CampaignScopeError, campaign_required_providers, can_access_campaign, normalize_campaign_scope
 from access_review_engine.authentication import compare_authentication_posture
+from access_review_engine.campaign_authorization import (
+    CampaignScopeError,
+    campaign_required_providers,
+    can_access_campaign,
+    normalize_campaign_scope,
+)
 from access_review_engine.collector_runner import RunnerError, run_exporter
-from access_review_engine.config_loader import connector_path, load_connector, secret_environment, validate_connector
+from access_review_engine.config_loader import (
+    connector_path,
+    load_connector,
+    secret_environment,
+    validate_connector,
+)
 from access_review_engine.connector_capabilities import connector_capabilities
+from access_review_engine.directory_auth import (
+    DirectoryError,
+    test_directory,
+    validate_directory,
+)
+from access_review_engine.directory_auth import (
+    authenticate as directory_authenticate,
+)
+from access_review_engine.directory_auth import (
+    search_accounts as directory_accounts,
+)
 from access_review_engine.domain import (
-    Access,
-    AccessAssignment,
-    ControlObject,
-    Completeness,
-    AccessRelation,
-    AccessRelationType,
+    Campaign,
     Capability,
-    ExpectedAccessModel,
-    FunctionalModelCompleteness,
-    FunctionalRight,
+    Completeness,
     GoldenAccessComment,
-    Origin,
     OwnerRef,
     PermissionCapabilityMapping,
     Provenance,
-    Target,
     now_utc,
-    normalize_manual_target_node,
-    target_path,
 )
-from access_review_engine.golden_annotations import annotation_for_assignment, copy_assignment_annotations, normalize_assignment_comment, set_assignment_annotation
+from access_review_engine.golden_annotations import (
+    annotation_for_assignment,
+    copy_assignment_annotations,
+    normalize_assignment_comment,
+    set_assignment_annotation,
+)
 from access_review_engine.guidance import GuidanceContext, build_guidance
-from access_review_engine.reporting import access_names_from_snapshot, build_report_rows, identity_names_from_snapshot, render_pdf_report, report_summary, write_reports
 from access_review_engine.mcp_server import build_mcp_asgi
-from access_review_engine.services import audit, calculate_effective_accesses, close_campaign, compare_snapshot, create_decision, create_golden_source, create_golden_version, evolve_golden_version, golden_diff, golden_version_from_snapshot, open_campaign, promote_campaign, promote_snapshot, remediation_from_decisions
+from access_review_engine.reporting import (
+    access_names_from_snapshot,
+    build_report_rows,
+    identity_names_from_snapshot,
+    render_pdf_report,
+    report_summary,
+    write_reports,
+)
+from access_review_engine.services import (
+    audit,
+    calculate_effective_accesses,
+    close_campaign,
+    compare_snapshot,
+    create_decision,
+    create_golden_source,
+    create_golden_version,
+    evolve_golden_version,
+    golden_diff,
+    golden_version_from_snapshot,
+    open_campaign,
+    promote_campaign,
+    promote_snapshot,
+    remediation_from_decisions,
+)
 from access_review_engine.snapshot_composition import compose_snapshots
-from access_review_engine.source_inspector import SourceInspectorError, browse_source_tree, discover_source_attributes, get_source_object, search_source_objects, source_object_kinds
+from access_review_engine.source_inspector import (
+    SourceInspectorError,
+    browse_source_tree,
+    discover_source_attributes,
+    get_source_object,
+    search_source_objects,
+    source_object_kinds,
+)
 from access_review_engine.source_mapping import mapping_diagnostics
-from access_review_engine.storage import Repository, hydrate_access, hydrate_authentication_posture, hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version, hydrate_review_item, hydrate_snapshot
+from access_review_engine.storage import (
+    Repository,
+    hydrate_access,
+    hydrate_authentication_posture,
+    hydrate_campaign,
+    hydrate_decision,
+    hydrate_functional_model,
+    hydrate_golden_source,
+    hydrate_golden_version,
+    hydrate_review_item,
+    hydrate_snapshot,
+)
+from access_review_engine.system_admin import (
+    LOCAL_SOURCE,
+    api_token_summary,
+    authenticate_api_token,
+    authenticate_user,
+    create_api_token,
+    create_mcp_token,
+    enabled_admins,
+    ensure_bootstrap_user,
+    external_user_api_enabled,
+    init_system,
+    list_idps,
+    list_users,
+    mcp_enabled,
+    mcp_token_summary,
+    reset_password,
+    revoke_api_tokens,
+    revoke_mcp_tokens,
+    set_enabled,
+    set_external_user_api_enabled,
+    set_mcp_enabled,
+    upsert_idp,
+    upsert_user,
+)
+from access_review_engine.system_admin import (
+    change_password as update_password,
+)
 from access_review_engine.web_jobs import create_job, get_events, get_job, update_progress
-from access_review_engine.web_read_models import _add_review_provenance, _display_names, _latest_decisions, projected_rows, review_item_view, review_summary
-from access_review_engine.web_use_cases import latest_snapshot, list_payloads, prepare_campaign_review, preview_campaign_review, preview_import, snapshot_collection_scope
-from access_review_engine.directory_auth import DirectoryError, authenticate as directory_authenticate, search_accounts as directory_accounts, test_directory, validate_directory
-from access_review_engine.system_admin import LOCAL_SOURCE, api_token_summary, authenticate_api_token, authenticate_user, change_password as update_password, create_api_token, create_mcp_token, enabled_admins, ensure_bootstrap_user, external_user_api_enabled, init_system, list_idps, list_users, mcp_enabled, mcp_token_summary, revoke_api_tokens, revoke_mcp_tokens, reset_password, set_enabled, set_external_user_api_enabled, set_mcp_enabled, upsert_idp, upsert_user
-
+from access_review_engine.web_read_models import (
+    _add_review_provenance,
+    _display_names,
+    _latest_decisions,
+    projected_rows,
+    review_item_view,
+    review_summary,
+)
+from access_review_engine.web_use_cases import (
+    latest_snapshot,
+    prepare_campaign_review,
+    preview_campaign_review,
+    preview_import,
+    snapshot_collection_scope,
+)
 
 SESSION_COOKIE = "eare_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
 LOGIN_FAILURE_LIMIT = 5
 LOGIN_FAILURE_WINDOW_SECONDS = 60
 LOGIN_BLOCK_SECONDS = 60
-INSECURE_SESSION_SECRETS = {"replace-with-a-random-long-session-secret", "changeme", "change-me", "secret", "password"}
+INSECURE_SESSION_SECRETS = {
+    "replace-with-a-random-long-session-secret",
+    "changeme",
+    "change-me",
+    "secret",
+    "password",
+}
 ROLES = ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER")
 
 
@@ -126,8 +231,21 @@ class WebPrincipal:
 
 
 def _encode_session(principal: dict[str, Any], secret: bytes) -> str:
-    payload = {"sub": principal["subject"], "username": principal["username"], "display_name": principal["display_name"], "role": principal["role"], "scopes": principal["scopes"], "must_change_password": bool(principal.get("must_change_password", False)), "session_version": int(principal.get("session_version", 1)), "exp": int(time.time()) + SESSION_TTL_SECONDS}
-    body = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    payload = {
+        "sub": principal["subject"],
+        "username": principal["username"],
+        "display_name": principal["display_name"],
+        "role": principal["role"],
+        "scopes": principal["scopes"],
+        "must_change_password": bool(principal.get("must_change_password", False)),
+        "session_version": int(principal.get("session_version", 1)),
+        "exp": int(time.time()) + SESSION_TTL_SECONDS,
+    }
+    body = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode())
+        .decode()
+        .rstrip("=")
+    )
     signature = hmac.new(secret, body.encode(), hashlib.sha256).hexdigest()
     return f"{body}.{signature}"
 
@@ -144,12 +262,22 @@ def _decode_session(token: str | None, secret: bytes) -> WebPrincipal | None:
         payload = json.loads(base64.urlsafe_b64decode(padded))
         if int(payload["exp"]) < int(time.time()) or payload["role"] not in ROLES:
             return None
-        return WebPrincipal(str(payload["sub"]), str(payload["role"]), frozenset(str(item) for item in payload.get("scopes", [])), str(payload.get("username", "")), str(payload.get("display_name", "")), bool(payload.get("must_change_password", False)), int(payload.get("session_version", 1)))
+        return WebPrincipal(
+            str(payload["sub"]),
+            str(payload["role"]),
+            frozenset(str(item) for item in payload.get("scopes", [])),
+            str(payload.get("username", "")),
+            str(payload.get("display_name", "")),
+            bool(payload.get("must_change_password", False)),
+            int(payload.get("session_version", 1)),
+        )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
 
 
-def _require(user: WebPrincipal | None, roles: tuple[str, ...] = (), scope: str | None = None) -> WebPrincipal:
+def _require(
+    user: WebPrincipal | None, roles: tuple[str, ...] = (), scope: str | None = None
+) -> WebPrincipal:
     if user is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     if user.must_change_password:
@@ -164,11 +292,15 @@ def _require(user: WebPrincipal | None, roles: tuple[str, ...] = (), scope: str 
 def _finding_tracking_key(campaign_id: str | None, row: dict[str, Any]) -> str:
     values = [
         campaign_id or "",
-        row.get("access_provider"), row.get("access_name"),
-        row.get("identity_provider"), row.get("identity_identifier"),
+        row.get("access_provider"),
+        row.get("access_name"),
+        row.get("identity_provider"),
+        row.get("identity_identifier"),
         row.get("classification"),
     ]
-    return hashlib.sha256(json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _context_value(row: dict[str, Any], field: str, origin: str) -> Any:
@@ -225,7 +357,14 @@ def create_app(db_path: str | None = None):
         else:
             yield
 
-    app = FastAPI(title="Easy Access Review Engine", version="0.3.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app = FastAPI(
+        title="Easy Access Review Engine",
+        version="0.3.0",
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+        lifespan=lifespan,
+    )
     # The Streamable HTTP endpoint is intentionally available at exactly /mcp;
     # avoid a slash redirect that can discard an Authorization header in clients.
     app.router.redirect_slashes = False
@@ -234,8 +373,13 @@ def create_app(db_path: str | None = None):
     ensure_bootstrap_user(system_conn)
     configured_session_secret = os.environ.get("EARE_SESSION_SECRET")
     if configured_session_secret is not None:
-        if len(configured_session_secret) < 32 or configured_session_secret.strip().lower() in INSECURE_SESSION_SECRETS:
-            raise RuntimeError("EARE_SESSION_SECRET must be at least 32 characters and not a known placeholder")
+        if (
+            len(configured_session_secret) < 32
+            or configured_session_secret.strip().lower() in INSECURE_SESSION_SECRETS
+        ):
+            raise RuntimeError(
+                "EARE_SESSION_SECRET must be at least 32 characters and not a known placeholder"
+            )
         session_secret = configured_session_secret.encode()
     else:
         session_secret = secrets.token_bytes(32)
@@ -266,7 +410,9 @@ def create_app(db_path: str | None = None):
         result.pop("_path", None)
         credentials = result.get("credentials")
         if isinstance(credentials, dict):
-            result["credentials"] = {key: value for key, value in credentials.items() if key.endswith("_env")}
+            result["credentials"] = {
+                key: value for key, value in credentials.items() if key.endswith("_env")
+            }
         result["capabilities"] = asdict(connector_capabilities(str(result.get("type", ""))))
         return result
 
@@ -279,7 +425,14 @@ def create_app(db_path: str | None = None):
         principal = _decode_session(request.cookies.get(SESSION_COOKIE), session_secret)
         if principal is None:
             return None
-        stored = next((item for item in list_users(system_conn) if item.get("username") == principal.username), None)
+        stored = next(
+            (
+                item
+                for item in list_users(system_conn)
+                if item.get("username") == principal.username
+            ),
+            None,
+        )
         if stored is None or not stored.get("enabled"):
             return None
         if int(stored.get("session_version", 1)) != principal.session_version:
@@ -301,10 +454,18 @@ def create_app(db_path: str | None = None):
     ) -> WebPrincipal:
         """Authenticate only the external v1 routes; session auth remains cookie-only."""
         if credentials is None or credentials.scheme.casefold() != "bearer":
-            raise HTTPException(status_code=401, detail="Bearer API key required", headers={"WWW-Authenticate": "Bearer"})
+            raise HTTPException(
+                status_code=401,
+                detail="Bearer API key required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         authenticated = authenticate_api_token(system_conn, credentials.credentials)
         if authenticated is None:
-            raise HTTPException(status_code=401, detail="Invalid or inactive API key", headers={"WWW-Authenticate": "Bearer"})
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or inactive API key",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         if authenticated.get("must_change_password"):
             raise HTTPException(status_code=403, detail="Password change required")
         return WebPrincipal(
@@ -322,18 +483,30 @@ def create_app(db_path: str | None = None):
             return None
         return config
 
-    def _directory_login(source: str, username: str, external_id: str | None, password: str) -> bool:
+    def _directory_login(
+        source: str, username: str, external_id: str | None, password: str
+    ) -> bool:
         """Verify a directory account against its directory at sign-in time."""
         config = _directory_config(source)
         if config is None:
             return False
         try:
-            return directory_authenticate(config, username, password, distinguished_name=external_id) is not None
+            return (
+                directory_authenticate(config, username, password, distinguished_name=external_id)
+                is not None
+            )
         except DirectoryError:
             return False
 
     def _stored_user(username: str) -> dict[str, Any] | None:
-        return next((item for item in list_users(system_conn) if item.get("username") == str(username).strip().lower()), None)
+        return next(
+            (
+                item
+                for item in list_users(system_conn)
+                if item.get("username") == str(username).strip().lower()
+            ),
+            None,
+        )
 
     def record_audit(
         repo: Repository,
@@ -349,7 +522,9 @@ def create_app(db_path: str | None = None):
         event.details = details or {}
         repo.insert_append_only("audit_events", event)
 
-    def record_sign_in_event(event_type: str, actor: str, details: dict[str, Any] | None = None) -> None:
+    def record_sign_in_event(
+        event_type: str, actor: str, details: dict[str, Any] | None = None
+    ) -> None:
         """Sign-in events name their own actor: there is no session to read them from yet."""
         event = audit(event_type, "user", actor)
         event.actor = actor
@@ -363,44 +538,137 @@ def create_app(db_path: str | None = None):
 
     def column_filters(request: Request) -> dict[str, str]:
         """Per-column filters travel as f.<column>=<text>, next to search and sort."""
-        return {key[2:]: value for key, value in request.query_params.items() if key.startswith("f.") and value}
+        return {
+            key[2:]: value
+            for key, value in request.query_params.items()
+            if key.startswith("f.") and value
+        }
 
-    def page(table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, filters: dict[str, str] | None = None):
-        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, classification=classification, filters=filters)
+    def page(
+        table: str,
+        limit: int,
+        offset: int,
+        search: str | None,
+        status: str | None,
+        provider: str | None,
+        campaign: str | None = None,
+        sort: str | None = None,
+        order: str | None = None,
+        classification: str | None = None,
+        filters: dict[str, str] | None = None,
+    ):
+        return projected_rows(
+            db_path,
+            table,
+            limit=max(1, min(limit, 500)),
+            offset=max(0, offset),
+            search=search,
+            status=status,
+            provider=provider,
+            campaign=campaign,
+            sort=sort,
+            order=order,
+            classification=classification,
+            filters=filters,
+        )
 
-    def scoped_page(principal: WebPrincipal, table: str, limit: int, offset: int, search: str | None, status: str | None, provider: str | None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, filters: dict[str, str] | None = None):
+    def scoped_page(
+        principal: WebPrincipal,
+        table: str,
+        limit: int,
+        offset: int,
+        search: str | None,
+        status: str | None,
+        provider: str | None,
+        campaign: str | None = None,
+        sort: str | None = None,
+        order: str | None = None,
+        classification: str | None = None,
+        filters: dict[str, str] | None = None,
+    ):
         allowed_campaigns = None
-        if principal.role == "OPERATOR" and table in {"campaigns", "review_items", "decisions", "remediation_actions"}:
+        if principal.role == "OPERATOR" and table in {
+            "campaigns",
+            "review_items",
+            "decisions",
+            "remediation_actions",
+        }:
             with Repository(db_path) as repo:
                 allowed_campaigns = _authorized_campaign_ids(principal, repo)
             if campaign and table in {"review_items", "decisions", "remediation_actions"}:
                 _require_campaign_id_access(principal, campaign)
-        allowed_providers = None if principal.role == "ADMIN" or "*" in principal.scopes else principal.scopes if principal.role in {"OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"} else None
-        return projected_rows(db_path, table, limit=max(1, min(limit, 500)), offset=max(0, offset), search=search, status=status, provider=provider, campaign=campaign, sort=sort, order=order, classification=classification, filters=filters, reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None, allowed_providers=allowed_providers, allowed_campaign_ids=allowed_campaigns)
+        allowed_providers = (
+            None
+            if principal.role == "ADMIN" or "*" in principal.scopes
+            else principal.scopes
+            if principal.role in {"OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}
+            else None
+        )
+        return projected_rows(
+            db_path,
+            table,
+            limit=max(1, min(limit, 500)),
+            offset=max(0, offset),
+            search=search,
+            status=status,
+            provider=provider,
+            campaign=campaign,
+            sort=sort,
+            order=order,
+            classification=classification,
+            filters=filters,
+            reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None,
+            allowed_providers=allowed_providers,
+            allowed_campaign_ids=allowed_campaigns,
+        )
 
     def require_table_access(principal: WebPrincipal, table: str) -> None:
         if principal.role in {"ADMIN", "OPERATOR"}:
             return
-        if principal.role in {"BUSINESS_ADMIN", "REMEDIATION_MANAGER"} and table != "remediation_actions":
-            raise HTTPException(status_code=403, detail="This role can only access remediation actions")
+        if (
+            principal.role in {"BUSINESS_ADMIN", "REMEDIATION_MANAGER"}
+            and table != "remediation_actions"
+        ):
+            raise HTTPException(
+                status_code=403, detail="This role can only access remediation actions"
+            )
         if principal.role == "GROUP_OWNER" and table != "review_items":
-            raise HTTPException(status_code=403, detail="This role can only access assigned reviews")
+            raise HTTPException(
+                status_code=403, detail="This role can only access assigned reviews"
+            )
         if principal.role not in ROLES:
             raise HTTPException(status_code=403, detail="Insufficient role")
 
     @app.post("/api/auth/login")
     def login(request: Request, payload: dict[str, Any] = Body(...), response: Response = None):  # type: ignore[assignment]
         username, password = payload.get("username"), payload.get("password")
-        if not isinstance(username, str) or not isinstance(password, str) or not username.strip() or not password:
+        if (
+            not isinstance(username, str)
+            or not isinstance(password, str)
+            or not username.strip()
+            or not password
+        ):
             raise HTTPException(status_code=400, detail="Username and password are required")
         key = (username.strip().lower(), request.client.host if request.client else "unknown")
         now = time.monotonic()
         with login_failures_lock:
-            attempts = [timestamp for timestamp in login_failures.get(key, []) if now - timestamp < LOGIN_FAILURE_WINDOW_SECONDS]
-            blocked = bool(attempts and len(attempts) >= LOGIN_FAILURE_LIMIT and now - attempts[-1] < LOGIN_BLOCK_SECONDS)
+            attempts = [
+                timestamp
+                for timestamp in login_failures.get(key, [])
+                if now - timestamp < LOGIN_FAILURE_WINDOW_SECONDS
+            ]
+            blocked = bool(
+                attempts
+                and len(attempts) >= LOGIN_FAILURE_LIMIT
+                and now - attempts[-1] < LOGIN_BLOCK_SECONDS
+            )
             login_failures[key] = attempts
         if blocked:
-            raise HTTPException(status_code=429, detail="Too many login attempts", headers={"Retry-After": str(LOGIN_BLOCK_SECONDS)})
+            raise HTTPException(
+                status_code=429,
+                detail="Too many login attempts",
+                headers={"Retry-After": str(LOGIN_BLOCK_SECONDS)},
+            )
         principal = authenticate_user(system_conn, username, password, _directory_login)
         if principal is None:
             with login_failures_lock:
@@ -409,28 +677,67 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=401, detail="Invalid credentials")
         with login_failures_lock:
             login_failures.pop(key, None)
-        record_sign_in_event("auth.signed_in", principal["username"], {"role": principal["role"], "auth_source": principal.get("auth_source", LOCAL_SOURCE)})
+        record_sign_in_event(
+            "auth.signed_in",
+            principal["username"],
+            {"role": principal["role"], "auth_source": principal.get("auth_source", LOCAL_SOURCE)},
+        )
         response.headers["Cache-Control"] = "no-store"
-        response.set_cookie(SESSION_COOKIE, _encode_session(principal, session_secret), httponly=True, secure=os.environ.get("EARE_COOKIE_SECURE") == "1", samesite="strict", max_age=SESSION_TTL_SECONDS, path="/")
-        return {"subject": principal["subject"], "username": principal["username"], "display_name": principal["display_name"], "role": principal["role"], "scopes": principal["scopes"], "must_change_password": bool(principal.get("must_change_password", False))}
+        response.set_cookie(
+            SESSION_COOKIE,
+            _encode_session(principal, session_secret),
+            httponly=True,
+            secure=os.environ.get("EARE_COOKIE_SECURE") == "1",
+            samesite="strict",
+            max_age=SESSION_TTL_SECONDS,
+            path="/",
+        )
+        return {
+            "subject": principal["subject"],
+            "username": principal["username"],
+            "display_name": principal["display_name"],
+            "role": principal["role"],
+            "scopes": principal["scopes"],
+            "must_change_password": bool(principal.get("must_change_password", False)),
+        }
 
     @app.post("/api/auth/change-password")
-    def change_password(request: Request, payload: dict[str, Any] = Body(...), response: Response = None):  # type: ignore[assignment]
+    def change_password(
+        request: Request, payload: dict[str, Any] = Body(...), response: Response = None
+    ):  # type: ignore[assignment]
         principal = current_user(request)
         if principal is None:
             raise HTTPException(status_code=401, detail="Authentication required")
         password = payload.get("new_password")
         stored = _stored_user(principal.username)
         if stored is not None and (stored.get("auth_source") or LOCAL_SOURCE) != LOCAL_SOURCE:
-            raise HTTPException(status_code=400, detail="Directory accounts change their password in their directory")
+            raise HTTPException(
+                status_code=400,
+                detail="Directory accounts change their password in their directory",
+            )
         try:
             updated = update_password(system_conn, principal.username, password)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         record_sign_in_event("auth.password_changed", str(updated["username"]))
         response.headers["Cache-Control"] = "no-store"
-        response.set_cookie(SESSION_COOKIE, _encode_session(updated, session_secret), httponly=True, secure=os.environ.get("EARE_COOKIE_SECURE") == "1", samesite="strict", max_age=SESSION_TTL_SECONDS, path="/")
-        return {"subject": updated["subject"], "username": updated["username"], "display_name": updated["display_name"], "role": updated["role"], "scopes": updated["scopes"], "must_change_password": False}
+        response.set_cookie(
+            SESSION_COOKIE,
+            _encode_session(updated, session_secret),
+            httponly=True,
+            secure=os.environ.get("EARE_COOKIE_SECURE") == "1",
+            samesite="strict",
+            max_age=SESSION_TTL_SECONDS,
+            path="/",
+        )
+        return {
+            "subject": updated["subject"],
+            "username": updated["username"],
+            "display_name": updated["display_name"],
+            "role": updated["role"],
+            "scopes": updated["scopes"],
+            "must_change_password": False,
+        }
 
     @app.post("/api/auth/logout")
     def logout(request: Request, response: Response):
@@ -470,7 +777,9 @@ def create_app(db_path: str | None = None):
         if stored is None or not stored.get("enabled"):
             raise HTTPException(status_code=401, detail="Authentication required")
         if not stored.get("api_access_enabled"):
-            raise HTTPException(status_code=403, detail="API access is disabled by an administrator")
+            raise HTTPException(
+                status_code=403, detail="API access is disabled by an administrator"
+            )
         if not external_user_api_enabled(system_conn):
             raise HTTPException(status_code=403, detail="External user API is currently disabled")
         previous_token = system_conn.execute(
@@ -483,10 +792,29 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         with Repository(db_path) as repo:
             if previous_token is not None:
-                record_audit(repo, request, "api.token_revoked", "api_token", str(previous_token["id"]), {"token_prefix": str(previous_token["token_prefix"]), "reason": "rotated"})
-            record_audit(repo, request, "api.token_created", "api_token", created["id"], {"user_id": stored["id"], "token_prefix": created["prefix"]})
+                record_audit(
+                    repo,
+                    request,
+                    "api.token_revoked",
+                    "api_token",
+                    str(previous_token["id"]),
+                    {"token_prefix": str(previous_token["token_prefix"]), "reason": "rotated"},
+                )
+            record_audit(
+                repo,
+                request,
+                "api.token_created",
+                "api_token",
+                created["id"],
+                {"user_id": stored["id"], "token_prefix": created["prefix"]},
+            )
         response.headers["Cache-Control"] = "no-store"
-        return {"api_key": created["token"], "prefix": created["prefix"], "created_at": created["created_at"], "expires_at": created["expires_at"]}
+        return {
+            "api_key": created["token"],
+            "prefix": created["prefix"],
+            "created_at": created["created_at"],
+            "expires_at": created["expires_at"],
+        }
 
     @app.delete("/api/me/api-token")
     def me_api_token_revoke(request: Request):
@@ -501,12 +829,28 @@ def create_app(db_path: str | None = None):
         revoked = revoke_api_tokens(system_conn, str(stored["id"]))
         if token is not None:
             with Repository(db_path) as repo:
-                record_audit(repo, request, "api.token_revoked", "api_token", str(token["id"]), {"token_prefix": str(token["token_prefix"])})
+                record_audit(
+                    repo,
+                    request,
+                    "api.token_revoked",
+                    "api_token",
+                    str(token["id"]),
+                    {"token_prefix": str(token["token_prefix"])},
+                )
         return {"revoked": revoked > 0}
 
     def _authorized_domain_options(repo: Repository) -> list[dict[str, Any]]:
         """Combine observed providers with configured connector instances without exposing config."""
-        safe_fields = ("id", "name", "type", "display_name", "health", "last_sync", "identity_count", "access_count")
+        safe_fields = (
+            "id",
+            "name",
+            "type",
+            "display_name",
+            "health",
+            "last_sync",
+            "identity_count",
+            "access_count",
+        )
         providers: dict[str, dict[str, Any]] = {}
         for row in repo.list_payloads("providers"):
             name = str(row.get("name") or "").strip()
@@ -527,7 +871,9 @@ def create_app(db_path: str | None = None):
                     **existing,
                     "name": name,
                     "type": str(config.get("type") or existing.get("type") or ""),
-                    "display_name": str(existing.get("display_name") or config.get("display_name") or name),
+                    "display_name": str(
+                        existing.get("display_name") or config.get("display_name") or name
+                    ),
                     "configured": True,
                 }
         return [providers[name] for name in sorted(providers)]
@@ -536,11 +882,19 @@ def create_app(db_path: str | None = None):
         """Count the reviews still waiting on each reviewer, in open campaigns only."""
         counts: dict[str, int] = {}
         with Repository(db_path) as repo:
-            open_campaigns = {str(row.get("id")) for row in repo.list_payloads("campaigns") if row.get("status") == "open"}
+            open_campaigns = {
+                str(row.get("id"))
+                for row in repo.list_payloads("campaigns")
+                if row.get("status") == "open"
+            }
             decided = {str(row.get("review_item_id")) for row in repo.list_payloads("decisions")}
             for row in repo.list_payloads("review_items"):
                 identity = str((row.get("reviewer") or {}).get("identity", "")).lower()
-                if identity and str(row.get("campaign_id")) in open_campaigns and str(row.get("id")) not in decided:
+                if (
+                    identity
+                    and str(row.get("campaign_id")) in open_campaigns
+                    and str(row.get("id")) not in decided
+                ):
                     counts[identity] = counts.get(identity, 0) + 1
         return counts
 
@@ -554,7 +908,13 @@ def create_app(db_path: str | None = None):
         set_external_user_api_enabled(system_conn, enabled)
         if previous != enabled:
             with Repository(db_path) as repo:
-                record_audit(repo, request, "api.global_enabled" if enabled else "api.global_disabled", "system_setting", "external_user_api_enabled")
+                record_audit(
+                    repo,
+                    request,
+                    "api.global_enabled" if enabled else "api.global_disabled",
+                    "system_setting",
+                    "external_user_api_enabled",
+                )
         return {"external_user_api_enabled": enabled}
 
     @app.put("/api/system/settings/mcp")
@@ -567,18 +927,36 @@ def create_app(db_path: str | None = None):
         set_mcp_enabled(system_conn, enabled)
         if previous != enabled:
             with Repository(db_path) as repo:
-                record_audit(repo, request, "mcp.enabled" if enabled else "mcp.disabled", "system_setting", "mcp_enabled")
+                record_audit(
+                    repo,
+                    request,
+                    "mcp.enabled" if enabled else "mcp.disabled",
+                    "system_setting",
+                    "mcp_enabled",
+                )
         return {"mcp_enabled": enabled}
 
     @app.get("/api/me/mcp-token")
     def me_mcp_token(request: Request):
-        principal = _require(current_user(request), ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"))
+        principal = _require(
+            current_user(request),
+            ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"),
+        )
         stored = _stored_user(principal.username)
-        return {"mcp_enabled": mcp_enabled(system_conn), "mcp_access_enabled": bool(stored and stored.get("mcp_access_enabled")), "token": mcp_token_summary(system_conn, str(stored["id"])) if stored else {"active": False}}
+        return {
+            "mcp_enabled": mcp_enabled(system_conn),
+            "mcp_access_enabled": bool(stored and stored.get("mcp_access_enabled")),
+            "token": mcp_token_summary(system_conn, str(stored["id"]))
+            if stored
+            else {"active": False},
+        }
 
     @app.post("/api/me/mcp-token")
     def me_mcp_token_create(request: Request):
-        principal = _require(current_user(request), ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"))
+        principal = _require(
+            current_user(request),
+            ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"),
+        )
         stored = _stored_user(principal.username)
         if stored is None:
             raise HTTPException(status_code=404, detail="User not found")
@@ -587,13 +965,30 @@ def create_app(db_path: str | None = None):
         except ValueError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         with Repository(db_path) as repo:
-            record_audit(repo, request, "mcp.token_created", "mcp_token", str(result["id"]), {"user_id": stored["id"], "token_prefix": result["prefix"]})
-        response = {**result, "warning": "This credential is shown once and will not be displayed again."}
-        return Response(content=json.dumps(response), media_type="application/json", headers={"Cache-Control": "no-store"})
+            record_audit(
+                repo,
+                request,
+                "mcp.token_created",
+                "mcp_token",
+                str(result["id"]),
+                {"user_id": stored["id"], "token_prefix": result["prefix"]},
+            )
+        response = {
+            **result,
+            "warning": "This credential is shown once and will not be displayed again.",
+        }
+        return Response(
+            content=json.dumps(response),
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.delete("/api/me/mcp-token")
     def me_mcp_token_revoke(request: Request):
-        principal = _require(current_user(request), ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"))
+        principal = _require(
+            current_user(request),
+            ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"),
+        )
         stored = _stored_user(principal.username)
         revoked = revoke_mcp_tokens(system_conn, str(stored["id"])) if stored else 0
         with Repository(db_path) as repo:
@@ -613,7 +1008,18 @@ def create_app(db_path: str | None = None):
         revoked = revoke_api_tokens(system_conn, str(stored["id"]))
         if token is not None:
             with Repository(db_path) as repo:
-                record_audit(repo, request, "api.token_revoked", "api_token", str(token["id"]), {"user_id": stored["id"], "token_prefix": str(token["token_prefix"]), "revoked_by": principal.username})
+                record_audit(
+                    repo,
+                    request,
+                    "api.token_revoked",
+                    "api_token",
+                    str(token["id"]),
+                    {
+                        "user_id": stored["id"],
+                        "token_prefix": str(token["token_prefix"]),
+                        "revoked_by": principal.username,
+                    },
+                )
         return {"revoked": revoked > 0}
 
     @app.post("/api/system/users/{username}/mcp-token/revoke")
@@ -624,17 +1030,34 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=404, detail="User not found")
         revoked = revoke_mcp_tokens(system_conn, str(stored["id"]))
         with Repository(db_path) as repo:
-            record_audit(repo, request, "mcp.token_revoked", "user", str(stored["username"]), {"revoked_by": principal.username})
+            record_audit(
+                repo,
+                request,
+                "mcp.token_revoked",
+                "user",
+                str(stored["username"]),
+                {"revoked_by": principal.username},
+            )
         return {"revoked": revoked > 0}
 
     @app.get("/api/system")
     def system_overview(request: Request):
         _require(current_user(request), ("ADMIN",))
         pending = _pending_reviews_by_reviewer()
-        users = [{**user, "pending_reviews": pending.get(str(user.get("username", "")).lower(), 0)} for user in list_users(system_conn)]
+        users = [
+            {**user, "pending_reviews": pending.get(str(user.get("username", "")).lower(), 0)}
+            for user in list_users(system_conn)
+        ]
         with Repository(db_path) as repo:
             providers = _authorized_domain_options(repo)
-        return {"users": users, "identity_providers": list_idps(system_conn), "providers": providers, "roles": sorted(ROLES), "external_user_api_enabled": external_user_api_enabled(system_conn), "mcp_enabled": mcp_enabled(system_conn)}
+        return {
+            "users": users,
+            "identity_providers": list_idps(system_conn),
+            "providers": providers,
+            "roles": sorted(ROLES),
+            "external_user_api_enabled": external_user_api_enabled(system_conn),
+            "mcp_enabled": mcp_enabled(system_conn),
+        }
 
     @app.get("/api/campaign-pilots")
     def campaign_pilots(request: Request):
@@ -651,7 +1074,9 @@ def create_app(db_path: str | None = None):
         return {"items": sorted(items, key=lambda item: str(item["display_name"]).casefold())}
 
     @app.post("/api/system/users/{username}/reassign-reviews")
-    def system_user_reassign_reviews(username: str, request: Request, payload: dict[str, Any] = Body(...)):
+    def system_user_reassign_reviews(
+        username: str, request: Request, payload: dict[str, Any] = Body(...)
+    ):
         """Hand the pending reviews of one person to another, so a leaver cannot block a campaign."""
         from access_review_engine.domain import OwnerRef
 
@@ -660,69 +1085,142 @@ def create_app(db_path: str | None = None):
         target = str(payload.get("to", "")).strip().lower()
         stored_target = _stored_user(target)
         if not target or stored_target is None or not stored_target.get("enabled"):
-            raise HTTPException(status_code=400, detail="Choose an enabled EARE user to take the reviews over")
+            raise HTTPException(
+                status_code=400, detail="Choose an enabled EARE user to take the reviews over"
+            )
         if target == origin:
             raise HTTPException(status_code=400, detail="Choose a different user")
         moved = 0
         with Repository(db_path) as repo:
-            open_campaigns = {str(row.get("id")) for row in repo.list_payloads("campaigns") if row.get("status") == "open"}
+            open_campaigns = {
+                str(row.get("id"))
+                for row in repo.list_payloads("campaigns")
+                if row.get("status") == "open"
+            }
             decided = {str(row.get("review_item_id")) for row in repo.list_payloads("decisions")}
             for row in repo.list_payloads("review_items"):
                 reviewer = row.get("reviewer") or {}
                 if str(reviewer.get("identity", "")).lower() != origin:
                     continue
                 # Decided items keep their reviewer: they are evidence of who decided what.
-                if str(row.get("id")) in decided or str(row.get("campaign_id")) not in open_campaigns:
+                if (
+                    str(row.get("id")) in decided
+                    or str(row.get("campaign_id")) not in open_campaigns
+                ):
                     continue
                 item = hydrate_review_item(row)
-                item.reviewer = OwnerRef(provider=str(reviewer.get("provider") or item.identity_provider), identity=target)
+                item.reviewer = OwnerRef(
+                    provider=str(reviewer.get("provider") or item.identity_provider),
+                    identity=target,
+                )
                 repo.upsert("review_items", item)
                 moved += 1
-            record_audit(repo, request, "review.reassigned", "user", origin, {"to": target, "review_items": moved})
+            record_audit(
+                repo,
+                request,
+                "review.reassigned",
+                "user",
+                origin,
+                {"to": target, "review_items": moved},
+            )
         return {"from": origin, "to": target, "review_items": moved}
 
-    def _guard_admin_access(principal: WebPrincipal, username: str, *, role: str | None = None, enabled: bool = True) -> None:
+    def _guard_admin_access(
+        principal: WebPrincipal, username: str, *, role: str | None = None, enabled: bool = True
+    ) -> None:
         """Refuse a change that would lock the administrator, or EARE itself, out."""
         target = str(username).strip().lower()
         stored = _stored_user(target)
         if stored is None:
             return
-        losing_admin = str(stored.get("role")) == "ADMIN" and (not enabled or (role is not None and role != "ADMIN"))
+        losing_admin = str(stored.get("role")) == "ADMIN" and (
+            not enabled or (role is not None and role != "ADMIN")
+        )
         if not losing_admin:
             return
         if target == principal.username:
-            raise HTTPException(status_code=409, detail="You cannot remove your own administrator access. Ask another administrator.")
+            raise HTTPException(
+                status_code=409,
+                detail="You cannot remove your own administrator access. Ask another administrator.",
+            )
         if enabled_admins(system_conn, excluding=target) == 0:
-            raise HTTPException(status_code=409, detail="This is the last administrator who can sign in. Give another user the ADMIN role first.")
+            raise HTTPException(
+                status_code=409,
+                detail="This is the last administrator who can sign in. Give another user the ADMIN role first.",
+            )
 
     @app.post("/api/system/users")
     def system_user_create(request: Request, payload: dict[str, Any] = Body(...)):
         principal = _require(current_user(request), ("ADMIN",))
         source = str(payload.get("auth_source") or LOCAL_SOURCE).strip() or LOCAL_SOURCE
         if source != LOCAL_SOURCE and _directory_config(source) is None:
-            raise HTTPException(status_code=400, detail="This directory is not configured or not enabled")
-        _guard_admin_access(principal, payload.get("username", ""), role=str(payload.get("role", "")).upper() or None, enabled=bool(payload.get("enabled", True)))
+            raise HTTPException(
+                status_code=400, detail="This directory is not configured or not enabled"
+            )
+        _guard_admin_access(
+            principal,
+            payload.get("username", ""),
+            role=str(payload.get("role", "")).upper() or None,
+            enabled=bool(payload.get("enabled", True)),
+        )
         role = str(payload.get("role", "")).upper()
         raw_scopes = payload.get("scopes", [])
         if role in {"OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
-            if not isinstance(raw_scopes, list) or any(not isinstance(value, str) for value in raw_scopes):
-                raise HTTPException(status_code=400, detail="Authorized domains must be a list of provider names")
+            if not isinstance(raw_scopes, list) or any(
+                not isinstance(value, str) for value in raw_scopes
+            ):
+                raise HTTPException(
+                    status_code=400, detail="Authorized domains must be a list of provider names"
+                )
             with Repository(db_path) as repo:
                 configured = {str(row.get("name")) for row in _authorized_domain_options(repo)}
             requested = {value.strip() for value in raw_scopes if value.strip()}
             if "*" in requested or requested - configured:
-                raise HTTPException(status_code=400, detail="Authorized domains must be configured providers")
+                raise HTTPException(
+                    status_code=400, detail="Authorized domains must be configured providers"
+                )
         previous_user = _stored_user(str(payload.get("username", "")))
         previous_api_access = bool(previous_user and previous_user.get("api_access_enabled"))
-        previous_token = api_token_summary(system_conn, str(previous_user["id"])) if previous_user else {"active": False}
+        previous_token = (
+            api_token_summary(system_conn, str(previous_user["id"]))
+            if previous_user
+            else {"active": False}
+        )
         try:
             result = upsert_user(system_conn, payload)
             with Repository(db_path) as repo:
-                record_audit(repo, request, "system.user_upserted", "user", str(result.get("username", "")), {"role": result.get("role", ""), "auth_source": result.get("auth_source", LOCAL_SOURCE)})
-                if previous_user is not None and previous_api_access != bool(result.get("api_access_enabled")):
-                    record_audit(repo, request, "api.access_enabled" if result.get("api_access_enabled") else "api.access_disabled", "user", str(result.get("username", "")))
+                record_audit(
+                    repo,
+                    request,
+                    "system.user_upserted",
+                    "user",
+                    str(result.get("username", "")),
+                    {
+                        "role": result.get("role", ""),
+                        "auth_source": result.get("auth_source", LOCAL_SOURCE),
+                    },
+                )
+                if previous_user is not None and previous_api_access != bool(
+                    result.get("api_access_enabled")
+                ):
+                    record_audit(
+                        repo,
+                        request,
+                        "api.access_enabled"
+                        if result.get("api_access_enabled")
+                        else "api.access_disabled",
+                        "user",
+                        str(result.get("username", "")),
+                    )
                     if previous_token.get("active") and not result.get("api_access_enabled"):
-                        record_audit(repo, request, "api.token_revoked", "user", str(result.get("username", "")), {"reason": "api_access_disabled"})
+                        record_audit(
+                            repo,
+                            request,
+                            "api.token_revoked",
+                            "user",
+                            str(result.get("username", "")),
+                            {"reason": "api_access_disabled"},
+                        )
             return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -732,7 +1230,11 @@ def create_app(db_path: str | None = None):
         principal = _require(current_user(request), ("ADMIN",))
         _guard_admin_access(principal, username, enabled=False)
         previous_user = _stored_user(username)
-        previous_token = api_token_summary(system_conn, str(previous_user["id"])) if previous_user else {"active": False}
+        previous_token = (
+            api_token_summary(system_conn, str(previous_user["id"]))
+            if previous_user
+            else {"active": False}
+        )
         try:
             result = set_enabled(system_conn, username, False)
         except ValueError as exc:
@@ -740,7 +1242,14 @@ def create_app(db_path: str | None = None):
         with Repository(db_path) as repo:
             record_audit(repo, request, "system.user_disabled", "user", result["username"])
             if previous_token.get("active"):
-                record_audit(repo, request, "api.token_revoked", "user", result["username"], {"reason": "account_disabled"})
+                record_audit(
+                    repo,
+                    request,
+                    "api.token_revoked",
+                    "user",
+                    result["username"],
+                    {"reason": "account_disabled"},
+                )
         return result
 
     @app.post("/api/system/users/{username}/enable")
@@ -755,7 +1264,9 @@ def create_app(db_path: str | None = None):
         return result
 
     @app.post("/api/system/users/{username}/reset-password")
-    def system_user_reset_password(username: str, request: Request, payload: dict[str, Any] = Body(...)):
+    def system_user_reset_password(
+        username: str, request: Request, payload: dict[str, Any] = Body(...)
+    ):
         _require(current_user(request), ("ADMIN",))
         try:
             result = reset_password(system_conn, username, payload.get("password"))
@@ -767,7 +1278,11 @@ def create_app(db_path: str | None = None):
         return result
 
     def _validated_idp(payload: dict[str, Any]) -> dict[str, Any]:
-        candidate = {**payload, "name": str(payload.get("name", "")).strip(), "kind": str(payload.get("kind", "")).upper()}
+        candidate = {
+            **payload,
+            "name": str(payload.get("name", "")).strip(),
+            "kind": str(payload.get("kind", "")).upper(),
+        }
         if candidate["kind"] == "LDAP":
             try:
                 validate_directory(candidate)
@@ -781,7 +1296,14 @@ def create_app(db_path: str | None = None):
         try:
             result = upsert_idp(system_conn, _validated_idp(payload))
             with Repository(db_path) as repo:
-                record_audit(repo, request, "system.identity_provider_upserted", "identity_provider", str(result.get("name", "")), {"kind": result.get("kind", ""), "enabled": result.get("enabled", False)})
+                record_audit(
+                    repo,
+                    request,
+                    "system.identity_provider_upserted",
+                    "identity_provider",
+                    str(result.get("name", "")),
+                    {"kind": result.get("kind", ""), "enabled": result.get("enabled", False)},
+                )
             return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -807,7 +1329,12 @@ def create_app(db_path: str | None = None):
         except DirectoryError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         known = {str(user.get("username")) for user in list_users(system_conn)}
-        return {"items": [{**account, "imported": account["login"].lower() in known} for account in accounts], "directory": name}
+        return {
+            "items": [
+                {**account, "imported": account["login"].lower() in known} for account in accounts
+            ],
+            "directory": name,
+        }
 
     @app.get("/api/system/sources")
     def system_sources(request: Request):
@@ -834,14 +1361,30 @@ def create_app(db_path: str | None = None):
         previous_mapping = None
         if path.is_file():
             try:
-                previous_mapping = load_connector(str(candidate["provider"]), path).get("business_mapping")
+                previous_mapping = load_connector(str(candidate["provider"]), path).get(
+                    "business_mapping"
+                )
             except ValueError:
                 previous_mapping = None
         connector_directory.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump(candidate, sort_keys=False), encoding="utf-8")
         with Repository(db_path) as repo:
-            event_type = "source.mapping_changed" if previous_mapping != candidate.get("business_mapping") else "source.configuration_saved"
-            record_audit(repo, request, event_type, "provider", str(candidate["provider"]), {"type": candidate["type"], "mapping_changed": previous_mapping != candidate.get("business_mapping")})
+            event_type = (
+                "source.mapping_changed"
+                if previous_mapping != candidate.get("business_mapping")
+                else "source.configuration_saved"
+            )
+            record_audit(
+                repo,
+                request,
+                event_type,
+                "provider",
+                str(candidate["provider"]),
+                {
+                    "type": candidate["type"],
+                    "mapping_changed": previous_mapping != candidate.get("business_mapping"),
+                },
+            )
         return _public_connector(load_connector(str(candidate["provider"]), path))
 
     @app.post("/api/system/sources/test")
@@ -858,11 +1401,16 @@ def create_app(db_path: str | None = None):
             try:
                 result = run_exporter(candidate, output)
             except (RunnerError, ValueError) as exc:
-                raise HTTPException(status_code=502, detail="Source connection test failed") from exc
+                raise HTTPException(
+                    status_code=502, detail="Source connection test failed"
+                ) from exc
         if result.returncode:
             raise HTTPException(status_code=502, detail="Source connection test failed")
         google_diagnostics = None
-        if str(candidate.get("type")) in {"google_workspace", "gcp_iam", "keycloak"} and result.stdout.strip():
+        if (
+            str(candidate.get("type")) in {"google_workspace", "gcp_iam", "keycloak"}
+            and result.stdout.strip()
+        ):
             try:
                 google_diagnostics = json.loads(result.stdout.splitlines()[-1])
             except (TypeError, ValueError):
@@ -874,7 +1422,9 @@ def create_app(db_path: str | None = None):
             else:
                 discovered = discover_source_attributes(candidate, "group")
                 diagnostics = mapping_diagnostics(str(candidate["type"]), candidate, discovered)
-                mapping_warning = any(row.get("status") in {"not_found", "warning"} for row in diagnostics)
+                mapping_warning = any(
+                    row.get("status") in {"not_found", "warning"} for row in diagnostics
+                )
         except SourceInspectorError:
             diagnostics = []
             mapping_warning = True
@@ -901,7 +1451,14 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.get("/api/system/sources/{provider}/inspect/objects")
-    def source_inspector_search(provider: str, request: Request, kind: str = "group", search: str = "", limit: int = 25, offset: int = 0):
+    def source_inspector_search(
+        provider: str,
+        request: Request,
+        kind: str = "group",
+        search: str = "",
+        limit: int = 25,
+        offset: int = 0,
+    ):
         _require(current_user(request), ("ADMIN",))
         try:
             return search_source_objects(_load_web_connector(provider), kind, search, limit, offset)
@@ -929,25 +1486,100 @@ def create_app(db_path: str | None = None):
     def compose_current_snapshots(request: Request, payload: dict[str, Any] = Body(...)):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         providers = payload.get("providers")
-        if not isinstance(providers, list) or not providers or not all(isinstance(item, str) and item.strip() for item in providers):
+        if (
+            not isinstance(providers, list)
+            or not providers
+            or not all(isinstance(item, str) and item.strip() for item in providers)
+        ):
             raise HTTPException(status_code=400, detail="providers must be a non-empty list")
         requested = sorted({item.strip() for item in providers})
-        if principal.role == "OPERATOR" and "*" not in principal.scopes and not set(requested).issubset(principal.scopes):
-            raise HTTPException(status_code=403, detail="Operator is not authorized for all requested providers")
+        if (
+            principal.role == "OPERATOR"
+            and "*" not in principal.scopes
+            and not set(requested).issubset(principal.scopes)
+        ):
+            raise HTTPException(
+                status_code=403, detail="Operator is not authorized for all requested providers"
+            )
         with Repository(db_path) as repo:
             snapshots = [hydrate_snapshot(row) for row in repo.list_payloads("snapshots")]
-            imports = {row.get("id"): str(row.get("completeness") or row.get("scope", {}).get("completeness") or Completeness.UNKNOWN) for row in repo.list_payloads("imports")}
+            imports = {
+                row.get("id"): str(
+                    row.get("completeness")
+                    or row.get("scope", {}).get("completeness")
+                    or Completeness.UNKNOWN
+                )
+                for row in repo.list_payloads("imports")
+            }
             current = []
             for provider in requested:
-                candidates = [snapshot for snapshot in snapshots if len(snapshot.providers) == 1 and snapshot.providers[0].name == provider]
+                candidates = [
+                    snapshot
+                    for snapshot in snapshots
+                    if len(snapshot.providers) == 1 and snapshot.providers[0].name == provider
+                ]
                 if not candidates:
-                    raise HTTPException(status_code=404, detail=f"No snapshot available for provider {provider}")
+                    raise HTTPException(
+                        status_code=404, detail=f"No snapshot available for provider {provider}"
+                    )
                 current.append(candidates[-1])
-            completeness = [imports.get(import_id, str(Completeness.UNKNOWN)) for snapshot in current for import_id in snapshot.source_import_ids]
+            completeness = [
+                imports.get(import_id, str(Completeness.UNKNOWN))
+                for snapshot in current
+                for import_id in snapshot.source_import_ids
+            ]
             composed = compose_snapshots(current, requested, completeness)
             repo.insert_append_only("snapshots", composed)
-            record_audit(repo, request, "snapshot.composed", "snapshot", composed.id, {"providers": requested})
+            record_audit(
+                repo,
+                request,
+                "snapshot.composed",
+                "snapshot",
+                composed.id,
+                {"providers": requested},
+            )
             return composed
+
+    @app.get("/api/snapshots/{snapshot_id}/functional-access-models")
+    def snapshot_functional_access_models(snapshot_id: str, request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        from access_review_engine.functional_context import functional_context
+
+        with Repository(db_path) as repo:
+            payload = repo.get_payload("snapshots", snapshot_id)
+            if payload is None:
+                raise HTTPException(status_code=404, detail="Snapshot not found")
+            snapshot = hydrate_snapshot(payload)
+            model_rows = repo.load_snapshot_functional_models(snapshot_id)
+            models = [hydrate_functional_model(row) for row in model_rows]
+            items = []
+            for model, stored in zip(models, model_rows, strict=True):
+                access = next(
+                    (
+                        item
+                        for item in snapshot.accesses
+                        if item.provider == model.access_provider and item.name == model.access_name
+                    ),
+                    None,
+                )
+                if access is None:
+                    continue
+                context = functional_context(
+                    access, snapshot.accesses, snapshot.access_relations, [model]
+                )
+                items.append(
+                    {
+                        "access_provider": model.access_provider,
+                        "access_name": model.access_name,
+                        "access_display_name": access.display_name or access.name,
+                        "completeness": model.completeness,
+                        "authoritative": stored.get("authoritative", False),
+                        "evidence": stored.get("evidence", {}),
+                        "rights": context["functional_rights"],
+                        "application": context["application"],
+                    }
+                )
+            return {"snapshot_id": snapshot_id, "items": items}
 
     @app.post("/api/golden-sources/baseline")
     def create_baseline(request: Request, payload: dict[str, Any] | None = Body(default=None)):
@@ -955,10 +1587,16 @@ def create_app(db_path: str | None = None):
         with Repository(db_path) as repo:
             snapshots = repo.list_payloads("snapshots")
             if not snapshots:
-                raise HTTPException(status_code=409, detail="No snapshot is available to create a baseline")
+                raise HTTPException(
+                    status_code=409, detail="No snapshot is available to create a baseline"
+                )
             requested = payload or {}
             snapshot_id = requested.get("snapshot_id")
-            selected = next((row for row in snapshots if row.get("id") == snapshot_id), None) if snapshot_id else snapshots[-1]
+            selected = (
+                next((row for row in snapshots if row.get("id") == snapshot_id), None)
+                if snapshot_id
+                else snapshots[-1]
+            )
             if selected is None:
                 raise HTTPException(status_code=404, detail="Requested snapshot not found")
             snapshot = hydrate_snapshot(selected)
@@ -967,22 +1605,53 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=400, detail="Golden Source name is required")
             display_name = str(requested.get("display_name") or name).strip()
             existing = repo.find_by_name("golden_sources", name)
-            source = hydrate_golden_source(existing) if existing else create_golden_source(name, display_name)
-            previous = [hydrate_golden_version(row) for row in repo.list_payloads("golden_source_versions") if row.get("golden_source_id") == source.id]
+            source = (
+                hydrate_golden_source(existing)
+                if existing
+                else create_golden_source(name, display_name)
+            )
+            previous = [
+                hydrate_golden_version(row)
+                for row in repo.list_payloads("golden_source_versions")
+                if row.get("golden_source_id") == source.id
+            ]
             try:
-                version = promote_snapshot(source, snapshot, previous)
+                version = promote_snapshot(
+                    source,
+                    snapshot,
+                    previous,
+                    [
+                        hydrate_functional_model(row)
+                        for row in repo.load_snapshot_functional_models(snapshot.id)
+                    ],
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             version.comment = str(requested.get("comment") or "").strip() or version.comment
-            copy_assignment_annotations(repo, max(previous, key=lambda item: item.version) if previous else None, version)
+            copy_assignment_annotations(
+                repo, max(previous, key=lambda item: item.version) if previous else None, version
+            )
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
-            record_audit(repo, request, "golden_source.version_created", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
-            return {"source": asdict(source), "version": asdict(version), "snapshot_id": snapshot.id}
+            record_audit(
+                repo,
+                request,
+                "golden_source.version_created",
+                "golden_source_version",
+                version.id,
+                {"source_id": source.id, "version": version.version},
+            )
+            return {
+                "source": asdict(source),
+                "version": asdict(version),
+                "snapshot_id": snapshot.id,
+            }
 
     @app.post("/api/golden-sources/from-scratch")
-    def create_empty_golden_source(request: Request, payload: dict[str, Any] | None = Body(default=None)):
+    def create_empty_golden_source(
+        request: Request, payload: dict[str, Any] | None = Body(default=None)
+    ):
         """Create a real immutable empty v1 before any source has been collected."""
         _require(current_user(request), ("ADMIN", "OPERATOR"))
         requested = payload or {}
@@ -992,13 +1661,17 @@ def create_app(db_path: str | None = None):
         display_name = str(requested.get("display_name") or name).strip()
         with Repository(db_path) as repo:
             if repo.find_by_name("golden_sources", name):
-                raise HTTPException(status_code=409, detail="A Golden Source with this name already exists")
+                raise HTTPException(
+                    status_code=409, detail="A Golden Source with this name already exists"
+                )
             source = create_golden_source(name, display_name)
             version = create_golden_version(
                 source,
                 [],
                 "from_scratch",
-                comment=str(requested.get("comment") or "Empty expected state created in the WebUI"),
+                comment=str(
+                    requested.get("comment") or "Empty expected state created in the WebUI"
+                ),
             )
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
@@ -1021,14 +1694,32 @@ def create_app(db_path: str | None = None):
             if not source_payload:
                 raise HTTPException(status_code=404, detail="Golden Source not found")
             source = hydrate_golden_source(source_payload)
-            versions = [hydrate_golden_version(row) for row in repo.list_payloads("golden_source_versions") if row.get("golden_source_id") == source.id]
+            versions = [
+                hydrate_golden_version(row)
+                for row in repo.list_payloads("golden_source_versions")
+                if row.get("golden_source_id") == source.id
+            ]
             if not versions:
-                raise HTTPException(status_code=409, detail="Golden Source has no version to compare")
-            snapshot = hydrate_snapshot(repo.list_payloads("snapshots")[-1]) if repo.list_payloads("snapshots") else None
+                raise HTTPException(
+                    status_code=409, detail="Golden Source has no version to compare"
+                )
+            snapshot = (
+                hydrate_snapshot(repo.list_payloads("snapshots")[-1])
+                if repo.list_payloads("snapshots")
+                else None
+            )
             if snapshot is None:
                 raise HTTPException(status_code=409, detail="A snapshot is required for comparison")
             try:
-                current = golden_version_from_snapshot(source, snapshot, versions)
+                current = golden_version_from_snapshot(
+                    source,
+                    snapshot,
+                    versions,
+                    [
+                        hydrate_functional_model(row)
+                        for row in repo.load_snapshot_functional_models(snapshot.id)
+                    ],
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             active = max(versions, key=lambda item: item.version)
@@ -1042,12 +1733,23 @@ def create_app(db_path: str | None = None):
             changes = []
             for row in golden_diff(active, current):
                 item = dict(row)
-                item["identity_display_name"] = identity_names.get((str(row.get("identity_provider")), str(row.get("identity_identifier")))) or row.get("identity_identifier")
-                item["access_display_name"] = access_names.get((str(row.get("access_provider")), str(row.get("access_name")))) or row.get("access_name")
-                item["access_provider_display_name"] = provider_names.get(str(row.get("access_provider"))) or row.get("access_provider")
+                item["identity_display_name"] = identity_names.get(
+                    (str(row.get("identity_provider")), str(row.get("identity_identifier")))
+                ) or row.get("identity_identifier")
+                item["access_display_name"] = access_names.get(
+                    (str(row.get("access_provider")), str(row.get("access_name")))
+                ) or row.get("access_name")
+                item["access_provider_display_name"] = provider_names.get(
+                    str(row.get("access_provider"))
+                ) or row.get("access_provider")
                 changes.append(item)
-            return {"name": name, "active_version": active.version, "active_golden_version_id": active.id, "observed_snapshot_id": snapshot.id, "changes": changes}
-
+            return {
+                "name": name,
+                "active_version": active.version,
+                "active_golden_version_id": active.id,
+                "observed_snapshot_id": snapshot.id,
+                "changes": changes,
+            }
 
     @app.post("/api/golden-sources/{name}/confirm-version")
     def confirm_golden_version(name: str, request: Request, payload: dict[str, Any] = Body(...)):
@@ -1061,15 +1763,35 @@ def create_app(db_path: str | None = None):
             if not source_payload:
                 raise HTTPException(status_code=404, detail="Golden Source not found")
             source = hydrate_golden_source(source_payload)
-            versions = [hydrate_golden_version(row) for row in repo.list_payloads("golden_source_versions") if row.get("golden_source_id") == source.id]
+            versions = [
+                hydrate_golden_version(row)
+                for row in repo.list_payloads("golden_source_versions")
+                if row.get("golden_source_id") == source.id
+            ]
             active = max(versions, key=lambda item: item.version) if versions else None
             snapshots = repo.list_payloads("snapshots")
             current_snapshot = snapshots[-1] if snapshots else None
-            if current_snapshot is None or current_snapshot.get("id") != snapshot_id or active is None or active.id != expected_id:
-                raise HTTPException(status_code=409, detail="The observed or expected data changed since this comparison. Please compare again before confirming.")
+            if (
+                current_snapshot is None
+                or current_snapshot.get("id") != snapshot_id
+                or active is None
+                or active.id != expected_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="The observed or expected data changed since this comparison. Please compare again before confirming.",
+                )
             snapshot = hydrate_snapshot(current_snapshot)
             try:
-                version = promote_snapshot(source, snapshot, versions)
+                version = promote_snapshot(
+                    source,
+                    snapshot,
+                    versions,
+                    [
+                        hydrate_functional_model(row)
+                        for row in repo.load_snapshot_functional_models(snapshot.id)
+                    ],
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             version.comment = str(payload.get("comment") or "").strip() or version.comment
@@ -1077,20 +1799,47 @@ def create_app(db_path: str | None = None):
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
-            record_audit(repo, request, "golden_source.version_confirmed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version, "snapshot_id": snapshot_id})
-            return {"source": asdict(source), "version": asdict(version), "observed_snapshot_id": snapshot_id, "active_golden_version_id": expected_id}
+            record_audit(
+                repo,
+                request,
+                "golden_source.version_confirmed",
+                "golden_source_version",
+                version.id,
+                {"source_id": source.id, "version": version.version, "snapshot_id": snapshot_id},
+            )
+            return {
+                "source": asdict(source),
+                "version": asdict(version),
+                "observed_snapshot_id": snapshot_id,
+                "active_golden_version_id": expected_id,
+            }
+
     def _golden_context(repo: Repository, name: str):
         """Return the Golden Source, its versions and the active one."""
         payload = repo.find_by_name("golden_sources", name)
         if not payload:
             raise HTTPException(status_code=404, detail="Golden Source not found")
         source = hydrate_golden_source(payload)
-        versions = [hydrate_golden_version(row) for row in repo.list_payloads("golden_source_versions") if row.get("golden_source_id") == source.id]
-        active = next((item for item in versions if item.id == source.active_version_id), None) or (max(versions, key=lambda item: item.version) if versions else None)
+        versions = [
+            hydrate_golden_version(row)
+            for row in repo.list_payloads("golden_source_versions")
+            if row.get("golden_source_id") == source.id
+        ]
+        active = next((item for item in versions if item.id == source.active_version_id), None) or (
+            max(versions, key=lambda item: item.version) if versions else None
+        )
         return source, versions, active
 
     @app.get("/api/golden-sources/{name}/assignments")
-    def golden_assignments(name: str, request: Request, search: str | None = None, limit: int = 25, offset: int = 0, sort: str | None = None, order: str | None = None):
+    def golden_assignments(
+        name: str,
+        request: Request,
+        search: str | None = None,
+        limit: int = 25,
+        offset: int = 0,
+        sort: str | None = None,
+        order: str | None = None,
+    ):
         """Read what the Golden Source currently expects, so it can be reviewed in the WebUI."""
         _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
@@ -1102,19 +1851,40 @@ def create_app(db_path: str | None = None):
             identity_names, access_names = _display_names(repo)
             # What an expected access actually is stays on the Access object, collected once.
             access_payloads = repo.list_payloads("accesses")
-            catalog = {(str(row.get("provider")), str(row.get("name"))): row for row in access_payloads}
-            catalog_by_native = {
-                (str(row.get("provider")), str((row.get("control_object") or {}).get("native_id"))): row
-                for row in access_payloads
-                if isinstance(row.get("control_object"), dict) and (row.get("control_object") or {}).get("native_id")
+            catalog = {
+                (str(row.get("provider")), str(row.get("name"))): row for row in access_payloads
             }
+            catalog_by_native = {
+                (
+                    str(row.get("provider")),
+                    str((row.get("control_object") or {}).get("native_id")),
+                ): row
+                for row in access_payloads
+                if isinstance(row.get("control_object"), dict)
+                and (row.get("control_object") or {}).get("native_id")
+            }
+
+            frozen = {
+                (item.provider, item.name): item for item in active.expected_access_definitions
+            }
+            functional_accesses = {key: hydrate_access(row) for key, row in catalog.items()}
+            functional_accesses.update(frozen)
             rows = []
             for item in sorted(active.assignments, key=lambda entry: entry.key()):
                 row = asdict(item)
                 # Show the names people recognise; collectors key objects by their native id.
-                row["identity_display_name"] = identity_names.get((item.identity_provider, item.identity_identifier)) or item.identity_identifier
-                row["access_display_name"] = access_names.get((item.access_provider, item.access_name)) or item.access_name
-                described = catalog.get((item.access_provider, item.access_name)) or catalog_by_native.get((item.access_provider, str(item.access_native_id))) or {}
+                row["identity_display_name"] = (
+                    identity_names.get((item.identity_provider, item.identity_identifier))
+                    or item.identity_identifier
+                )
+                row["access_display_name"] = (
+                    access_names.get((item.access_provider, item.access_name)) or item.access_name
+                )
+                described = (
+                    catalog.get((item.access_provider, item.access_name))
+                    or catalog_by_native.get((item.access_provider, str(item.access_native_id)))
+                    or {}
+                )
                 row["access_description"] = described.get("description")
                 row["access_target"] = described.get("target")
                 row["access_owner"] = described.get("access_owner")
@@ -1124,7 +1894,12 @@ def create_app(db_path: str | None = None):
                 row["golden_comment"] = annotation.get("comment") if annotation else None
                 if not row.get("access_permission"):
                     permission = described.get("permission")
-                    row["access_permission"] = (permission or {}).get("display_name") or (permission or {}).get("identifier") if isinstance(permission, dict) else permission
+                    row["access_permission"] = (
+                        (permission or {}).get("display_name")
+                        or (permission or {}).get("identifier")
+                        if isinstance(permission, dict)
+                        else permission
+                    )
                 rows.append(row)
             covered = sorted({str(item.access_provider) for item in active.assignments})
             applications = {
@@ -1138,15 +1913,28 @@ def create_app(db_path: str | None = None):
                 for item in active.assignments
             }
             expected_accesses = {
-                (str(item.access_provider), str(item.access_name))
-                for item in active.assignments
+                (str(item.access_provider), str(item.access_name)) for item in active.assignments
             }
-            campaign_name = next((str(row.get("name")) for row in repo.list_payloads("campaigns") if str(row.get("id")) == str(active.source_campaign_id)), None)
+            campaign_name = next(
+                (
+                    str(row.get("name"))
+                    for row in repo.list_payloads("campaigns")
+                    if str(row.get("id")) == str(active.source_campaign_id)
+                ),
+                None,
+            )
             snapshots = repo.list_payloads("snapshots")
-            collected = [str(item.get("name")) for item in (snapshots[-1].get("providers", []) if snapshots else [])]
+            collected = [
+                str(item.get("name"))
+                for item in (snapshots[-1].get("providers", []) if snapshots else [])
+            ]
             if search:
                 needle = search.casefold()
-                rows = [row for row in rows if needle in " ".join(str(value or "") for value in row.values()).casefold()]
+                rows = [
+                    row
+                    for row in rows
+                    if needle in " ".join(str(value or "") for value in row.values()).casefold()
+                ]
             from access_review_engine.web_read_models import apply_field_filters
 
             rows = apply_field_filters(rows, column_filters(request))
@@ -1179,7 +1967,17 @@ def create_app(db_path: str | None = None):
                 "application_count": len(applications),
                 "collected_providers": collected,
                 "collected_at": snapshots[-1].get("created_at") if snapshots else None,
-                "versions": [{"id": item.id, "version": item.version, "source_type": item.source_type, "created_at": item.created_at, "assignments": len(item.assignments), "comment": item.comment} for item in sorted(versions, key=lambda item: item.version)],
+                "versions": [
+                    {
+                        "id": item.id,
+                        "version": item.version,
+                        "source_type": item.source_type,
+                        "created_at": item.created_at,
+                        "assignments": len(item.assignments),
+                        "comment": item.comment,
+                    }
+                    for item in sorted(versions, key=lambda item: item.version)
+                ],
             }
 
     @app.get("/api/golden-sources/{name}/authentication")
@@ -1189,11 +1987,32 @@ def create_app(db_path: str | None = None):
         with Repository(db_path) as repo:
             source, versions, active = _golden_context(repo, name)
             snapshots = repo.list_payloads("snapshots")
-            covered = sorted({str(item.access_provider) for item in active.assignments}) if active else []
+            covered = (
+                sorted({str(item.access_provider) for item in active.assignments}) if active else []
+            )
             # Read the posture of a collection that covers what this expected state describes.
-            relevant = [row for row in snapshots if not covered or {str(item.get("name")) for item in row.get("providers", [])} & set(covered)]
-            observed_payload = next((row.get("authentication_posture") for row in reversed(relevant) if row.get("authentication_posture")), None)
-            collected_at = next((row.get("created_at") for row in reversed(relevant) if row.get("authentication_posture")), None)
+            relevant = [
+                row
+                for row in snapshots
+                if not covered
+                or {str(item.get("name")) for item in row.get("providers", [])} & set(covered)
+            ]
+            observed_payload = next(
+                (
+                    row.get("authentication_posture")
+                    for row in reversed(relevant)
+                    if row.get("authentication_posture")
+                ),
+                None,
+            )
+            collected_at = next(
+                (
+                    row.get("created_at")
+                    for row in reversed(relevant)
+                    if row.get("authentication_posture")
+                ),
+                None,
+            )
         expected = active.golden_authentication_policy if active else None
         observed = hydrate_authentication_posture(observed_payload) if observed_payload else None
         rows = compare_authentication_posture(expected, observed)
@@ -1207,12 +2026,16 @@ def create_app(db_path: str | None = None):
             "summary": {
                 "compliant": sum(1 for row in rows if row["assessment"] == "compliant"),
                 "deviation": sum(1 for row in rows if row["assessment"] == "deviation"),
-                "unknown": sum(1 for row in rows if row["assessment"] in {"unknown", "not_collected"}),
+                "unknown": sum(
+                    1 for row in rows if row["assessment"] in {"unknown", "not_collected"}
+                ),
             },
         }
 
     @app.post("/api/golden-sources/{name}/authentication")
-    def golden_adopt_authentication(name: str, request: Request, payload: dict[str, Any] | None = Body(default=None)):
+    def golden_adopt_authentication(
+        name: str, request: Request, payload: dict[str, Any] | None = Body(default=None)
+    ):
         """Record the observed authentication posture as the expected one, in a new version."""
         _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
@@ -1220,21 +2043,60 @@ def create_app(db_path: str | None = None):
             if active is None:
                 raise HTTPException(status_code=409, detail="Golden Source has no version yet")
             snapshots = repo.list_payloads("snapshots")
-            observed_payload = next((row.get("authentication_posture") for row in reversed(snapshots) if row.get("authentication_posture")), None)
+            observed_payload = next(
+                (
+                    row.get("authentication_posture")
+                    for row in reversed(snapshots)
+                    if row.get("authentication_posture")
+                ),
+                None,
+            )
             if observed_payload is None:
-                raise HTTPException(status_code=409, detail="No collection has reported an authentication posture yet")
+                raise HTTPException(
+                    status_code=409,
+                    detail="No collection has reported an authentication posture yet",
+                )
             posture = hydrate_authentication_posture(observed_payload)
-            version = evolve_golden_version(source, active, versions, comment=str((payload or {}).get("comment") or "Authentication policy taken from the collected posture"), golden_authentication_policy=posture)
+            version = evolve_golden_version(
+                source,
+                active,
+                versions,
+                comment=str(
+                    (payload or {}).get("comment")
+                    or "Authentication policy taken from the collected posture"
+                ),
+                golden_authentication_policy=posture,
+            )
             copy_assignment_annotations(repo, active, version)
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
-            record_audit(repo, request, "golden_source.authentication_policy_set", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
-            return {"version": version.version, "version_id": version.id, "controls": len(posture.controls)}
+            record_audit(
+                repo,
+                request,
+                "golden_source.authentication_policy_set",
+                "golden_source_version",
+                version.id,
+                {"source_id": source.id, "version": version.version},
+            )
+            return {
+                "version": version.version,
+                "version_id": version.id,
+                "controls": len(posture.controls),
+            }
 
     @app.get("/api/golden-sources/{name}/accesses")
-    def golden_accesses(name: str, request: Request, search: str | None = None, limit: int = 25, offset: int = 0, sort: str | None = None, order: str | None = None):
-        """The expected accesses themselves: each role or group, what it allows, and how many people hold it."""
+    def golden_accesses(
+        name: str,
+        request: Request,
+        search: str | None = None,
+        limit: int = 25,
+        offset: int = 0,
+        sort: str | None = None,
+        order: str | None = None,
+    ):
+        """Return expected roles/groups with their permissions and holder counts."""
+        from access_review_engine.functional_context import functional_context
         from access_review_engine.web_read_models import _display_names, sorted_rows
 
         _require(current_user(request), ("ADMIN", "OPERATOR"))
@@ -1244,76 +2106,165 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=409, detail="Golden Source has no version yet")
             identity_names, access_names = _display_names(repo)
             access_payloads = repo.list_payloads("accesses")
-            catalog = {(str(row.get("provider")), str(row.get("name"))): row for row in access_payloads}
+            catalog = {
+                (str(row.get("provider")), str(row.get("name"))): row for row in access_payloads
+            }
             catalog_by_native = {
-                (str(row.get("provider")), str((row.get("control_object") or {}).get("native_id"))): row
+                (
+                    str(row.get("provider")),
+                    str((row.get("control_object") or {}).get("native_id")),
+                ): row
                 for row in access_payloads
-                if isinstance(row.get("control_object"), dict) and (row.get("control_object") or {}).get("native_id")
+                if isinstance(row.get("control_object"), dict)
+                and (row.get("control_object") or {}).get("native_id")
             }
             access_comments = {
                 (item.access_provider, item.access_name): item.comment
                 for item in active.access_comments
             }
+            frozen = {
+                (item.provider, item.name): item for item in active.expected_access_definitions
+            }
+            functional_accesses = {key: hydrate_access(row) for key, row in catalog.items()}
+            functional_accesses.update(frozen)
             grouped: dict[tuple[str, str], dict[str, Any]] = {}
             for item in active.assignments:
                 key = (item.access_provider, item.access_name)
                 row = grouped.get(key)
                 if row is None:
-                    described = catalog.get(key) or catalog_by_native.get((item.access_provider, str(item.access_native_id))) or {}
+                    described = (
+                        asdict(frozen[key])
+                        if key in frozen
+                        else catalog.get(key)
+                        or catalog_by_native.get((item.access_provider, str(item.access_native_id)))
+                        or {}
+                    )
                     permission = described.get("permission")
+                    functional = (
+                        functional_context(
+                            functional_accesses[key],
+                            functional_accesses.values(),
+                            active.expected_access_relations,
+                            active.functional_access_models,
+                        )
+                        if key in functional_accesses
+                        else {}
+                    )
                     row = grouped[key] = {
                         "access_provider": item.access_provider,
                         "access_name": item.access_name,
                         "access_display_name": access_names.get(key) or item.access_name,
                         "access_description": described.get("description"),
                         "access_target": described.get("target"),
-                        "access_owner": (described.get("access_owner") or {}).get("identity") if isinstance(described.get("access_owner"), dict) else None,
-                        "access_permission": item.access_permission or ((permission or {}).get("display_name") or (permission or {}).get("identifier") if isinstance(permission, dict) else permission),
+                        "access_owner": (described.get("access_owner") or {}).get("identity")
+                        if isinstance(described.get("access_owner"), dict)
+                        else None,
+                        "access_permission": item.access_permission
+                        or (
+                            (permission or {}).get("display_name")
+                            or (permission or {}).get("identifier")
+                            if isinstance(permission, dict)
+                            else permission
+                        ),
                         "access_comment": access_comments.get(key),
                         "access_id": described.get("id"),
                         "business_context": access_context_for_payload(repo, described),
-                        "technical_grant": "Group membership" if str((permission or {}).get("identifier") if isinstance(permission, dict) else permission).casefold() == "member" else "Direct assignment",
+                        "technical_grant": "Group membership"
+                        if str(
+                            (permission or {}).get("identifier")
+                            if isinstance(permission, dict)
+                            else permission
+                        ).casefold()
+                        == "member"
+                        else "Direct assignment",
+                        **functional,
                         "expected_identities": 0,
                         "identities": [],
                     }
                 row["expected_identities"] += 1
-                row["identities"].append({
-                    "identity_provider": item.identity_provider,
-                    "identity_identifier": item.identity_identifier,
-                    "identity_display_name": identity_names.get((item.identity_provider, item.identity_identifier)) or item.identity_identifier,
-                })
-            rows = sorted(grouped.values(), key=lambda row: str(row["access_display_name"]).casefold())
-            for row in rows:
-                row["identities"].sort(key=lambda entry: str(entry["identity_display_name"]).casefold())
-            application_options = sorted({
-                application
-                for row in rows
-                for origin in ("manual", "source")
-                for application in split_multi_value(_context_value(row, "application", origin))
-            }, key=str.casefold)
-            permission_options = sorted({
-                value
-                for row in rows
-                for value in (
-                    row.get("access_permission"),
-                    *[
-                        str(context.get("value"))
-                        for context in (row.get("business_context", {}).get("fields", {}).get("business_permission", {}).values() if isinstance(row.get("business_context"), dict) else [])
-                        if isinstance(context, dict) and context.get("value") not in {None, ""}
-                    ],
+                row["identities"].append(
+                    {
+                        "identity_provider": item.identity_provider,
+                        "identity_identifier": item.identity_identifier,
+                        "identity_display_name": identity_names.get(
+                            (item.identity_provider, item.identity_identifier)
+                        )
+                        or item.identity_identifier,
+                    }
                 )
-                if value not in {None, ""}
-            }, key=str.casefold)
+            rows = sorted(
+                grouped.values(), key=lambda row: str(row["access_display_name"]).casefold()
+            )
+            for row in rows:
+                row["identities"].sort(
+                    key=lambda entry: str(entry["identity_display_name"]).casefold()
+                )
+            application_options = sorted(
+                {
+                    application
+                    for row in rows
+                    for origin in ("manual", "source")
+                    for application in split_multi_value(_context_value(row, "application", origin))
+                },
+                key=str.casefold,
+            )
+            permission_options = sorted(
+                {
+                    value
+                    for row in rows
+                    for value in (
+                        row.get("access_permission"),
+                        *[
+                            str(context.get("value"))
+                            for context in (
+                                row.get("business_context", {})
+                                .get("fields", {})
+                                .get("business_permission", {})
+                                .values()
+                                if isinstance(row.get("business_context"), dict)
+                                else []
+                            )
+                            if isinstance(context, dict) and context.get("value") not in {None, ""}
+                        ],
+                    )
+                    if value not in {None, ""}
+                },
+                key=str.casefold,
+            )
             if search:
                 needle = search.casefold()
-                rows = [row for row in rows if needle in " ".join(str(row.get(field) or "") for field in ("access_display_name", "access_name", "access_description", "access_provider", "access_permission")).casefold()]
+                rows = [
+                    row
+                    for row in rows
+                    if needle
+                    in " ".join(
+                        str(row.get(field) or "")
+                        for field in (
+                            "access_display_name",
+                            "access_name",
+                            "access_description",
+                            "access_provider",
+                            "access_permission",
+                        )
+                    ).casefold()
+                ]
             from access_review_engine.web_read_models import apply_field_filters
 
             rows = apply_field_filters(rows, column_filters(request))
             if sort:
                 rows = sorted_rows(rows, sort, order)
             bounded, start = max(1, min(limit, 500)), max(0, offset)
-            return {"items": rows[start : start + bounded], "total": len(rows), "limit": bounded, "offset": start, "version": active.version, "sort": sort or "", "order": (order or "asc").lower(), "application_options": application_options, "permission_options": permission_options}
+            return {
+                "items": rows[start : start + bounded],
+                "total": len(rows),
+                "limit": bounded,
+                "offset": start,
+                "version": active.version,
+                "sort": sort or "",
+                "order": (order or "asc").lower(),
+                "application_options": application_options,
+                "permission_options": permission_options,
+            }
 
     @app.post("/api/golden-sources/{name}/access-comment")
     def golden_access_comment(name: str, request: Request, payload: dict[str, Any] = Body(...)):
@@ -1334,12 +2285,18 @@ def create_app(db_path: str | None = None):
             if principal.role != "ADMIN" and not principal.can_access(provider):
                 raise HTTPException(status_code=403, detail="Scope is not authorized")
             key = (provider, access_name)
-            current = next((item.comment for item in active.access_comments if (item.access_provider, item.access_name) == key), None)
+            current = next(
+                (
+                    item.comment
+                    for item in active.access_comments
+                    if (item.access_provider, item.access_name) == key
+                ),
+                None,
+            )
             if current == comment:
                 raise HTTPException(status_code=409, detail="This access comment is unchanged")
             comments = {
-                (item.access_provider, item.access_name): item
-                for item in active.access_comments
+                (item.access_provider, item.access_name): item for item in active.access_comments
             }
             if comment is None:
                 comments.pop(key, None)
@@ -1349,35 +2306,108 @@ def create_app(db_path: str | None = None):
                 source,
                 active,
                 versions,
-                access_comments=sorted(comments.values(), key=lambda item: (item.access_provider, item.access_name)),
+                access_comments=sorted(
+                    comments.values(), key=lambda item: (item.access_provider, item.access_name)
+                ),
             )
             with repo.transaction():
                 copy_assignment_annotations(repo, active, version, principal.subject)
                 source.active_version_id = version.id
                 repo.upsert("golden_sources", source)
                 repo.upsert("golden_source_versions", version)
-                record_audit(repo, request, "golden_source.access_comment_changed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version, "access_provider": provider, "access_name": access_name})
-            return {"version": version.version, "version_id": version.id, "access_provider": provider, "access_name": access_name, "comment": comment}
+                record_audit(
+                    repo,
+                    request,
+                    "golden_source.access_comment_changed",
+                    "golden_source_version",
+                    version.id,
+                    {
+                        "source_id": source.id,
+                        "version": version.version,
+                        "access_provider": provider,
+                        "access_name": access_name,
+                    },
+                )
+            return {
+                "version": version.version,
+                "version_id": version.id,
+                "access_provider": provider,
+                "access_name": access_name,
+                "comment": comment,
+            }
 
     @app.get("/api/golden-sources/{name}/functional-model")
     def golden_functional_model(name: str, request: Request):
         """Read the immutable functional definitions for one Golden version."""
         _require(current_user(request), ("ADMIN", "OPERATOR"))
+        from access_review_engine.functional_context import functional_context
         from access_review_engine.golden_functional import functional_access_rows
+        from access_review_engine.services import compare_functional_access_models
 
         with Repository(db_path) as repo:
             _, _, active = _golden_context(repo, name)
             if active is None:
                 raise HTTPException(status_code=409, detail="Golden Source has no version yet")
+            rows = functional_access_rows(repo, active)
+            observed_models = []
+            observed_contexts = {}
+            providers = {row["access_provider"] for row in rows}
+            snapshots = repo.list_payloads("snapshots")
+            for provider in providers:
+                latest = max(
+                    (
+                        item
+                        for item in snapshots
+                        if any(
+                            source.get("name") == provider for source in item.get("providers", [])
+                        )
+                    ),
+                    key=lambda item: str(item.get("created_at") or ""),
+                    default=None,
+                )
+                if latest is None:
+                    continue
+                snapshot = hydrate_snapshot(latest)
+                model_rows = [
+                    item
+                    for item in repo.load_snapshot_functional_models(snapshot.id)
+                    if item.get("access_provider") == provider
+                ]
+                models = [hydrate_functional_model(item) for item in model_rows]
+                observed_models.extend(
+                    model
+                    for model, item in zip(models, model_rows, strict=True)
+                    if item.get("authoritative", False)
+                )
+                for access in snapshot.accesses:
+                    if access.provider == provider:
+                        observed_contexts[(access.provider, access.name)] = functional_context(
+                            access,
+                            snapshot.accesses,
+                            snapshot.access_relations,
+                            models,
+                        )
+            differences = compare_functional_access_models(
+                active.functional_access_models,
+                observed_models,
+            )
+            changed = {
+                (item["access_provider"], item["access_name"])
+                for item in differences
+                if item["state"] in {"missing", "unexpected"}
+            }
+            for row in rows:
+                key = (row["access_provider"], row["access_name"])
+                context = observed_contexts.get(key, {})
+                row["observed_functional_rights"] = context.get("functional_rights", [])
+                row["observed_completeness"] = context.get("functional_completeness", "not_defined")
+                row["application"] = context.get("application", "")
+                row["functional_authorization_changed"] = key in changed
             return {
                 "version": active.version,
                 "schema_version": active.schema_version,
-                "items": functional_access_rows(repo, active),
-                "capabilities": [
-                    asdict(item)
-                    for item in repo.list_capabilities()
-                    if item.active
-                ],
+                "items": rows,
+                "capabilities": [asdict(item) for item in repo.list_capabilities() if item.active],
             }
 
     @app.post("/api/golden-sources/{name}/functional-model")
@@ -1438,6 +2468,7 @@ def create_app(db_path: str | None = None):
                 "access_provider": payload.get("access_provider"),
                 "access_name": payload.get("access_name"),
             }
+
     @app.post("/api/golden-sources/{name}/assignments")
     def golden_edit_assignments(name: str, request: Request, payload: dict[str, Any] = Body(...)):
         """Add, remove or replace expected assignments, as a new immutable version."""
@@ -1450,30 +2481,60 @@ def create_app(db_path: str | None = None):
 
         def entry(row: Any) -> GoldenSourceAssignment:
             if not isinstance(row, dict):
-                raise HTTPException(status_code=400, detail="Each expected access must be an object")
-            missing = [key for key in ("access_provider", "access_name", "identity_provider", "identity_identifier") if not str(row.get(key, "")).strip()]
+                raise HTTPException(
+                    status_code=400, detail="Each expected access must be an object"
+                )
+            missing = [
+                key
+                for key in (
+                    "access_provider",
+                    "access_name",
+                    "identity_provider",
+                    "identity_identifier",
+                )
+                if not str(row.get(key, "")).strip()
+            ]
             if missing:
-                raise HTTPException(status_code=400, detail="Expected access requires " + ", ".join(missing))
-            identity_key = (str(row["identity_provider"]).strip(), str(row["identity_identifier"]).strip())
+                raise HTTPException(
+                    status_code=400, detail="Expected access requires " + ", ".join(missing)
+                )
+            identity_key = (
+                str(row["identity_provider"]).strip(),
+                str(row["identity_identifier"]).strip(),
+            )
             access_key = (str(row["access_provider"]).strip(), str(row["access_name"]).strip())
             return GoldenSourceAssignment(
                 access_provider=str(row["access_provider"]).strip(),
                 access_name=str(row["access_name"]).strip(),
                 identity_provider=str(row["identity_provider"]).strip(),
                 identity_identifier=str(row["identity_identifier"]).strip(),
-                access_native_id=(known_accesses[access_key] if access_key in known_accesses else str(row.get("access_native_id") or "").strip() or None),
+                access_native_id=(
+                    known_accesses[access_key]
+                    if access_key in known_accesses
+                    else str(row.get("access_native_id") or "").strip() or None
+                ),
                 access_permission=str(row.get("access_permission") or "") or None,
-                identity_native_id=(known_identities[identity_key] if identity_key in known_identities else str(row.get("identity_native_id") or "").strip() or None),
+                identity_native_id=(
+                    known_identities[identity_key]
+                    if identity_key in known_identities
+                    else str(row.get("identity_native_id") or "").strip() or None
+                ),
             )
 
         with Repository(db_path) as repo:
             source, versions, active = _golden_context(repo, name)
             known_identities = {
-                (str(item.get("provider") or ""), str(item.get("identifier") or "")): str(item.get("native_id") or "") or None
+                (str(item.get("provider") or ""), str(item.get("identifier") or "")): str(
+                    item.get("native_id") or ""
+                )
+                or None
                 for item in repo.list_payloads("identities")
             }
             known_accesses = {
-                (str(item.get("provider") or ""), str(item.get("name") or "")): str((item.get("control_object") or {}).get("native_id") or "") or None
+                (str(item.get("provider") or ""), str(item.get("name") or "")): str(
+                    (item.get("control_object") or {}).get("native_id") or ""
+                )
+                or None
                 for item in repo.list_payloads("accesses")
             }
             replace = payload.get("replace")
@@ -1487,28 +2548,64 @@ def create_app(db_path: str | None = None):
                 remove_access = payload.get("remove_access")
                 if remove_access is not None:
                     if not isinstance(remove_access, dict):
-                        raise HTTPException(status_code=400, detail="remove_access must be an object")
+                        raise HTTPException(
+                            status_code=400, detail="remove_access must be an object"
+                        )
                     provider = str(remove_access.get("access_provider") or "").strip()
                     access_name = str(remove_access.get("access_name") or "").strip()
                     if not provider or not access_name:
-                        raise HTTPException(status_code=400, detail="remove_access requires access_provider and access_name")
+                        raise HTTPException(
+                            status_code=400,
+                            detail="remove_access requires access_provider and access_name",
+                        )
                     assignments = {
-                        item for item in assignments
+                        item
+                        for item in assignments
                         if (item.access_provider, item.access_name) != (provider, access_name)
                     }
                 origin, comment = "manual", str(payload.get("comment") or "Edited in the WebUI")
             if active is not None and assignments == set(active.assignments):
-                raise HTTPException(status_code=409, detail="This change leaves the Golden Source unchanged")
+                raise HTTPException(
+                    status_code=409, detail="This change leaves the Golden Source unchanged"
+                )
             try:
-                version = evolve_golden_version(source, active, versions, assignments=assignments, source_type=origin, comment=comment) if active else create_golden_version(source, assignments, origin, versions, comment=comment)
+                version = (
+                    evolve_golden_version(
+                        source,
+                        active,
+                        versions,
+                        assignments=assignments,
+                        source_type=origin,
+                        comment=comment,
+                    )
+                    if active
+                    else create_golden_version(
+                        source, assignments, origin, versions, comment=comment
+                    )
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             copy_assignment_annotations(repo, active, version)
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
-            record_audit(repo, request, "golden_source.version_edited", "golden_source_version", version.id, {"source_id": source.id, "version": version.version, "assignments": len(version.assignments)})
-            return {"version": version.version, "version_id": version.id, "assignments": len(version.assignments)}
+            record_audit(
+                repo,
+                request,
+                "golden_source.version_edited",
+                "golden_source_version",
+                version.id,
+                {
+                    "source_id": source.id,
+                    "version": version.version,
+                    "assignments": len(version.assignments),
+                },
+            )
+            return {
+                "version": version.version,
+                "version_id": version.id,
+                "assignments": len(version.assignments),
+            }
 
     @app.post("/api/golden-sources/{name}/version-comment")
     def golden_version_comment(name: str, request: Request, payload: dict[str, Any] = Body(...)):
@@ -1524,15 +2621,28 @@ def create_app(db_path: str | None = None):
             if active is None:
                 raise HTTPException(status_code=409, detail="Golden Source has no version yet")
             if comment == (active.comment or ""):
-                raise HTTPException(status_code=409, detail="This Golden version comment is unchanged")
+                raise HTTPException(
+                    status_code=409, detail="This Golden version comment is unchanged"
+                )
             version = evolve_golden_version(source, active, versions, comment=comment or None)
             with repo.transaction():
                 copy_assignment_annotations(repo, active, version, principal.subject)
                 source.active_version_id = version.id
                 repo.upsert("golden_sources", source)
                 repo.upsert("golden_source_versions", version)
-                record_audit(repo, request, "golden_source.version_comment_changed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
-            return {"version": version.version, "version_id": version.id, "comment": version.comment}
+                record_audit(
+                    repo,
+                    request,
+                    "golden_source.version_comment_changed",
+                    "golden_source_version",
+                    version.id,
+                    {"source_id": source.id, "version": version.version},
+                )
+            return {
+                "version": version.version,
+                "version_id": version.id,
+                "comment": version.comment,
+            }
 
     @app.post("/api/golden-sources/{name}/assignment-comment")
     def golden_assignment_comment(name: str, request: Request, payload: dict[str, Any] = Body(...)):
@@ -1563,26 +2673,50 @@ def create_app(db_path: str | None = None):
             source, versions, active = _golden_context(repo, name)
             if active is None:
                 raise HTTPException(status_code=409, detail="Golden Source has no version yet")
-            stable = [item for item in active.assignments if requested.stable_key() and item.stable_key() == requested.stable_key()]
+            stable = [
+                item
+                for item in active.assignments
+                if requested.stable_key() and item.stable_key() == requested.stable_key()
+            ]
             if requested.stable_key() is not None:
                 matches = stable
             else:
-                matches = [item for item in active.assignments if item.key() == requested.key() and item.stable_key() is None]
+                matches = [
+                    item
+                    for item in active.assignments
+                    if item.key() == requested.key() and item.stable_key() is None
+                ]
             if len(matches) != 1:
-                raise HTTPException(status_code=404, detail="Expected assignment not found or ambiguous")
+                raise HTTPException(
+                    status_code=404, detail="Expected assignment not found or ambiguous"
+                )
             current = matches[0]
             old = annotation_for_assignment(repo, active.id, current)
             if (old or {}).get("comment") == comment:
                 raise HTTPException(status_code=409, detail="This comment is unchanged")
-            version = evolve_golden_version(source, active, versions, comment=version_comment or "Expected assignment comment updated")
+            version = evolve_golden_version(
+                source,
+                active,
+                versions,
+                comment=version_comment or "Expected assignment comment updated",
+            )
             try:
                 with repo.transaction():
                     copy_assignment_annotations(repo, active, version)
-                    annotation = set_assignment_annotation(repo, version, current, comment, principal.subject)
+                    annotation = set_assignment_annotation(
+                        repo, version, current, comment, principal.subject
+                    )
                     source.active_version_id = version.id
                     repo.upsert("golden_sources", source)
                     repo.upsert("golden_source_versions", version)
-                    record_audit(repo, request, "golden_source.assignment_comment_changed", "golden_source_version", version.id, {"source_id": source.id, "version": version.version})
+                    record_audit(
+                        repo,
+                        request,
+                        "golden_source.assignment_comment_changed",
+                        "golden_source_version",
+                        version.id,
+                        {"source_id": source.id, "version": version.version},
+                    )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             return {"version": version.version, "version_id": version.id, "annotation": annotation}
@@ -1595,19 +2729,55 @@ def create_app(db_path: str | None = None):
             if not source:
                 raise HTTPException(status_code=404, detail="Golden Source not found")
             golden = hydrate_golden_source(source)
-            versions = [hydrate_golden_version(row) for row in repo.list_payloads("golden_source_versions") if row.get("golden_source_id") == golden.id]
+            versions = [
+                hydrate_golden_version(row)
+                for row in repo.list_payloads("golden_source_versions")
+                if row.get("golden_source_id") == golden.id
+            ]
             if not versions:
                 raise HTTPException(status_code=409, detail="Golden Source has no version")
             output = io.StringIO()
-            writer = csv.DictWriter(output, fieldnames=["access_provider", "access_name", "identity_provider", "identity_identifier", "permission"])
+            writer = csv.DictWriter(
+                output,
+                fieldnames=[
+                    "access_provider",
+                    "access_name",
+                    "identity_provider",
+                    "identity_identifier",
+                    "permission",
+                ],
+            )
             writer.writeheader()
             for item in versions[-1].assignments:
-                writer.writerow({"access_provider": item.access_provider, "access_name": item.access_name, "identity_provider": item.identity_provider, "identity_identifier": item.identity_identifier, "permission": item.access_permission or ""})
-            return StreamingResponse(iter([output.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={name}-baseline.csv"})
-
+                writer.writerow(
+                    {
+                        "access_provider": item.access_provider,
+                        "access_name": item.access_name,
+                        "identity_provider": item.identity_provider,
+                        "identity_identifier": item.identity_identifier,
+                        "permission": item.access_permission or "",
+                    }
+                )
+            return StreamingResponse(
+                iter([output.getvalue()]),
+                media_type="text/csv",
+                headers={"Content-Disposition": f"attachment; filename={name}-baseline.csv"},
+            )
 
     @app.get("/api/reports/{campaign_id}/results")
-    def campaign_report_results(campaign_id: str, request: Request, search: str | None = None, classification: str | None = None, decision: str | None = None, provider: str | None = None, owner: str | None = None, limit: int = 25, offset: int = 0, sort: str | None = None, order: str | None = None):
+    def campaign_report_results(
+        campaign_id: str,
+        request: Request,
+        search: str | None = None,
+        classification: str | None = None,
+        decision: str | None = None,
+        provider: str | None = None,
+        owner: str | None = None,
+        limit: int = 25,
+        offset: int = 0,
+        sort: str | None = None,
+        order: str | None = None,
+    ):
         """The report, readable in the WebUI: same rows and same counts as the exported file."""
         from access_review_engine.web_read_models import sorted_rows
 
@@ -1618,33 +2788,61 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=404, detail="Campaign not found")
             campaign = hydrate_campaign(raw)
             _require_campaign_access(principal, campaign, repo)
-            items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
-            decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
+            items = [
+                hydrate_review_item(row)
+                for row in repo.list_payloads("review_items")
+                if row.get("campaign_id") == campaign_id
+            ]
+            decisions = [
+                hydrate_decision(row)
+                for row in repo.list_payloads("decisions")
+                if row.get("review_item_id") in {item.id for item in items}
+            ]
             snapshot = _snapshot(repo, campaign.snapshot_id)
             identity_names = identity_names_from_snapshot(snapshot)
             access_names = access_names_from_snapshot(snapshot)
         rows = build_report_rows(items, decisions, identity_names, access_names)
         summary = report_summary(rows)
         facets = {
-            "classification": sorted({str(row["classification"]) for row in rows if row["classification"]}),
+            "classification": sorted(
+                {str(row["classification"]) for row in rows if row["classification"]}
+            ),
             "decision": sorted({str(row["decision"]) for row in rows if row["decision"]}),
             "provider": sorted({str(row["provider"]) for row in rows if row["provider"]}),
             "owner": sorted({str(row["owner"]) for row in rows if row["owner"]}),
         }
-        selected = {"classification": classification, "decision": decision, "provider": provider, "owner": owner}
+        selected = {
+            "classification": classification,
+            "decision": decision,
+            "provider": provider,
+            "owner": owner,
+        }
         for field, value in selected.items():
             if value:
                 rows = [row for row in rows if str(row.get(field)) == value]
         if search:
             needle = search.casefold()
-            rows = [row for row in rows if needle in " ".join(str(value) for value in row.values()).casefold()]
+            rows = [
+                row
+                for row in rows
+                if needle in " ".join(str(value) for value in row.values()).casefold()
+            ]
         from access_review_engine.web_read_models import apply_field_filters
 
         rows = apply_field_filters(rows, column_filters(request))
         rows = sorted_rows(rows, sort or "source_group", order or "asc")
         bounded, start = max(1, min(limit, 500)), max(0, offset)
         return {
-            "campaign": {"id": campaign.id, "name": campaign.name, "status": campaign.status, "due_at": campaign.due_at, "opened_at": campaign.opened_at, "closed_at": campaign.closed_at, "snapshot_id": campaign.snapshot_id, "golden_source_version_id": campaign.golden_source_version_id},
+            "campaign": {
+                "id": campaign.id,
+                "name": campaign.name,
+                "status": campaign.status,
+                "due_at": campaign.due_at,
+                "opened_at": campaign.opened_at,
+                "closed_at": campaign.closed_at,
+                "snapshot_id": campaign.snapshot_id,
+                "golden_source_version_id": campaign.golden_source_version_id,
+            },
             "summary": summary,
             "facets": facets,
             "items": rows[start : start + bounded],
@@ -1666,24 +2864,68 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=404, detail="Campaign not found")
             campaign = hydrate_campaign(raw)
             _require_campaign_access(principal, campaign, repo)
-            items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
-            decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
+            items = [
+                hydrate_review_item(row)
+                for row in repo.list_payloads("review_items")
+                if row.get("campaign_id") == campaign_id
+            ]
+            decisions = [
+                hydrate_decision(row)
+                for row in repo.list_payloads("decisions")
+                if row.get("review_item_id") in {item.id for item in items}
+            ]
             golden = _golden_version(repo, campaign.golden_source_version_id)
             snapshot = _snapshot(repo, campaign.snapshot_id)
             identity_names = identity_names_from_snapshot(snapshot)
             access_names = access_names_from_snapshot(snapshot)
             with tempfile.TemporaryDirectory(prefix="eare-report-") as directory:
                 if format == "pdf":
-                    content = render_pdf_report(campaign, build_report_rows(items, decisions, identity_names, access_names), golden)
+                    content = render_pdf_report(
+                        campaign,
+                        build_report_rows(items, decisions, identity_names, access_names),
+                        golden,
+                    )
                 else:
-                    write_reports(directory, campaign, items, decisions, golden, snapshot.authentication_posture, identity_names, access_names)
-                    filename = {"html": "campaign-report.html", "csv": "campaign-results.csv", "json": "campaign-results.json"}[format]
+                    write_reports(
+                        directory,
+                        campaign,
+                        items,
+                        decisions,
+                        golden,
+                        snapshot.authentication_posture,
+                        identity_names,
+                        access_names,
+                    )
+                    filename = {
+                        "html": "campaign-report.html",
+                        "csv": "campaign-results.csv",
+                        "json": "campaign-results.json",
+                    }[format]
                     content = (Path(directory) / filename).read_bytes()
-            filename = {"html": "campaign-report.html", "csv": "campaign-results.csv", "json": "campaign-results.json", "pdf": "campaign-report.pdf"}[format]
-            media = {"html": "text/html", "csv": "text/csv", "json": "application/json", "pdf": "application/pdf"}[format]
-            safe_campaign_id = "".join(character if character.isalnum() or character in "-_" else "_" for character in campaign_id)
+            filename = {
+                "html": "campaign-report.html",
+                "csv": "campaign-results.csv",
+                "json": "campaign-results.json",
+                "pdf": "campaign-report.pdf",
+            }[format]
+            media = {
+                "html": "text/html",
+                "csv": "text/csv",
+                "json": "application/json",
+                "pdf": "application/pdf",
+            }[format]
+            safe_campaign_id = "".join(
+                character if character.isalnum() or character in "-_" else "_"
+                for character in campaign_id
+            )
             disposition = "inline" if format == "html" and inline else "attachment"
-            return StreamingResponse(iter([content]), media_type=media, headers={"Content-Disposition": f"{disposition}; filename={safe_campaign_id}-{filename}"})
+            return StreamingResponse(
+                iter([content]),
+                media_type=media,
+                headers={
+                    "Content-Disposition": f"{disposition}; filename={safe_campaign_id}-{filename}"
+                },
+            )
 
     @app.get("/api/remediation-actions/export")
     def remediation_export(
@@ -1694,7 +2936,9 @@ def create_app(db_path: str | None = None):
         campaign: str | None = None,
     ):
         """Export the operational queue without implying that EARE executed any action."""
-        principal = _require(current_user(request), ("ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"))
+        principal = _require(
+            current_user(request), ("ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER")
+        )
         if campaign and principal.role in {"ADMIN", "OPERATOR"}:
             _require_campaign_id_access(principal, campaign)
         filters = {"action": action} if action else None
@@ -1714,9 +2958,21 @@ def create_app(db_path: str | None = None):
         )
         output = io.StringIO()
         fields = [
-            "action", "access_provider", "identity_display_name", "identity_provider", "identity_identifier",
-            "access_display_name", "access_name", "application", "target", "permission", "comment",
-            "decided_by", "campaign_name", "campaign_id", "status",
+            "action",
+            "access_provider",
+            "identity_display_name",
+            "identity_provider",
+            "identity_identifier",
+            "access_display_name",
+            "access_name",
+            "application",
+            "target",
+            "permission",
+            "comment",
+            "decided_by",
+            "campaign_name",
+            "campaign_id",
+            "status",
         ]
         writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
@@ -1728,13 +2984,19 @@ def create_app(db_path: str | None = None):
                 if isinstance(fields_context, dict):
                     application_value = fields_context.get("application")
                     if isinstance(application_value, dict):
-                        application = application_value.get("value") or application_value.get("source") or ""
-            writer.writerow({
-                **row,
-                "application": application,
-                "target": json.dumps(row.get("target"), ensure_ascii=False, sort_keys=True) if row.get("target") else "",
-                "permission": row.get("technical_permission") or row.get("permission") or "",
-            })
+                        application = (
+                            application_value.get("value") or application_value.get("source") or ""
+                        )
+            writer.writerow(
+                {
+                    **row,
+                    "application": application,
+                    "target": json.dumps(row.get("target"), ensure_ascii=False, sort_keys=True)
+                    if row.get("target")
+                    else "",
+                    "permission": row.get("technical_permission") or row.get("permission") or "",
+                }
+            )
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
@@ -1750,9 +3012,14 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=400, detail="Unsupported remediation status")
         comment = str(payload.get("comment") or "").strip()
         if len(comment) > 4000:
-            raise HTTPException(status_code=400, detail="Status comment is limited to 4000 characters")
+            raise HTTPException(
+                status_code=400, detail="Status comment is limited to 4000 characters"
+            )
         if status == "not_completed" and not comment:
-            raise HTTPException(status_code=400, detail="A comment is required when the remediation is not completed")
+            raise HTTPException(
+                status_code=400,
+                detail="A comment is required when the remediation is not completed",
+            )
         with Repository(db_path) as repo:
             action = repo.get_payload("remediation_actions", action_id)
             if action is None:
@@ -1762,10 +3029,23 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=403, detail="Source is not authorized")
             action["status"] = status
             details = action.get("details") if isinstance(action.get("details"), dict) else {}
-            details.update({"status_comment": comment, "status_updated_by": principal.username, "status_updated_at": now_utc()})
+            details.update(
+                {
+                    "status_comment": comment,
+                    "status_updated_by": principal.username,
+                    "status_updated_at": now_utc(),
+                }
+            )
             action["details"] = details
             repo.upsert("remediation_actions", action)
-            record_audit(repo, request, "remediation.status_changed", "remediation_action", action_id, {"status": status, "provider": provider})
+            record_audit(
+                repo,
+                request,
+                "remediation.status_changed",
+                "remediation_action",
+                action_id,
+                {"status": status, "provider": provider},
+            )
             return action
 
     @app.get("/api/dashboard")
@@ -1773,30 +3053,75 @@ def create_app(db_path: str | None = None):
         """What deserves attention today, and what to do about it."""
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         today = time.strftime("%Y-%m-%d")
-        allowed_domains = None if principal.role == "ADMIN" or "*" in principal.scopes else set(principal.scopes)
+        allowed_domains = (
+            None if principal.role == "ADMIN" or "*" in principal.scopes else set(principal.scopes)
+        )
         with Repository(db_path) as repo:
             allowed_campaigns = _authorized_campaign_ids(principal, repo)
-            campaigns = [row for row in repo.list_payloads("campaigns") if str(row.get("id")) in allowed_campaigns]
-            items = [row for row in repo.list_payloads("review_items") if str(row.get("campaign_id")) in allowed_campaigns]
+            campaigns = [
+                row
+                for row in repo.list_payloads("campaigns")
+                if str(row.get("id")) in allowed_campaigns
+            ]
+            items = [
+                row
+                for row in repo.list_payloads("review_items")
+                if str(row.get("campaign_id")) in allowed_campaigns
+            ]
             decided = {str(row.get("review_item_id")) for row in repo.list_payloads("decisions")}
-            actions = [row for row in repo.list_payloads("remediation_actions") if allowed_domains is None or str(row.get("access_provider") or "") in allowed_domains]
+            actions = [
+                row
+                for row in repo.list_payloads("remediation_actions")
+                if allowed_domains is None
+                or str(row.get("access_provider") or "") in allowed_domains
+            ]
             snapshots = repo.list_payloads("snapshots")
             sources = repo.list_payloads("golden_sources")
             versions = repo.list_payloads("golden_source_versions")
             connectors = repo.list_payloads("providers")
         if allowed_domains is not None:
-            snapshots = [row for row in snapshots if any(str(provider.get("name") or "") in allowed_domains for provider in row.get("providers", []))]
+            snapshots = [
+                row
+                for row in snapshots
+                if any(
+                    str(provider.get("name") or "") in allowed_domains
+                    for provider in row.get("providers", [])
+                )
+            ]
         snapshot = snapshots[-1] if snapshots else None
         comparison = list(snapshot.get("comparison_states", [])) if snapshot else []
         if allowed_domains is not None:
-            comparison = [row for row in comparison if str(row.get("access_provider") or "") in allowed_domains and str(row.get("identity_provider") or "") in allowed_domains]
+            comparison = [
+                row
+                for row in comparison
+                if str(row.get("access_provider") or "") in allowed_domains
+                and str(row.get("identity_provider") or "") in allowed_domains
+            ]
         with Repository(db_path) as repo:
-            accesses = [row for row in repo.list_payloads("accesses") if allowed_domains is None or str(row.get("provider") or "") in allowed_domains]
-            assignments = [row for row in repo.list_payloads("access_assignments") if allowed_domains is None or (str(row.get("provider") or "") in allowed_domains and str(row.get("identity_provider") or "") in allowed_domains)]
-            identity_names, access_names = __import__("access_review_engine.web_read_models", fromlist=["_display_names"])._display_names(repo)
+            accesses = [
+                row
+                for row in repo.list_payloads("accesses")
+                if allowed_domains is None or str(row.get("provider") or "") in allowed_domains
+            ]
+            assignments = [
+                row
+                for row in repo.list_payloads("access_assignments")
+                if allowed_domains is None
+                or (
+                    str(row.get("provider") or "") in allowed_domains
+                    and str(row.get("identity_provider") or "") in allowed_domains
+                )
+            ]
+            identity_names, access_names = __import__(
+                "access_review_engine.web_read_models", fromlist=["_display_names"]
+            )._display_names(repo)
         # What this person is personally on the hook for: their reviews and the rights they own.
         me = principal.username.casefold()
-        my_items = [row for row in items if str((row.get("reviewer") or {}).get("identity", "")).casefold() == me]
+        my_items = [
+            row
+            for row in items
+            if str((row.get("reviewer") or {}).get("identity", "")).casefold() == me
+        ]
         holders: dict[tuple[str, str], int] = {}
         for row in assignments:
             key = (str(row.get("provider")), str(row.get("access_name")))
@@ -1809,18 +3134,29 @@ def create_app(db_path: str | None = None):
             target = row.get("target") or {}
             service = (target.get("service") or {}) if isinstance(target, dict) else {}
             key = (str(row.get("provider")), str(row.get("name")))
-            owned.append({
-                "access_name": row.get("name"),
-                "access_display_name": access_names.get(key) or row.get("display_name") or row.get("name"),
-                "description": row.get("description"),
-                "provider": row.get("provider"),
-                "application": service.get("display_name") or service.get("identifier"),
-                "holders": holders.get(key, 0),
-            })
-        owned.sort(key=lambda row: (str(row["application"] or "~"), str(row["access_display_name"]).casefold()))
+            owned.append(
+                {
+                    "access_name": row.get("name"),
+                    "access_display_name": access_names.get(key)
+                    or row.get("display_name")
+                    or row.get("name"),
+                    "description": row.get("description"),
+                    "provider": row.get("provider"),
+                    "application": service.get("display_name") or service.get("identifier"),
+                    "holders": holders.get(key, 0),
+                }
+            )
+        owned.sort(
+            key=lambda row: (
+                str(row["application"] or "~"),
+                str(row["access_display_name"]).casefold(),
+            )
+        )
         pending_actions = [row for row in actions if row.get("status") != "exported"]
         open_campaigns = [row for row in campaigns if row.get("status") == "open"]
-        providers = projected_rows(db_path, "providers", limit=100, offset=0, allowed_providers=allowed_domains)["items"]
+        providers = projected_rows(
+            db_path, "providers", limit=100, offset=0, allowed_providers=allowed_domains
+        )["items"]
         attention: list[dict[str, Any]] = []
 
         def note(tone: str, title: str, detail: str, link: str) -> None:
@@ -1828,67 +3164,181 @@ def create_app(db_path: str | None = None):
 
         for row in providers:
             if row.get("health") == "failed":
-                note("red", f"Collection failed on {row.get('name')}", "The last synchronization did not complete.", "/sources")
+                note(
+                    "red",
+                    f"Collection failed on {row.get('name')}",
+                    "The last synchronization did not complete.",
+                    "/sources",
+                )
             elif row.get("health") == "never_synced":
-                note("amber", f"{row.get('name')} has never been collected", "EARE knows nothing about this source yet.", "/sources")
+                note(
+                    "amber",
+                    f"{row.get('name')} has never been collected",
+                    "EARE knows nothing about this source yet.",
+                    "/sources",
+                )
         if not connectors:
-            note("blue", "No source yet", "Connect the first directory or application EARE should audit.", "/sources")
+            note(
+                "blue",
+                "No source yet",
+                "Connect the first directory or application EARE should audit.",
+                "/sources",
+            )
         elif not snapshot:
-            note("blue", "Nothing collected yet", "Synchronize a source to see identities and accesses.", "/sources")
+            note(
+                "blue",
+                "Nothing collected yet",
+                "Synchronize a source to see identities and accesses.",
+                "/sources",
+            )
 
         active_versions = {str(row.get("active_version_id")) for row in sources}
         active = [row for row in versions if str(row.get("id")) in active_versions]
         newest_expected = max((str(row.get("created_at", "")) for row in active), default="")
         if not sources:
-            note("blue", "No expected state yet", "Declare what is expected, so deviations can be reported.", "/golden")
+            note(
+                "blue",
+                "No expected state yet",
+                "Declare what is expected, so deviations can be reported.",
+                "/golden",
+            )
         elif snapshot and newest_expected and str(snapshot.get("created_at", "")) > newest_expected:
-            note("amber", "The systems changed since the expected state was set", "Compare the collected state with the Golden Source.", "/golden")
+            note(
+                "amber",
+                "The systems changed since the expected state was set",
+                "Compare the collected state with the Golden Source.",
+                "/golden",
+            )
 
         for row in open_campaigns:
             scoped = [item for item in items if item.get("campaign_id") == row.get("id")]
             waiting = [item for item in scoped if str(item.get("id")) not in decided]
             due = str(row.get("due_at") or "")
             if waiting and due and due < today:
-                note("red", f"{row.get('name')} is overdue", f"{len(waiting)} review(s) still waiting, due {due}.", f"/campaigns/{row.get('id')}")
+                note(
+                    "red",
+                    f"{row.get('name')} is overdue",
+                    f"{len(waiting)} review(s) still waiting, due {due}.",
+                    f"/campaigns/{row.get('id')}",
+                )
             elif waiting:
-                note("amber", f"{row.get('name')} is in progress", f"{len(waiting)} review(s) still waiting.", f"/campaigns/{row.get('id')}")
+                note(
+                    "amber",
+                    f"{row.get('name')} is in progress",
+                    f"{len(waiting)} review(s) still waiting.",
+                    f"/campaigns/{row.get('id')}",
+                )
             else:
-                note("blue", f"{row.get('name')} can be closed", "Every review has been decided.", f"/campaigns/{row.get('id')}")
-        promoted = {str(row.get("source_campaign_id")) for row in versions if row.get("source_campaign_id")}
+                note(
+                    "blue",
+                    f"{row.get('name')} can be closed",
+                    "Every review has been decided.",
+                    f"/campaigns/{row.get('id')}",
+                )
+        promoted = {
+            str(row.get("source_campaign_id")) for row in versions if row.get("source_campaign_id")
+        }
         for row in campaigns:
             if row.get("status") == "closed" and str(row.get("id")) not in promoted:
-                note("blue", f"{row.get('name')} is closed but not promoted", "Its decisions have not been carried into the expected state.", f"/campaigns/{row.get('id')}")
+                note(
+                    "blue",
+                    f"{row.get('name')} is closed but not promoted",
+                    "Its decisions have not been carried into the expected state.",
+                    f"/campaigns/{row.get('id')}",
+                )
         if pending_actions:
-            note("amber", f"{len(pending_actions)} remediation action(s) to carry out", "Decisions are waiting to be applied in the systems.", "/actions")
+            note(
+                "amber",
+                f"{len(pending_actions)} remediation action(s) to carry out",
+                "Decisions are waiting to be applied in the systems.",
+                "/actions",
+            )
         if not campaigns and snapshot:
-            note("blue", "No campaign yet", "A campaign asks the owners to confirm who should keep their access.", "/campaigns/new")
+            note(
+                "blue",
+                "No campaign yet",
+                "A campaign asks the owners to confirm who should keep their access.",
+                "/campaigns/new",
+            )
 
         return {
             "role": principal.role,
             "metrics": {
                 "campaigns": len(open_campaigns),
-                "pending_reviews": sum(1 for item in items if str(item.get("id")) not in decided and item.get("campaign_id") in {str(row.get("id")) for row in open_campaigns}),
+                "pending_reviews": sum(
+                    1
+                    for item in items
+                    if str(item.get("id")) not in decided
+                    and item.get("campaign_id") in {str(row.get("id")) for row in open_campaigns}
+                ),
                 "remediation_actions": len(pending_actions),
                 "findings": sum(1 for row in comparison if row.get("findings")),
             },
             "collected_at": snapshot.get("created_at") if snapshot else None,
-            "collected_from": [provider.get("name") for provider in (snapshot or {}).get("providers", []) if allowed_domains is None or provider.get("name") in allowed_domains],
-            "expected_state": {"name": sources[0].get("name"), "version": max((int(row.get("version", 0)) for row in active), default=0), "assignments": max((len(row.get("assignments", [])) for row in active), default=0)} if sources else None,
+            "collected_from": [
+                provider.get("name")
+                for provider in (snapshot or {}).get("providers", [])
+                if allowed_domains is None or provider.get("name") in allowed_domains
+            ],
+            "expected_state": {
+                "name": sources[0].get("name"),
+                "version": max((int(row.get("version", 0)) for row in active), default=0),
+                "assignments": max((len(row.get("assignments", [])) for row in active), default=0),
+            }
+            if sources
+            else None,
             "mine": {
                 "reviews": {
                     "total": len(my_items),
                     "pending": sum(1 for row in my_items if str(row.get("id")) not in decided),
-                    "campaigns": sorted({str(row.get("campaign_id")) for row in my_items if str(row.get("id")) not in decided}),
+                    "campaigns": sorted(
+                        {
+                            str(row.get("campaign_id"))
+                            for row in my_items
+                            if str(row.get("id")) not in decided
+                        }
+                    ),
                 },
                 "owned_accesses": owned[:12],
                 "owned_total": len(owned),
-                "applications": sorted({application for row in owned for application in split_multi_value(row["application"])}),
+                "applications": sorted(
+                    {
+                        application
+                        for row in owned
+                        for application in split_multi_value(row["application"])
+                    }
+                ),
             },
             "campaigns": [
-                {"id": row.get("id"), "name": row.get("name"), "status": row.get("status"), "due_at": row.get("due_at"), "review_items": len([item for item in items if item.get("campaign_id") == row.get("id")]), "pending": len([item for item in items if item.get("campaign_id") == row.get("id") and str(item.get("id")) not in decided])}
+                {
+                    "id": row.get("id"),
+                    "name": row.get("name"),
+                    "status": row.get("status"),
+                    "due_at": row.get("due_at"),
+                    "review_items": len(
+                        [item for item in items if item.get("campaign_id") == row.get("id")]
+                    ),
+                    "pending": len(
+                        [
+                            item
+                            for item in items
+                            if item.get("campaign_id") == row.get("id")
+                            and str(item.get("id")) not in decided
+                        ]
+                    ),
+                }
                 for row in open_campaigns[:4]
             ],
-            "sources": [{"name": row.get("name"), "health": row.get("health"), "last_sync": row.get("last_sync"), "identity_count": row.get("identity_count"), "access_count": row.get("access_count")} for row in providers],
+            "sources": [
+                {
+                    "name": row.get("name"),
+                    "health": row.get("health"),
+                    "last_sync": row.get("last_sync"),
+                    "identity_count": row.get("identity_count"),
+                    "access_count": row.get("access_count"),
+                }
+                for row in providers
+            ],
             "attention": attention[:8],
         }
 
@@ -1897,16 +3347,30 @@ def create_app(db_path: str | None = None):
         """Return read-only, scope-filtered facts and deterministic next actions."""
         principal = _require(current_user(request))
         route = route if route.startswith("/") and len(route) <= 160 else "/"
-        allowed_domains = None if principal.role == "ADMIN" or "*" in principal.scopes else set(principal.scopes)
+        allowed_domains = (
+            None if principal.role == "ADMIN" or "*" in principal.scopes else set(principal.scopes)
+        )
         allowed_campaigns: set[str] = set()
         if principal.role in {"ADMIN", "OPERATOR"}:
             with Repository(db_path) as repo:
                 allowed_campaigns = _authorized_campaign_ids(principal, repo)
 
         if principal.role == "ADMIN":
-            allowed_routes = frozenset({"/sources", "/golden", "/campaigns", "/campaigns/new", "/findings", "/reports", "/system/users"})
+            allowed_routes = frozenset(
+                {
+                    "/sources",
+                    "/golden",
+                    "/campaigns",
+                    "/campaigns/new",
+                    "/findings",
+                    "/reports",
+                    "/system/users",
+                }
+            )
         elif principal.role == "OPERATOR":
-            allowed_routes = frozenset({"/sources", "/golden", "/campaigns", "/campaigns/new", "/findings", "/reports"})
+            allowed_routes = frozenset(
+                {"/sources", "/golden", "/campaigns", "/campaigns/new", "/findings", "/reports"}
+            )
         elif principal.role == "GROUP_OWNER":
             allowed_routes = frozenset({"/reviews"})
         else:
@@ -1917,20 +3381,27 @@ def create_app(db_path: str | None = None):
             configured_source_count = len(configured_sources)
             provider_rows = repo.list_payloads("providers")
             providers = [
-                dict(row) for row in provider_rows
+                dict(row)
+                for row in provider_rows
                 if allowed_domains is None or str(row.get("name") or "") in allowed_domains
             ]
             snapshots = repo.list_payloads("snapshots")
             if allowed_domains is not None:
                 snapshots = [
-                    snapshot for snapshot in snapshots
-                    if any(str(provider.get("name") or "") in allowed_domains for provider in snapshot.get("providers", []))
+                    snapshot
+                    for snapshot in snapshots
+                    if any(
+                        str(provider.get("name") or "") in allowed_domains
+                        for provider in snapshot.get("providers", [])
+                    )
                 ]
             sources = repo.list_payloads("golden_sources")
             versions = repo.list_payloads("golden_source_versions")
             golden_available = any(
-                str(source.get("active_version_id") or "") in {
-                    str(version.get("id")) for version in versions
+                str(source.get("active_version_id") or "")
+                in {
+                    str(version.get("id"))
+                    for version in versions
                     if allowed_domains is None
                     or (
                         (domains := _golden_version_provider_domains(version))
@@ -1939,44 +3410,59 @@ def create_app(db_path: str | None = None):
                 }
                 for source in sources
             )
-            operator_count = sum(1 for user in list_users(system_conn) if user.get("enabled") and user.get("role") == "OPERATOR") if principal.role == "ADMIN" else 0
+            operator_count = (
+                sum(
+                    1
+                    for user in list_users(system_conn)
+                    if user.get("enabled") and user.get("role") == "OPERATOR"
+                )
+                if principal.role == "ADMIN"
+                else 0
+            )
 
         campaigns: list[dict[str, Any]] = []
         review_items: list[dict[str, Any]] = []
         if principal.role in {"ADMIN", "OPERATOR"}:
             campaigns = [
-                dict(row) for row in projected_rows(
-                    db_path, "campaigns", limit=500, offset=0, allowed_campaign_ids=allowed_campaigns,
+                dict(row)
+                for row in projected_rows(
+                    db_path,
+                    "campaigns",
+                    limit=500,
+                    offset=0,
+                    allowed_campaign_ids=allowed_campaigns,
                 )["items"]
             ]
             review_items = [
-                dict(row) for row in projected_rows(
-                    db_path, "review_items", limit=500, offset=0,
+                dict(row)
+                for row in projected_rows(
+                    db_path,
+                    "review_items",
+                    limit=500,
+                    offset=0,
                     allowed_campaign_ids=allowed_campaigns,
                 )["items"]
             ]
         elif principal.role == "GROUP_OWNER":
             review_items = [
-                dict(row) for row in projected_rows(
-                    db_path, "review_items", limit=500, offset=0,
+                dict(row)
+                for row in projected_rows(
+                    db_path,
+                    "review_items",
+                    limit=500,
+                    offset=0,
                     reviewer_username=principal.username,
                 )["items"]
             ]
 
-        actions: list[dict[str, Any]] = []
         action_query: dict[str, Any] = {}
         if principal.role in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
             action_query = {
                 "allowed_providers": allowed_domains,
-                "allowed_campaign_ids": allowed_campaigns if principal.role in {"ADMIN", "OPERATOR"} else None,
+                "allowed_campaign_ids": allowed_campaigns
+                if principal.role in {"ADMIN", "OPERATOR"}
+                else None,
             }
-            actions = [
-                dict(row) for row in projected_rows(
-                    db_path, "remediation_actions", limit=500, offset=0,
-                    **action_query,
-                )["items"]
-            ]
-
         open_campaigns = tuple(
             {
                 "id": row.get("id"),
@@ -1985,79 +3471,203 @@ def create_app(db_path: str | None = None):
                 "due_at": row.get("due_at"),
                 "opened_at": row.get("opened_at"),
                 "pending": int(row.get("pending") or 0),
-                "unresolved_reviewers": int((row.get("reviewer_resolution") or {}).get("unresolved") or 0),
-                "overdue": bool(int(row.get("pending") or 0) > 0 and row.get("due_at") and str(row.get("due_at")) < time.strftime("%Y-%m-%d")),
+                "unresolved_reviewers": int(
+                    (row.get("reviewer_resolution") or {}).get("unresolved") or 0
+                ),
+                "overdue": bool(
+                    int(row.get("pending") or 0) > 0
+                    and row.get("due_at")
+                    and str(row.get("due_at")) < time.strftime("%Y-%m-%d")
+                ),
             }
-            for row in campaigns if row.get("status") == "open"
+            for row in campaigns
+            if row.get("status") == "open"
         )
         review_scope = {
             "reviewer_username": principal.username if principal.role == "GROUP_OWNER" else None,
-            "allowed_campaign_ids": allowed_campaigns if principal.role in {"ADMIN", "OPERATOR"} else None,
+            "allowed_campaign_ids": allowed_campaigns
+            if principal.role in {"ADMIN", "OPERATOR"}
+            else None,
         }
-        pending_reviews = int(projected_rows(db_path, "review_items", limit=0, offset=0, status="pending", **review_scope)["total"])
+        pending_reviews = int(
+            projected_rows(
+                db_path, "review_items", limit=0, offset=0, status="pending", **review_scope
+            )["total"]
+        )
         assigned_pending_reviews = pending_reviews if principal.role == "GROUP_OWNER" else 0
         assigned_campaign_count = 0
         if principal.role == "GROUP_OWNER":
             with Repository(db_path) as repo:
-                assigned_campaign_count = len({
-                    str(row.get("campaign_id")) for row in repo.list_payloads("review_items")
-                    if str((row.get("reviewer") or {}).get("identity") or "").casefold() == principal.username.casefold() and row.get("campaign_id")
-                })
+                assigned_campaign_count = len(
+                    {
+                        str(row.get("campaign_id"))
+                        for row in repo.list_payloads("review_items")
+                        if str((row.get("reviewer") or {}).get("identity") or "").casefold()
+                        == principal.username.casefold()
+                        and row.get("campaign_id")
+                    }
+                )
         action_counts = {
-            status: int(projected_rows(db_path, "remediation_actions", limit=0, offset=0, status=status, **action_query)["total"])
+            status: int(
+                projected_rows(
+                    db_path, "remediation_actions", limit=0, offset=0, status=status, **action_query
+                )["total"]
+            )
             for status in ("pending", "exported", "not_completed", "completed")
         }
         pending_actions = action_counts["pending"]
         open_actions = pending_actions + action_counts["exported"] + action_counts["not_completed"]
         findings_count = sum(len(row.get("findings") or []) for row in review_items)
-        unresolved_reviewers = sum(int(row.get("unresolved_reviewers") or 0) for row in open_campaigns)
+        unresolved_reviewers = sum(
+            int(row.get("unresolved_reviewers") or 0) for row in open_campaigns
+        )
         enabled_operators = [
-            user for user in list_users(system_conn)
+            user
+            for user in list_users(system_conn)
             if user.get("enabled") and user.get("role") == "OPERATOR"
         ]
-        configured_domains = {str(row.get("provider") or row.get("name")) for row in configured_sources}
+        configured_domains = {
+            str(row.get("provider") or row.get("name")) for row in configured_sources
+        }
         covered_domains = {
-            domain for user in enabled_operators for domain in user.get("scopes", [])
+            domain
+            for user in enabled_operators
+            for domain in user.get("scopes", [])
             if domain != "*"
         }
-        operator_coverage_complete = any("*" in user.get("scopes", []) for user in enabled_operators) or configured_domains.issubset(covered_domains)
-        uncovered_operator_domains = tuple(sorted(configured_domains - covered_domains)) if enabled_operators and not operator_coverage_complete else ()
-        sources_without_read_only_account = tuple(sorted(
-            str(row.get("provider") or row.get("name"))
-            for row in configured_sources
-            if not (isinstance(row.get("collection"), dict) and row["collection"].get("read_only_account") is True)
-        ))
+        operator_coverage_complete = any(
+            "*" in user.get("scopes", []) for user in enabled_operators
+        ) or configured_domains.issubset(covered_domains)
+        uncovered_operator_domains = (
+            tuple(sorted(configured_domains - covered_domains))
+            if enabled_operators and not operator_coverage_complete
+            else ()
+        )
+        sources_without_read_only_account = tuple(
+            sorted(
+                str(row.get("provider") or row.get("name"))
+                for row in configured_sources
+                if not (
+                    isinstance(row.get("collection"), dict)
+                    and row["collection"].get("read_only_account") is True
+                )
+            )
+        )
         setup_checklist = ()
         if principal.role == "ADMIN":
             enabled_users = [user for user in list_users(system_conn) if user.get("enabled")]
             setup_checklist = (
-                {"id": "sources", "label": "guide.setup.sources", "status": "complete" if configured_source_count else "not_started", "action_label": "guide.action.manageSources", "action_url": "/sources"},
-                {"id": "read_only_accounts", "label": "guide.setup.readOnlyAccounts", "status": "not_started" if not configured_source_count else "attention" if sources_without_read_only_account else "complete", "description": "guide.setup.readOnlyAccountsIncomplete" if configured_source_count and sources_without_read_only_account else None, "action_label": "guide.action.manageSources", "action_url": "/sources"},
-                {"id": "initial_collection", "label": "guide.setup.initialCollection", "status": "complete" if snapshots else "not_started", "action_label": "guide.action.openSources", "action_url": "/sources"},
-                {"id": "users", "label": "guide.setup.users", "status": "complete" if enabled_users else "not_started", "action_label": "guide.action.viewUsers", "action_url": "/system/users"},
-                {"id": "operator_coverage", "label": "guide.setup.operatorCoverage", "status": "complete" if enabled_operators and operator_coverage_complete else "attention" if enabled_operators else "not_started", "description": "guide.setup.operatorCoverageIncomplete" if enabled_operators and not operator_coverage_complete else None, "action_label": "guide.action.viewUsers", "action_url": "/system/users"},
-                {"id": "expected_state", "label": "guide.setup.expectedState", "status": "complete" if golden_available else "not_started", "action_label": "guide.action.openGolden", "action_url": "/golden"},
+                {
+                    "id": "sources",
+                    "label": "guide.setup.sources",
+                    "status": "complete" if configured_source_count else "not_started",
+                    "action_label": "guide.action.manageSources",
+                    "action_url": "/sources",
+                },
+                {
+                    "id": "read_only_accounts",
+                    "label": "guide.setup.readOnlyAccounts",
+                    "status": "not_started"
+                    if not configured_source_count
+                    else "attention"
+                    if sources_without_read_only_account
+                    else "complete",
+                    "description": "guide.setup.readOnlyAccountsIncomplete"
+                    if configured_source_count and sources_without_read_only_account
+                    else None,
+                    "action_label": "guide.action.manageSources",
+                    "action_url": "/sources",
+                },
+                {
+                    "id": "initial_collection",
+                    "label": "guide.setup.initialCollection",
+                    "status": "complete" if snapshots else "not_started",
+                    "action_label": "guide.action.openSources",
+                    "action_url": "/sources",
+                },
+                {
+                    "id": "users",
+                    "label": "guide.setup.users",
+                    "status": "complete" if enabled_users else "not_started",
+                    "action_label": "guide.action.viewUsers",
+                    "action_url": "/system/users",
+                },
+                {
+                    "id": "operator_coverage",
+                    "label": "guide.setup.operatorCoverage",
+                    "status": "complete"
+                    if enabled_operators and operator_coverage_complete
+                    else "attention"
+                    if enabled_operators
+                    else "not_started",
+                    "description": "guide.setup.operatorCoverageIncomplete"
+                    if enabled_operators and not operator_coverage_complete
+                    else None,
+                    "action_label": "guide.action.viewUsers",
+                    "action_url": "/system/users",
+                },
+                {
+                    "id": "expected_state",
+                    "label": "guide.setup.expectedState",
+                    "status": "complete" if golden_available else "not_started",
+                    "action_label": "guide.action.openGolden",
+                    "action_url": "/golden",
+                },
             )
         capabilities_by_role = {
-            "ADMIN": {"can_configure_sources", "can_preview_sources", "can_sync_sources", "can_manage_users", "can_edit_golden", "can_prepare_campaign", "can_open_campaign", "can_decide_review", "can_view_remediation", "can_update_remediation", "can_view_reports", "can_view_findings"},
-            "OPERATOR": {"can_preview_sources", "can_sync_sources", "can_edit_golden", "can_prepare_campaign", "can_open_campaign", "can_decide_review", "can_view_reports", "can_view_findings"},
+            "ADMIN": {
+                "can_configure_sources",
+                "can_preview_sources",
+                "can_sync_sources",
+                "can_manage_users",
+                "can_edit_golden",
+                "can_prepare_campaign",
+                "can_open_campaign",
+                "can_decide_review",
+                "can_view_remediation",
+                "can_update_remediation",
+                "can_view_reports",
+                "can_view_findings",
+            },
+            "OPERATOR": {
+                "can_preview_sources",
+                "can_sync_sources",
+                "can_edit_golden",
+                "can_prepare_campaign",
+                "can_open_campaign",
+                "can_decide_review",
+                "can_view_reports",
+                "can_view_findings",
+            },
             "GROUP_OWNER": {"can_decide_review"},
             "BUSINESS_ADMIN": {"can_view_remediation"},
             "REMEDIATION_MANAGER": {"can_view_remediation", "can_update_remediation"},
         }
         campaign_readiness = None
         route_parts = [part for part in route.split("/") if part]
-        if principal.role in {"ADMIN", "OPERATOR"} and len(route_parts) >= 2 and route_parts[0] == "campaigns":
+        if (
+            principal.role in {"ADMIN", "OPERATOR"}
+            and len(route_parts) >= 2
+            and route_parts[0] == "campaigns"
+        ):
             campaign_id = route_parts[1]
             with Repository(db_path) as repo:
                 raw_campaign = repo.get_payload("campaigns", campaign_id)
-                if raw_campaign is not None and raw_campaign.get("status") == "draft" and campaign_id in allowed_campaigns:
+                if (
+                    raw_campaign is not None
+                    and raw_campaign.get("status") == "draft"
+                    and campaign_id in allowed_campaigns
+                ):
                     try:
                         campaign = hydrate_campaign(raw_campaign)
                         snapshot = _snapshot(repo, campaign.snapshot_id)
                         golden = _golden_version(repo, campaign.golden_source_version_id)
-                        preparation = prepare_campaign_review(campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot))
-                        preview = preview_campaign_review(campaign, snapshot, golden, preparation=preparation)
+                        preparation = prepare_campaign_review(
+                            campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot)
+                        )
+                        preview = preview_campaign_review(
+                            campaign, snapshot, golden, preparation=preparation
+                        )
                         unresolved = int(preview.get("unresolved_reviewers", 0) or 0)
                         bypassed = unresolved > 0 and campaign.allow_unresolved_reviewers
                         campaign_readiness = {
@@ -2066,20 +3676,35 @@ def create_app(db_path: str | None = None):
                             "ready": not unresolved or bypassed,
                             "scope": campaign.scope,
                             "snapshot": {"selected": bool(campaign.snapshot_id)},
-                            "expected_state": {"selected": bool(campaign.golden_source_version_id), "version_id": campaign.golden_source_version_id},
+                            "expected_state": {
+                                "selected": bool(campaign.golden_source_version_id),
+                                "version_id": campaign.golden_source_version_id,
+                            },
                             "pilot": {"selected": bool(campaign.pilot), "username": campaign.pilot},
-                            "reviewers": {"resolved": preview.get("resolved_reviewers", 0), "unresolved": unresolved},
-                            "blockers": (["unresolved_reviewers"] if unresolved and not bypassed else []),
+                            "reviewers": {
+                                "resolved": preview.get("resolved_reviewers", 0),
+                                "unresolved": unresolved,
+                            },
+                            "blockers": (
+                                ["unresolved_reviewers"] if unresolved and not bypassed else []
+                            ),
                             "warnings": (["unresolved_reviewers_bypassed"] if bypassed else []),
                             "allow_unresolved_reviewers": campaign.allow_unresolved_reviewers,
                         }
                     except (HTTPException, ValueError):
-                        campaign_readiness = {"campaign_id": campaign_id, "status": "draft", "ready": False, "blockers": ["readiness_unavailable"]}
+                        campaign_readiness = {
+                            "campaign_id": campaign_id,
+                            "status": "draft",
+                            "ready": False,
+                            "blockers": ["readiness_unavailable"],
+                        }
         context = GuidanceContext(
             role=principal.role,
             route=route,
             source_count=configured_source_count if principal.role in {"ADMIN", "OPERATOR"} else 0,
-            synchronized_source_count=len(providers) if principal.role in {"ADMIN", "OPERATOR"} else 0,
+            synchronized_source_count=len(providers)
+            if principal.role in {"ADMIN", "OPERATOR"}
+            else 0,
             latest_snapshot=bool(snapshots) if principal.role in {"ADMIN", "OPERATOR"} else False,
             golden_available=golden_available if principal.role in {"ADMIN", "OPERATOR"} else False,
             open_campaigns=open_campaigns,
@@ -2101,17 +3726,22 @@ def create_app(db_path: str | None = None):
             campaign_readiness=campaign_readiness,
             unresolved_reviewers=unresolved_reviewers,
             findings_count=findings_count,
-            allowed_routes=allowed_routes | frozenset(
-                f"/campaigns/{campaign['id']}" for campaign in open_campaigns
+            allowed_routes=allowed_routes
+            | frozenset(
+                f"/campaigns/{campaign['id']}"
+                for campaign in open_campaigns
                 if principal.role in {"ADMIN", "OPERATOR"}
             ),
         )
         return build_guidance(context)
 
-
     def _snapshot(repo: Repository, snapshot_id: str | None = None):
         snapshots = repo.list_payloads("snapshots")
-        payload = next((row for row in snapshots if row.get("id") == snapshot_id), None) if snapshot_id else (snapshots[-1] if snapshots else None)
+        payload = (
+            next((row for row in snapshots if row.get("id") == snapshot_id), None)
+            if snapshot_id
+            else (snapshots[-1] if snapshots else None)
+        )
         if payload is None:
             raise HTTPException(status_code=404, detail="Snapshot not found")
         return hydrate_snapshot(payload)
@@ -2119,24 +3749,62 @@ def create_app(db_path: str | None = None):
     def _golden_version(repo: Repository, version_id: str | None):
         if not version_id:
             return None
-        payload = next((row for row in repo.list_payloads("golden_source_versions") if row.get("id") == version_id), None)
+        payload = next(
+            (
+                row
+                for row in repo.list_payloads("golden_source_versions")
+                if row.get("id") == version_id
+            ),
+            None,
+        )
         if payload is None:
             raise HTTPException(status_code=404, detail="Golden Source version not found")
         return hydrate_golden_version(payload)
 
-    def _campaign_payload(payload: dict[str, Any], *, draft_id: str | None = None, pilot: str | None = None):
+    def _campaign_payload(
+        payload: dict[str, Any], *, draft_id: str | None = None, pilot: str | None = None
+    ):
         from access_review_engine.domain import Campaign, OwnerRef
+
         def owner(value: Any):
             if value is None:
                 return None
-            if not isinstance(value, dict) or not value.get("provider") or not value.get("identity"):
-                raise HTTPException(status_code=400, detail="Reviewer references require provider and identity")
+            if (
+                not isinstance(value, dict)
+                or not value.get("provider")
+                or not value.get("identity")
+            ):
+                raise HTTPException(
+                    status_code=400, detail="Reviewer references require provider and identity"
+                )
             return OwnerRef(provider=str(value["provider"]), identity=str(value["identity"]))
-        allowed = {key: payload[key] for key in ("name", "snapshot_id", "display_name", "description", "golden_source_version_id", "scope", "allow_unresolved_reviewers", "due_at") if key in payload}
+
+        allowed = {
+            key: payload[key]
+            for key in (
+                "name",
+                "snapshot_id",
+                "display_name",
+                "description",
+                "golden_source_version_id",
+                "scope",
+                "allow_unresolved_reviewers",
+                "due_at",
+            )
+            if key in payload
+        }
         allowed["name"] = str(allowed.get("name") or "").strip()
-        if not allowed["name"] or not isinstance(allowed.get("snapshot_id"), str) or not allowed["snapshot_id"].strip():
-            raise HTTPException(status_code=400, detail="Campaign name and snapshot_id are required")
+        if (
+            not allowed["name"]
+            or not isinstance(allowed.get("snapshot_id"), str)
+            or not allowed["snapshot_id"].strip()
+        ):
+            raise HTTPException(
+                status_code=400, detail="Campaign name and snapshot_id are required"
+            )
         allowed["snapshot_id"] = allowed["snapshot_id"].strip()
+        if not draft_id and not str(allowed.get("due_at") or "").strip():
+            allowed["due_at"] = time.strftime("%Y-%m-%d")
         try:
             allowed["scope"] = normalize_campaign_scope(allowed.get("scope") or {"type": "all"})
         except CampaignScopeError as exc:
@@ -2145,8 +3813,15 @@ def create_app(db_path: str | None = None):
         allowed["manager"] = owner(payload.get("manager"))
         pilot_username = str(payload.get("pilot") or pilot or "").strip().lower()
         pilot_user = _stored_user(pilot_username) if pilot_username else None
-        if pilot_user is None or pilot_user.get("role") not in {"ADMIN", "OPERATOR"} or not pilot_user.get("enabled", True):
-            raise HTTPException(status_code=400, detail="Campaign pilot must be an enabled ADMIN or OPERATOR account")
+        if (
+            pilot_user is None
+            or pilot_user.get("role") not in {"ADMIN", "OPERATOR"}
+            or not pilot_user.get("enabled", True)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Campaign pilot must be an enabled ADMIN or OPERATOR account",
+            )
         allowed["pilot"] = pilot_username
         if draft_id:
             allowed["id"] = draft_id
@@ -2155,11 +3830,14 @@ def create_app(db_path: str | None = None):
     def _prepare_campaign(repo: Repository, campaign):
         snapshot = _snapshot(repo, campaign.snapshot_id)
         golden = _golden_version(repo, campaign.golden_source_version_id)
-        return prepare_campaign_review(campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot))
+        return prepare_campaign_review(
+            campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot)
+        )
 
     def _campaign_required_providers(campaign, repo: Repository, preparation=None) -> set[str]:
         review_items = [
-            row for row in repo.list_payloads("review_items")
+            row
+            for row in repo.list_payloads("review_items")
             if str(row.get("campaign_id")) == str(campaign.id)
         ]
         if campaign.status in {"open", "closed", "cancelled"} and review_items:
@@ -2175,7 +3853,9 @@ def create_app(db_path: str | None = None):
             return campaign_required_providers(
                 campaign.scope,
                 review_items=review_items,
-                snapshot_providers=[provider.name for provider in snapshot.providers] if snapshot else (),
+                snapshot_providers=[provider.name for provider in snapshot.providers]
+                if snapshot
+                else (),
             )
         if campaign.status in {"open", "closed"}:
             # A materialized campaign with no reviews can still expose its explicit scope;
@@ -2188,7 +3868,9 @@ def create_app(db_path: str | None = None):
                 snapshot = None
             return campaign_required_providers(
                 campaign.scope,
-                snapshot_providers=[provider.name for provider in snapshot.providers] if snapshot else (),
+                snapshot_providers=[provider.name for provider in snapshot.providers]
+                if snapshot
+                else (),
             )
         preparation = preparation or _prepare_campaign(repo, campaign)
         return campaign_required_providers(
@@ -2197,7 +3879,9 @@ def create_app(db_path: str | None = None):
             snapshot_providers=[provider.name for provider in preparation.snapshot.providers],
         )
 
-    def _require_campaign_access(principal: WebPrincipal, campaign, repo: Repository, preparation=None):
+    def _require_campaign_access(
+        principal: WebPrincipal, campaign, repo: Repository, preparation=None
+    ):
         if principal.role == "ADMIN":
             return preparation
         if principal.role != "OPERATOR":
@@ -2211,7 +3895,10 @@ def create_app(db_path: str | None = None):
                 raise
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if not can_access_campaign(principal.role, principal.scopes, required):
-            raise HTTPException(status_code=403, detail="Campaign includes providers outside your authorized domains")
+            raise HTTPException(
+                status_code=403,
+                detail="Campaign includes providers outside your authorized domains",
+            )
         return preparation
 
     def _authorized_campaign_ids(principal: WebPrincipal, repo: Repository) -> set[str]:
@@ -2242,17 +3929,26 @@ def create_app(db_path: str | None = None):
             _require_campaign_access(principal, campaign, repo)
         return campaign
 
-    def _require_campaign_delete_access(principal: WebPrincipal, campaign: Campaign, repo: Repository) -> None:
+    def _require_campaign_delete_access(
+        principal: WebPrincipal, campaign: Campaign, repo: Repository
+    ) -> None:
         if principal.role == "ADMIN":
             return
         if principal.role != "OPERATOR":
-            raise HTTPException(status_code=403, detail="Only an administrator or campaign pilot can delete campaigns")
+            raise HTTPException(
+                status_code=403,
+                detail="Only an administrator or campaign pilot can delete campaigns",
+            )
         _require_campaign_access(principal, campaign, repo)
         if str(campaign.pilot or "").casefold() != principal.username.casefold():
-            raise HTTPException(status_code=403, detail="An operator can only delete campaigns they pilot")
+            raise HTTPException(
+                status_code=403, detail="An operator can only delete campaigns they pilot"
+            )
 
     @app.get("/api/campaign-scope-accesses")
-    def campaign_scope_accesses(request: Request, snapshot_id: str, golden_source_version_id: str | None = None):
+    def campaign_scope_accesses(
+        request: Request, snapshot_id: str, golden_source_version_id: str | None = None
+    ):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             snapshot = _snapshot(repo, snapshot_id)
@@ -2262,27 +3958,56 @@ def create_app(db_path: str | None = None):
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             references = {(access.provider, access.name) for access in snapshot.accesses}
-            references.update((str(row.get("access_provider")), str(row.get("access_name"))) for row in rows)
+            references.update(
+                (str(row.get("access_provider")), str(row.get("access_name"))) for row in rows
+            )
             if golden:
-                references.update((assignment.access_provider, assignment.access_name) for assignment in golden.assignments)
-            allowed = None if principal.role == "ADMIN" or "*" in principal.scopes else set(principal.scopes)
-            catalog = {(str(row.get("provider")), str(row.get("name"))): row for row in repo.list_payloads("accesses")}
-            snapshot_catalog = {(access.provider, access.name): access for access in snapshot.accesses}
+                references.update(
+                    (assignment.access_provider, assignment.access_name)
+                    for assignment in golden.assignments
+                )
+            allowed = (
+                None
+                if principal.role == "ADMIN" or "*" in principal.scopes
+                else set(principal.scopes)
+            )
+            catalog = {
+                (str(row.get("provider")), str(row.get("name"))): row
+                for row in repo.list_payloads("accesses")
+            }
+            snapshot_catalog = {
+                (access.provider, access.name): access for access in snapshot.accesses
+            }
             items = []
             for provider, name in sorted(references):
                 if not provider or not name or (allowed is not None and provider not in allowed):
                     continue
                 access = snapshot_catalog.get((provider, name))
                 saved = catalog.get((provider, name), {})
-                context = access_context_for_payload(repo, asdict(access)) if access else access_context_for_payload(repo, saved)
+                context = (
+                    access_context_for_payload(repo, asdict(access))
+                    if access
+                    else access_context_for_payload(repo, saved)
+                )
                 fields = context.get("fields", {}) if isinstance(context, dict) else {}
-                application = (fields.get("application") or {}).get("source") or (fields.get("application") or {}).get("manual") if isinstance(fields, dict) else None
-                items.append({
-                    "provider": provider,
-                    "name": name,
-                    "display_name": (access.display_name if access else None) or saved.get("display_name") or name,
-                    "application": application.get("value") if isinstance(application, dict) else None,
-                })
+                application = (
+                    (fields.get("application") or {}).get("source")
+                    or (fields.get("application") or {}).get("manual")
+                    if isinstance(fields, dict)
+                    else None
+                )
+                items.append(
+                    {
+                        "provider": provider,
+                        "name": name,
+                        "display_name": (access.display_name if access else None)
+                        or saved.get("display_name")
+                        or name,
+                        "application": application.get("value")
+                        if isinstance(application, dict)
+                        else None,
+                    }
+                )
             return {"items": items, "total": len(items)}
 
     @app.post("/api/campaigns/preview")
@@ -2293,7 +4018,9 @@ def create_app(db_path: str | None = None):
             snapshot = _snapshot(repo, campaign.snapshot_id)
             golden = _golden_version(repo, campaign.golden_source_version_id)
             try:
-                preparation = prepare_campaign_review(campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot))
+                preparation = prepare_campaign_review(
+                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot)
+                )
                 _require_campaign_access(principal, campaign, repo, preparation)
                 return preview_campaign_review(campaign, snapshot, golden, preparation=preparation)
             except HTTPException:
@@ -2309,14 +4036,23 @@ def create_app(db_path: str | None = None):
             snapshot = _snapshot(repo, campaign.snapshot_id)
             golden = _golden_version(repo, campaign.golden_source_version_id)
             try:
-                preparation = prepare_campaign_review(campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot))
+                preparation = prepare_campaign_review(
+                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot)
+                )
                 _require_campaign_access(principal, campaign, repo, preparation)
             except HTTPException:
                 raise
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             repo.upsert("campaigns", campaign)
-            record_audit(repo, request, "campaign.created", "campaign", campaign.id, {"snapshot_id": campaign.snapshot_id})
+            record_audit(
+                repo,
+                request,
+                "campaign.created",
+                "campaign",
+                campaign.id,
+                {"snapshot_id": campaign.snapshot_id},
+            )
         return asdict(campaign)
 
     @app.put("/api/campaigns/{campaign_id}")
@@ -2337,18 +4073,29 @@ def create_app(db_path: str | None = None):
                 campaign.status = current.status
                 snapshot = _snapshot(repo, campaign.snapshot_id)
                 golden = _golden_version(repo, campaign.golden_source_version_id)
-                preparation = prepare_campaign_review(campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot))
+                preparation = prepare_campaign_review(
+                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot)
+                )
                 _require_campaign_access(principal, campaign, repo, preparation)
             except HTTPException:
                 raise
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             repo.upsert("campaigns", campaign)
-            record_audit(repo, request, "campaign.updated", "campaign", campaign.id, {"snapshot_id": campaign.snapshot_id})
+            record_audit(
+                repo,
+                request,
+                "campaign.updated",
+                "campaign",
+                campaign.id,
+                {"snapshot_id": campaign.snapshot_id},
+            )
             return asdict(campaign)
 
     @app.post("/api/campaigns/{campaign_id}/open")
-    def campaign_open(campaign_id: str, request: Request, payload: dict[str, Any] | None = Body(default=None)):
+    def campaign_open(
+        campaign_id: str, request: Request, payload: dict[str, Any] | None = Body(default=None)
+    ):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             raw = repo.get_payload("campaigns", campaign_id)
@@ -2358,8 +4105,15 @@ def create_app(db_path: str | None = None):
             if not campaign.pilot:
                 campaign.pilot = principal.username
             pilot_user = _stored_user(campaign.pilot)
-            if pilot_user is None or pilot_user.get("role") not in {"ADMIN", "OPERATOR"} or not pilot_user.get("enabled", True):
-                raise HTTPException(status_code=409, detail="Campaign pilot must be an enabled ADMIN or OPERATOR account")
+            if (
+                pilot_user is None
+                or pilot_user.get("role") not in {"ADMIN", "OPERATOR"}
+                or not pilot_user.get("enabled", True)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Campaign pilot must be an enabled ADMIN or OPERATOR account",
+                )
             if payload and "allow_unresolved_reviewers" in payload:
                 campaign.allow_unresolved_reviewers = bool(payload["allow_unresolved_reviewers"])
             snapshot = _snapshot(repo, campaign.snapshot_id)
@@ -2380,8 +4134,7 @@ def create_app(db_path: str | None = None):
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
             observed_accesses = {
-                (access.provider, access.name): access
-                for access in snapshot.accesses
+                (access.provider, access.name): access for access in snapshot.accesses
             }
             reviewed_refs = {(item.access_provider, item.access_name) for item in items}
             catalog_accesses = {}
@@ -2399,7 +4152,14 @@ def create_app(db_path: str | None = None):
                 for item in items:
                     repo.upsert("review_items", item)
                 capture_campaign_access_contexts(repo, opened.id, contexts_to_capture)
-                record_audit(repo, request, "campaign.opened", "campaign", opened.id, {"review_items": len(items)})
+                record_audit(
+                    repo,
+                    request,
+                    "campaign.opened",
+                    "campaign",
+                    opened.id,
+                    {"review_items": len(items)},
+                )
             return {"campaign": asdict(opened), "items": len(items)}
 
     @app.post("/api/campaigns/{campaign_id}/close")
@@ -2413,8 +4173,16 @@ def create_app(db_path: str | None = None):
             _require_campaign_access(principal, campaign, repo)
             if campaign.status != "open":
                 raise HTTPException(status_code=409, detail="Only open campaigns can be closed")
-            items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
-            decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
+            items = [
+                hydrate_review_item(row)
+                for row in repo.list_payloads("review_items")
+                if row.get("campaign_id") == campaign_id
+            ]
+            decisions = [
+                hydrate_decision(row)
+                for row in repo.list_payloads("decisions")
+                if row.get("review_item_id") in {item.id for item in items}
+            ]
             try:
                 closed = close_campaign(campaign, items, decisions)
             except ValueError as exc:
@@ -2424,7 +4192,14 @@ def create_app(db_path: str | None = None):
             actions = remediation_from_decisions(items, decisions)
             for action in actions:
                 repo.insert_append_only("remediation_actions", action)
-            record_audit(repo, request, "campaign.closed", "campaign", closed.id, {"review_items": len(items), "remediation_actions": len(actions)})
+            record_audit(
+                repo,
+                request,
+                "campaign.closed",
+                "campaign",
+                closed.id,
+                {"review_items": len(items), "remediation_actions": len(actions)},
+            )
             return {**asdict(closed), "remediation_actions": len(actions)}
 
     @app.post("/api/campaigns/{campaign_id}/cancel")
@@ -2452,17 +4227,44 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(status_code=404, detail="Campaign not found")
             campaign = hydrate_campaign(raw)
             _require_campaign_delete_access(principal, campaign, repo)
-            review_items = [row for row in repo.list_payloads("review_items") if str(row.get("campaign_id")) == campaign_id]
+            review_items = [
+                row
+                for row in repo.list_payloads("review_items")
+                if str(row.get("campaign_id")) == campaign_id
+            ]
             review_ids = {str(row.get("id")) for row in review_items}
             related = {
                 "review_items": review_ids,
-                "decisions": {str(row.get("id")) for row in repo.list_payloads("decisions") if str(row.get("review_item_id")) in review_ids},
-                "remediation_actions": {str(row.get("id")) for row in repo.list_payloads("remediation_actions") if str(row.get("campaign_id")) == campaign_id},
-                "finding_tracking": {str(row.get("id")) for row in repo.list_payloads("finding_tracking") if str(row.get("campaign_id") or "") == campaign_id},
-                "campaign_access_contexts": {str(row.get("id")) for row in repo.list_payloads("campaign_access_contexts") if str(row.get("campaign_id")) == campaign_id},
+                "decisions": {
+                    str(row.get("id"))
+                    for row in repo.list_payloads("decisions")
+                    if str(row.get("review_item_id")) in review_ids
+                },
+                "remediation_actions": {
+                    str(row.get("id"))
+                    for row in repo.list_payloads("remediation_actions")
+                    if str(row.get("campaign_id")) == campaign_id
+                },
+                "finding_tracking": {
+                    str(row.get("id"))
+                    for row in repo.list_payloads("finding_tracking")
+                    if str(row.get("campaign_id") or "") == campaign_id
+                },
+                "campaign_access_contexts": {
+                    str(row.get("id"))
+                    for row in repo.list_payloads("campaign_access_contexts")
+                    if str(row.get("campaign_id")) == campaign_id
+                },
             }
             with repo.transaction():
-                record_audit(repo, request, "campaign.deleted", "campaign", campaign.id, {"status": campaign.status, "review_items": len(review_ids)})
+                record_audit(
+                    repo,
+                    request,
+                    "campaign.deleted",
+                    "campaign",
+                    campaign.id,
+                    {"status": campaign.status, "review_items": len(review_ids)},
+                )
                 for table, ids in related.items():
                     repo.delete_ids(table, ids)
                 repo.delete_ids("campaigns", {campaign_id})
@@ -2483,20 +4285,47 @@ def create_app(db_path: str | None = None):
             if not source_payloads:
                 raise HTTPException(status_code=409, detail="A Golden Source is required")
             version_payloads = repo.list_payloads("golden_source_versions")
-            selected_version = next((row for row in version_payloads if row.get("id") == campaign.golden_source_version_id), None)
+            selected_version = next(
+                (
+                    row
+                    for row in version_payloads
+                    if row.get("id") == campaign.golden_source_version_id
+                ),
+                None,
+            )
             if selected_version is None:
-                raise HTTPException(status_code=409, detail="Campaign has no unambiguous Golden Source reference.")
+                raise HTTPException(
+                    status_code=409, detail="Campaign has no unambiguous Golden Source reference."
+                )
             source_payload = next(
-                (row for row in source_payloads if row.get("id") == selected_version.get("golden_source_id")),
+                (
+                    row
+                    for row in source_payloads
+                    if row.get("id") == selected_version.get("golden_source_id")
+                ),
                 None,
             )
             if source_payload is None:
-                raise HTTPException(status_code=409, detail="Campaign Golden Source reference is invalid.")
+                raise HTTPException(
+                    status_code=409, detail="Campaign Golden Source reference is invalid."
+                )
             source = hydrate_golden_source(source_payload)
-            versions = [hydrate_golden_version(row) for row in version_payloads if row.get("golden_source_id") == source.id]
+            versions = [
+                hydrate_golden_version(row)
+                for row in version_payloads
+                if row.get("golden_source_id") == source.id
+            ]
             previous = max(versions, key=lambda item: item.version) if versions else None
-            items = [hydrate_review_item(row) for row in repo.list_payloads("review_items") if row.get("campaign_id") == campaign_id]
-            decisions = [hydrate_decision(row) for row in repo.list_payloads("decisions") if row.get("review_item_id") in {item.id for item in items}]
+            items = [
+                hydrate_review_item(row)
+                for row in repo.list_payloads("review_items")
+                if row.get("campaign_id") == campaign_id
+            ]
+            decisions = [
+                hydrate_decision(row)
+                for row in repo.list_payloads("decisions")
+                if row.get("review_item_id") in {item.id for item in items}
+            ]
             try:
                 version = promote_campaign(
                     source,
@@ -2513,7 +4342,14 @@ def create_app(db_path: str | None = None):
             source.active_version_id = version.id
             repo.upsert("golden_sources", source)
             repo.upsert("golden_source_versions", version)
-            record_audit(repo, request, "campaign.promoted", "campaign", campaign.id, {"version_id": version.id, "golden_source_id": source.id})
+            record_audit(
+                repo,
+                request,
+                "campaign.promoted",
+                "campaign",
+                campaign.id,
+                {"version_id": version.id, "golden_source_id": source.id},
+            )
             return {"source": asdict(source), "version": asdict(version)}
 
     @app.get("/api/campaigns/{campaign_id}")
@@ -2560,7 +4396,12 @@ def create_app(db_path: str | None = None):
         bounded_offset = max(0, offset)
         with Repository(db_path) as repo:
             events = repo.list_payloads("audit_events")
-        return {"items": events[bounded_offset : bounded_offset + bounded_limit], "total": len(events), "limit": bounded_limit, "offset": bounded_offset}
+        return {
+            "items": events[bounded_offset : bounded_offset + bounded_limit],
+            "total": len(events),
+            "limit": bounded_limit,
+            "offset": bounded_offset,
+        }
 
     def _golden_application_usage(repo: Repository, application_name: str) -> list[dict[str, Any]]:
         def key(value: Any) -> str:
@@ -2568,35 +4409,77 @@ def create_app(db_path: str | None = None):
 
         wanted = key(application_name)
         accesses = {str(row.get("id")): row for row in repo.list_payloads("accesses")}
-        enrichments = {str(row.get("access_id")): row for row in repo.list_payloads("access_enrichments")}
+        enrichments = {
+            str(row.get("access_id")): row for row in repo.list_payloads("access_enrichments")
+        }
         sources = {str(row.get("id")): row for row in repo.list_payloads("golden_sources")}
         usages: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         for version in repo.list_payloads("golden_source_versions"):
-            access_keys = {(str(item.get("access_provider")), str(item.get("access_name"))) for item in version.get("assignments", [])}
+            access_keys = {
+                (str(item.get("access_provider")), str(item.get("access_name")))
+                for item in version.get("assignments", [])
+            }
             source = sources.get(str(version.get("golden_source_id")), {})
-            source_name = str(source.get("display_name") or source.get("name") or version.get("golden_source_id") or "Golden Source")
+            source_name = str(
+                source.get("display_name")
+                or source.get("name")
+                or version.get("golden_source_id")
+                or "Golden Source"
+            )
             for provider, access_name in access_keys:
-                access = next((row for row in accesses.values() if str(row.get("provider")) == provider and str(row.get("name")) == access_name), None)
+                access = next(
+                    (
+                        row
+                        for row in accesses.values()
+                        if str(row.get("provider")) == provider
+                        and str(row.get("name")) == access_name
+                    ),
+                    None,
+                )
                 if not access:
                     continue
                 enrichment = enrichments.get(str(access.get("id"))) or {}
                 context = access_context_for_payload(repo, access).get("fields", {})
                 candidates = [enrichment.get("application")]
-                source_application = context.get("application", {}).get("source") if isinstance(context.get("application"), dict) else None
-                manual_application = context.get("application", {}).get("manual") if isinstance(context.get("application"), dict) else None
-                candidates.extend([
-                    source_application.get("value") if isinstance(source_application, dict) else None,
-                    manual_application.get("value") if isinstance(manual_application, dict) else None,
-                ])
+                source_application = (
+                    context.get("application", {}).get("source")
+                    if isinstance(context.get("application"), dict)
+                    else None
+                )
+                manual_application = (
+                    context.get("application", {}).get("manual")
+                    if isinstance(context.get("application"), dict)
+                    else None
+                )
+                candidates.extend(
+                    [
+                        source_application.get("value")
+                        if isinstance(source_application, dict)
+                        else None,
+                        manual_application.get("value")
+                        if isinstance(manual_application, dict)
+                        else None,
+                    ]
+                )
                 # An access may name several applications; any one of them counts as a use.
-                if not any(key(part) == wanted for candidate in candidates for part in split_multi_value(candidate)):
+                if not any(
+                    key(part) == wanted
+                    for candidate in candidates
+                    for part in split_multi_value(candidate)
+                ):
                     continue
                 usage_key = (str(version.get("id")), f"{provider}/{access_name}")
                 if usage_key in seen:
                     continue
                 seen.add(usage_key)
-                usages.append({"source": source_name, "version": version.get("version"), "access": f"{provider}/{access_name}"})
+                usages.append(
+                    {
+                        "source": source_name,
+                        "version": version.get("version"),
+                        "access": f"{provider}/{access_name}",
+                    }
+                )
         return usages
 
     @app.get("/api/golden-applications")
@@ -2607,35 +4490,65 @@ def create_app(db_path: str | None = None):
             for item in repo.list_payloads("golden_applications"):
                 usage = _golden_application_usage(repo, str(item.get("name") or ""))
                 items.append({**item, "usage_count": len(usage), "usage": usage})
-        return {"applications": sorted(items, key=lambda item: str(item.get("name") or "").casefold())}
+        return {
+            "applications": sorted(items, key=lambda item: str(item.get("name") or "").casefold())
+        }
 
     @app.put("/api/golden-applications/{application_id}")
-    def golden_application_update(application_id: str, request: Request, payload: dict[str, Any] = Body(...)):
-        principal = _require(current_user(request), ("ADMIN",))
+    def golden_application_update(
+        application_id: str, request: Request, payload: dict[str, Any] = Body(...)
+    ):
+        _require(current_user(request), ("ADMIN",))
         comment = str(payload.get("comment") or "").strip()
         if len(comment) > 4000:
-            raise HTTPException(status_code=400, detail="Application comment is limited to 4000 characters")
+            raise HTTPException(
+                status_code=400, detail="Application comment is limited to 4000 characters"
+            )
         with Repository(db_path) as repo:
             record = repo.get_payload("golden_applications", application_id)
             if record is None:
                 raise HTTPException(status_code=404, detail="Application not found")
-            record = {**record, "comment": comment, "active": bool(payload.get("active", record.get("active", True)))}
+            record = {
+                **record,
+                "comment": comment,
+                "active": bool(payload.get("active", record.get("active", True))),
+            }
             repo.upsert("golden_applications", record)
-            record_audit(repo, request, "golden_application.updated", "golden_application", application_id, {"name": record.get("name"), "active": record.get("active")})
+            record_audit(
+                repo,
+                request,
+                "golden_application.updated",
+                "golden_application",
+                application_id,
+                {"name": record.get("name"), "active": record.get("active")},
+            )
             return record
 
     @app.delete("/api/golden-applications/{application_id}")
     def golden_application_delete(application_id: str, request: Request):
-        principal = _require(current_user(request), ("ADMIN",))
+        _require(current_user(request), ("ADMIN",))
         with Repository(db_path) as repo:
             record = repo.get_payload("golden_applications", application_id)
             if record is None:
                 raise HTTPException(status_code=404, detail="Application not found")
             usage = _golden_application_usage(repo, str(record.get("name") or ""))
             if usage:
-                raise HTTPException(status_code=409, detail={"message": "Application is used by Golden Source versions and cannot be deleted", "usage": usage})
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "Application is used by Golden Source versions and cannot be deleted",
+                        "usage": usage,
+                    },
+                )
             repo.delete_ids("golden_applications", {application_id})
-            record_audit(repo, request, "golden_application.deleted", "golden_application", application_id, {"name": record.get("name")})
+            record_audit(
+                repo,
+                request,
+                "golden_application.deleted",
+                "golden_application",
+                application_id,
+                {"name": record.get("name")},
+            )
             return {"deleted": True, "id": application_id}
 
     @app.post("/api/golden-applications")
@@ -2644,29 +4557,73 @@ def create_app(db_path: str | None = None):
         name = str(payload.get("name") or "").strip()
         comment = str(payload.get("comment") or "").strip()
         if not name or len(name) > 200:
-            raise HTTPException(status_code=400, detail="Application name is required and limited to 200 characters")
+            raise HTTPException(
+                status_code=400, detail="Application name is required and limited to 200 characters"
+            )
         if len(comment) > 4000:
-            raise HTTPException(status_code=400, detail="Application comment is limited to 4000 characters")
+            raise HTTPException(
+                status_code=400, detail="Application comment is limited to 4000 characters"
+            )
+
         def key(value: str) -> str:
-            return "".join(char for char in unicodedata.normalize("NFKD", value).casefold() if char.isalnum())
+            return "".join(
+                char for char in unicodedata.normalize("NFKD", value).casefold() if char.isalnum()
+            )
+
         candidate = key(name)
         with Repository(db_path) as repo:
             existing = repo.list_payloads("golden_applications")
-            exact = next((item for item in existing if key(str(item.get("name") or "")) == candidate), None)
+            exact = next(
+                (item for item in existing if key(str(item.get("name") or "")) == candidate), None
+            )
             if exact:
-                raise HTTPException(status_code=409, detail="An application with this name already exists")
+                raise HTTPException(
+                    status_code=409, detail="An application with this name already exists"
+                )
             similar = [
-                {"name": item.get("name"), "comment": item.get("comment"), "score": round(difflib.SequenceMatcher(None, candidate, key(str(item.get("name") or ""))).ratio(), 2)}
+                {
+                    "name": item.get("name"),
+                    "comment": item.get("comment"),
+                    "score": round(
+                        difflib.SequenceMatcher(
+                            None, candidate, key(str(item.get("name") or ""))
+                        ).ratio(),
+                        2,
+                    ),
+                }
                 for item in existing
-                if candidate and (candidate in key(str(item.get("name") or "")) or key(str(item.get("name") or "")) in candidate or difflib.SequenceMatcher(None, candidate, key(str(item.get("name") or ""))).ratio() >= 0.62)
+                if candidate
+                and (
+                    candidate in key(str(item.get("name") or ""))
+                    or key(str(item.get("name") or "")) in candidate
+                    or difflib.SequenceMatcher(
+                        None, candidate, key(str(item.get("name") or ""))
+                    ).ratio()
+                    >= 0.62
+                )
             ]
             similar.sort(key=lambda item: item["score"], reverse=True)
             if similar and not bool(payload.get("confirm")):
                 return {"created": False, "requires_confirmation": True, "similar": similar[:5]}
-            identifier = "app_" + hashlib.sha256((candidate or name).encode("utf-8")).hexdigest()[:24]
-            record = {"id": identifier, "name": name, "comment": comment, "created_by": principal.subject, "active": True}
+            identifier = (
+                "app_" + hashlib.sha256((candidate or name).encode("utf-8")).hexdigest()[:24]
+            )
+            record = {
+                "id": identifier,
+                "name": name,
+                "comment": comment,
+                "created_by": principal.subject,
+                "active": True,
+            }
             repo.upsert("golden_applications", record)
-            record_audit(repo, request, "golden_application.created", "golden_application", identifier, {"name": name})
+            record_audit(
+                repo,
+                request,
+                "golden_application.created",
+                "golden_application",
+                identifier,
+                {"name": name},
+            )
             return {"created": True, "application": record}
 
     @app.get("/api/capabilities")
@@ -2677,7 +4634,7 @@ def create_app(db_path: str | None = None):
 
     @app.post("/api/system/capabilities")
     def capabilities_save(request: Request, payload: dict[str, Any] = Body(...)):
-        principal = _require(current_user(request), ("ADMIN",))
+        _require(current_user(request), ("ADMIN",))
         capability_id = payload.get("id")
         label = payload.get("label")
         description = payload.get("description")
@@ -2689,16 +4646,28 @@ def create_app(db_path: str | None = None):
             or not capability_id[0].islower()
             or not all(char.islower() or char.isdigit() or char in "_-" for char in capability_id)
         ):
-            raise HTTPException(status_code=400, detail="Capability ID must be a stable lowercase identifier")
+            raise HTTPException(
+                status_code=400, detail="Capability ID must be a stable lowercase identifier"
+            )
         if not isinstance(label, str) or not label.strip() or len(label) > 120:
-            raise HTTPException(status_code=400, detail="Capability label is required and limited to 120 characters")
+            raise HTTPException(
+                status_code=400, detail="Capability label is required and limited to 120 characters"
+            )
         if not isinstance(description, str) or not description.strip() or len(description) > 1000:
-            raise HTTPException(status_code=400, detail="Capability description is required and limited to 1000 characters")
+            raise HTTPException(
+                status_code=400,
+                detail="Capability description is required and limited to 1000 characters",
+            )
         if not isinstance(active, bool):
             raise HTTPException(status_code=400, detail="Capability active must be a boolean")
         with Repository(db_path) as repo:
-            existing = next((item for item in repo.list_capabilities() if item.id == capability_id), None)
-            if existing is not None and bool(payload.get("system", existing.system)) != existing.system:
+            existing = next(
+                (item for item in repo.list_capabilities() if item.id == capability_id), None
+            )
+            if (
+                existing is not None
+                and bool(payload.get("system", existing.system)) != existing.system
+            ):
                 raise HTTPException(status_code=409, detail="Capability type cannot be changed")
             try:
                 capability = Capability(
@@ -2713,14 +4682,22 @@ def create_app(db_path: str | None = None):
                 raise HTTPException(
                     status_code=400 if existing is None else 409, detail=str(exc)
                 ) from exc
-            record_audit(repo, request, "capability.updated" if existing else "capability.created", "capability", capability.id)
+            record_audit(
+                repo,
+                request,
+                "capability.updated" if existing else "capability.created",
+                "capability",
+                capability.id,
+            )
             return {"capability": asdict(capability)}
 
     @app.get("/api/system/permission-capability-mappings")
     def permission_capability_mappings_list(request: Request):
         _require(current_user(request), ("ADMIN",))
         with Repository(db_path) as repo:
-            return {"mappings": [asdict(item) for item in repo.list_permission_capability_mappings()]}
+            return {
+                "mappings": [asdict(item) for item in repo.list_permission_capability_mappings()]
+            }
 
     @app.post("/api/system/permission-capability-mappings")
     def permission_capability_mapping_save(request: Request, payload: dict[str, Any] = Body(...)):
@@ -2732,7 +4709,11 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=400, detail="Provider is required")
         if not isinstance(permission, str) or not permission.strip():
             raise HTTPException(status_code=400, detail="Native permission identifier is required")
-        if not isinstance(capability_ids, list) or not capability_ids or any(not isinstance(item, str) for item in capability_ids):
+        if (
+            not isinstance(capability_ids, list)
+            or not capability_ids
+            or any(not isinstance(item, str) for item in capability_ids)
+        ):
             raise HTTPException(status_code=400, detail="Select one or more capability IDs")
         try:
             mapping = PermissionCapabilityMapping(
@@ -2748,28 +4729,91 @@ def create_app(db_path: str | None = None):
                 repo.save_permission_capability_mapping(mapping)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            record_audit(repo, request, "permission_capability_mapping.updated", "permission_capability_mapping", mapping.provider + ":" + mapping.permission_identifier)
+            record_audit(
+                repo,
+                request,
+                "permission_capability_mapping.updated",
+                "permission_capability_mapping",
+                mapping.provider + ":" + mapping.permission_identifier,
+            )
             return {"mapping": asdict(mapping)}
-    tables = {"providers": "providers", "imports": "imports", "identities": "identities", "accesses": "accesses", "assignments": "access_assignments", "golden-sources": "golden_sources", "golden-source-versions": "golden_source_versions", "snapshots": "snapshots", "campaigns": "campaigns", "review-items": "review_items", "decisions": "decisions", "remediation-actions": "remediation_actions"}
+
+    tables = {
+        "providers": "providers",
+        "imports": "imports",
+        "identities": "identities",
+        "accesses": "accesses",
+        "assignments": "access_assignments",
+        "golden-sources": "golden_sources",
+        "golden-source-versions": "golden_source_versions",
+        "snapshots": "snapshots",
+        "campaigns": "campaigns",
+        "review-items": "review_items",
+        "decisions": "decisions",
+        "remediation-actions": "remediation_actions",
+    }
     for path, table in tables.items():
-        def route(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, campaign: str | None = None, action: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, _table: str = table):
+
+        def route(
+            request: Request,
+            limit: int = 100,
+            offset: int = 0,
+            search: str | None = None,
+            status: str | None = None,
+            provider: str | None = None,
+            campaign: str | None = None,
+            action: str | None = None,
+            sort: str | None = None,
+            order: str | None = None,
+            classification: str | None = None,
+            _table: str = table,
+        ):
             principal = _require(current_user(request))
             require_table_access(principal, _table)
             filters = column_filters(request)
             if action and _table == "remediation_actions":
                 filters["action"] = action
-            return scoped_page(principal, _table, limit, offset, search, status, provider, campaign, sort, order, classification, filters)
+            return scoped_page(
+                principal,
+                _table,
+                limit,
+                offset,
+                search,
+                status,
+                provider,
+                campaign,
+                sort,
+                order,
+                classification,
+                filters,
+            )
+
         app.get(f"/api/{path}")(route)
 
     @app.get("/api/findings")
-    def findings(request: Request, limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None, provider: str | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None):
+    def findings(
+        request: Request,
+        limit: int = 100,
+        offset: int = 0,
+        search: str | None = None,
+        status: str | None = None,
+        provider: str | None = None,
+        campaign: str | None = None,
+        sort: str | None = None,
+        order: str | None = None,
+    ):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         if campaign:
             _require_campaign_id_access(principal, campaign)
         snapshot = latest_snapshot(db_path) or {}
         rows = list(snapshot.get("comparison_states", []))
         if principal.role == "OPERATOR" and "*" not in principal.scopes:
-            rows = [row for row in rows if str(row.get("access_provider") or "") in principal.scopes and str(row.get("identity_provider") or "") in principal.scopes]
+            rows = [
+                row
+                for row in rows
+                if str(row.get("access_provider") or "") in principal.scopes
+                and str(row.get("identity_provider") or "") in principal.scopes
+            ]
         if campaign:
             with Repository(db_path) as repo:
                 campaign_keys = {
@@ -2783,13 +4827,15 @@ def create_app(db_path: str | None = None):
                     if item.get("campaign_id") == campaign
                 }
                 rows = [
-                    row for row in rows
+                    row
+                    for row in rows
                     if (
                         row.get("access_provider"),
                         row.get("access_name"),
                         row.get("identity_provider"),
                         row.get("identity_identifier"),
-                    ) in campaign_keys
+                    )
+                    in campaign_keys
                 ]
         with Repository(db_path) as repo:
             tracking = {
@@ -2802,7 +4848,9 @@ def create_app(db_path: str | None = None):
             access = row.get("access") if isinstance(row.get("access"), dict) else {}
             identity = row.get("identity") if isinstance(row.get("identity"), dict) else {}
             row["access_display_name"] = access.get("display_name") or row.get("access_name")
-            row["identity_display_name"] = identity.get("display_name") or row.get("identity_identifier")
+            row["identity_display_name"] = identity.get("display_name") or row.get(
+                "identity_identifier"
+            )
         if status:
             rows = [row for row in rows if row.get("classification") == status]
         if provider:
@@ -2810,20 +4858,47 @@ def create_app(db_path: str | None = None):
         if search:
             needle = search.casefold()
             rows = [row for row in rows if needle in json.dumps(row, sort_keys=True).casefold()]
-        from access_review_engine.web_read_models import apply_field_filters, findings_summary, sorted_rows
+        from access_review_engine.web_read_models import (
+            apply_field_filters,
+            findings_summary,
+            sorted_rows,
+        )
 
         rows = apply_field_filters(rows, column_filters(request))
         rows = sorted_rows(rows, sort or "source_group", order or "asc")
-        return {"items": rows[offset : offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower(), "summary": findings_summary(rows)}
+        return {
+            "items": rows[offset : offset + limit],
+            "total": len(rows),
+            "limit": limit,
+            "offset": offset,
+            "sort": sort or "",
+            "order": (order or "asc").lower(),
+            "summary": findings_summary(rows),
+        }
 
     @app.patch("/api/findings/tracking")
     def finding_tracking_save(request: Request, payload: dict[str, Any] = Body(...)):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         campaign_id = str(payload.get("campaign_id") or "").strip() or None
-        row = {key: payload.get(key) for key in ("access_provider", "access_name", "identity_provider", "identity_identifier", "classification")}
+        row = {
+            key: payload.get(key)
+            for key in (
+                "access_provider",
+                "access_name",
+                "identity_provider",
+                "identity_identifier",
+                "classification",
+            )
+        }
         provider = str(row.get("access_provider") or "")
-        if not provider or not str(row.get("access_name") or "") or not str(row.get("identity_identifier") or ""):
-            raise HTTPException(status_code=400, detail="Finding identity, access and source are required")
+        if (
+            not provider
+            or not str(row.get("access_name") or "")
+            or not str(row.get("identity_identifier") or "")
+        ):
+            raise HTTPException(
+                status_code=400, detail="Finding identity, access and source are required"
+            )
         if not principal.can_access(provider):
             raise HTTPException(status_code=403, detail="Source is not authorized")
         if campaign_id:
@@ -2845,7 +4920,14 @@ def create_app(db_path: str | None = None):
         }
         with Repository(db_path) as repo:
             repo.upsert("finding_tracking", record)
-            record_audit(repo, request, "finding.tracking_updated", "finding", finding_key, {"ticket": bool(ticket), "campaign_id": campaign_id})
+            record_audit(
+                repo,
+                request,
+                "finding.tracking_updated",
+                "finding",
+                finding_key,
+                {"ticket": bool(ticket), "campaign_id": campaign_id},
+            )
         return record
 
     def _snapshot_covering(provider: str | None) -> dict[str, Any]:
@@ -2866,24 +4948,41 @@ def create_app(db_path: str | None = None):
         """Find an identity in any collection, and return it with the collection covering it."""
         with Repository(db_path) as repo:
             stored = repo.list_payloads("identities")
-        found = next((row for row in stored if str(row.get("id")) == identity_id), None) or next((row for row in stored if str(row.get("identifier")) == identity_id), None)
+        found = next((row for row in stored if str(row.get("id")) == identity_id), None) or next(
+            (row for row in stored if str(row.get("identifier")) == identity_id), None
+        )
         if found is None:
             raise HTTPException(status_code=404, detail="Identity not found")
         snapshot = _snapshot_covering(str(found.get("provider")))
-        inside = next((row for row in snapshot.get("identities", []) if row.get("id") == found.get("id")), None) or found
+        inside = (
+            next(
+                (row for row in snapshot.get("identities", []) if row.get("id") == found.get("id")),
+                None,
+            )
+            or found
+        )
         return inside, snapshot
 
     @app.get("/api/identities/{identity_id}/accesses")
     def identity_accesses(identity_id: str, request: Request):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         identity, snapshot = _identity_owner(identity_id)
-        if principal.role != "ADMIN" and not principal.can_access(str(identity.get("provider") or "")):
+        if principal.role != "ADMIN" and not principal.can_access(
+            str(identity.get("provider") or "")
+        ):
             raise HTTPException(status_code=403, detail="Scope is not authorized")
-        assignments = [row for row in snapshot.get("access_assignments", []) if row.get("identity_provider") == identity.get("provider") and row.get("identity_identifier") == identity.get("identifier")]
+        assignments = [
+            row
+            for row in snapshot.get("access_assignments", [])
+            if row.get("identity_provider") == identity.get("provider")
+            and row.get("identity_identifier") == identity.get("identifier")
+        ]
         hydrated = hydrate_snapshot(snapshot)
         access_by_key = {(access.provider, access.name): access for access in hydrated.accesses}
         group_names = {
-            str(group.identifier or group.native_id or group.id): str(group.display_name or group.identifier)
+            str(group.identifier or group.native_id or group.id): str(
+                group.display_name or group.identifier
+            )
             for group in hydrated.identities
             if str(group.type).casefold() == "group"
         }
@@ -2894,11 +4993,19 @@ def create_app(db_path: str | None = None):
             if display and display != name:
                 return display
             parts = name.split(":")
-            return group_names.get(parts[1], name) if len(parts) >= 2 and parts[0].casefold() == "group" else name
+            return (
+                group_names.get(parts[1], name)
+                if len(parts) >= 2 and parts[0].casefold() == "group"
+                else name
+            )
 
         for assignment in assignments:
-            assignment["access_display_name"] = access_display(str(assignment.get("provider") or ""), str(assignment.get("access_name") or ""))
-        evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
+            assignment["access_display_name"] = access_display(
+                str(assignment.get("provider") or ""), str(assignment.get("access_name") or "")
+            )
+        evaluation = calculate_effective_accesses(
+            hydrated.access_assignments, hydrated.access_relations, hydrated.accesses
+        )
         effective = [
             asdict(item)
             for item in evaluation.effective_accesses
@@ -2907,14 +5014,25 @@ def create_app(db_path: str | None = None):
             and not item.direct
         ]
         for item in effective:
-            item["access_display_name"] = access_display(str(item.get("access_provider") or ""), str(item.get("access_name") or ""))
-        return {"identity": identity, "accesses": assignments, "effective_accesses": effective, "paths": [path for item in effective for path in item.get("paths", [])]}
+            item["access_display_name"] = access_display(
+                str(item.get("access_provider") or ""), str(item.get("access_name") or "")
+            )
+        return {
+            "identity": identity,
+            "accesses": assignments,
+            "effective_accesses": effective,
+            "paths": [path for item in effective for path in item.get("paths", [])],
+        }
 
     @app.get("/api/accesses/{provider}/{access_name}/holders")
     def access_holders(provider: str, access_name: str, request: Request):
         _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
         snapshot = _snapshot_covering(provider)
-        rows = [row for row in snapshot.get("access_assignments", []) if row.get("provider") == provider and row.get("access_name") == access_name]
+        rows = [
+            row
+            for row in snapshot.get("access_assignments", [])
+            if row.get("provider") == provider and row.get("access_name") == access_name
+        ]
         identities = {
             (str(identity.get("provider") or ""), str(identity.get("identifier") or "")): identity
             for identity in snapshot.get("identities", [])
@@ -2923,15 +5041,22 @@ def create_app(db_path: str | None = None):
             {
                 **row,
                 "identity_display_name": (
-                    identities.get((str(row.get("identity_provider") or ""), str(row.get("identity_identifier") or "")), {})
-                    .get("display_name")
+                    identities.get(
+                        (
+                            str(row.get("identity_provider") or ""),
+                            str(row.get("identity_identifier") or ""),
+                        ),
+                        {},
+                    ).get("display_name")
                     or row.get("identity_identifier")
                 ),
             }
             for row in rows
         ]
         hydrated = hydrate_snapshot(snapshot)
-        evaluation = calculate_effective_accesses(hydrated.access_assignments, hydrated.access_relations, hydrated.accesses)
+        evaluation = calculate_effective_accesses(
+            hydrated.access_assignments, hydrated.access_relations, hydrated.accesses
+        )
         effective = [
             asdict(item)
             for item in evaluation.effective_accesses
@@ -2943,14 +5068,24 @@ def create_app(db_path: str | None = None):
             {
                 **item,
                 "identity_display_name": (
-                    identities.get((str(item.get("identity_provider") or ""), str(item.get("identity_identifier") or "")), {})
-                    .get("display_name")
+                    identities.get(
+                        (
+                            str(item.get("identity_provider") or ""),
+                            str(item.get("identity_identifier") or ""),
+                        ),
+                        {},
+                    ).get("display_name")
                     or item.get("identity_identifier")
                 ),
             }
             for item in effective
         ]
-        return {"access": {"provider": provider, "name": access_name}, "holders": rows, "effective_holders": effective, "paths": [path for item in effective for path in item.get("paths", [])]}
+        return {
+            "access": {"provider": provider, "name": access_name},
+            "holders": rows,
+            "effective_holders": effective,
+            "paths": [path for item in effective for path in item.get("paths", [])],
+        }
 
     @app.get("/api/accesses/{access_id}/enrichment")
     def get_access_enrichment(access_id: str, request: Request):
@@ -2962,10 +5097,16 @@ def create_app(db_path: str | None = None):
             provider = str(access.get("provider") or "")
             if principal.role != "ADMIN" and (not provider or not principal.can_access(provider)):
                 raise HTTPException(status_code=403, detail="Scope is not authorized")
-            return {"access_id": access_id, "enrichment": access_enrichment(repo, access_id), "business_context": access_context_for_payload(repo, access)}
+            return {
+                "access_id": access_id,
+                "enrichment": access_enrichment(repo, access_id),
+                "business_context": access_context_for_payload(repo, access),
+            }
 
     @app.put("/api/accesses/{access_id}/enrichment")
-    def put_access_enrichment(access_id: str, request: Request, payload: dict[str, Any] = Body(...)):
+    def put_access_enrichment(
+        access_id: str, request: Request, payload: dict[str, Any] = Body(...)
+    ):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             access = repo.get_payload("accesses", access_id)
@@ -2979,17 +5120,35 @@ def create_app(db_path: str | None = None):
             except ValueError as exc:
                 status = 404 if str(exc) == "Access not found" else 400
                 raise HTTPException(status_code=status, detail=str(exc)) from exc
-            record_audit(repo, request, "access.enrichment_changed", "access", access_id, {"fields": sorted(key for key, value in payload.items() if value not in (None, ""))})
-            return {"access_id": access_id, "enrichment": enrichment, "business_context": access_context_for_payload(repo, access)}
+            record_audit(
+                repo,
+                request,
+                "access.enrichment_changed",
+                "access",
+                access_id,
+                {
+                    "fields": sorted(
+                        key for key, value in payload.items() if value not in (None, "")
+                    )
+                },
+            )
+            return {
+                "access_id": access_id,
+                "enrichment": enrichment,
+                "business_context": access_context_for_payload(repo, access),
+            }
 
     @app.post("/api/sources/{provider}/sync", status_code=202)
     def sync(provider: str, request: Request):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
+
         def operation(job_id: str) -> dict[str, Any]:
             config = _load_web_connector(provider)
             secrets_config = secret_environment(config)
             if secrets_config.get("password_file"):
-                config.setdefault("credentials", {})["password_file"] = secrets_config["password_file"]
+                config.setdefault("credentials", {})["password_file"] = secrets_config[
+                    "password_file"
+                ]
             artifact = Path(db_path).with_name(f".eare-{provider}-{job_id}.zip")
             try:
                 update_progress(db_path, job_id, "Collecting read-only source data")
@@ -2998,16 +5157,32 @@ def create_app(db_path: str | None = None):
                     raise RunnerError(result.stderr.strip() or "Collector failed")
                 update_progress(db_path, job_id, "Importing and creating snapshot")
                 with Repository(db_path) as repo:
-                    snapshot = import_file_to_repository(repo, artifact, provider_name=provider, source_config=config)
-                    record_audit(repo, request, "source.sync_completed", "snapshot", snapshot.id, {"provider": provider})
+                    snapshot = import_file_to_repository(
+                        repo, artifact, provider_name=provider, source_config=config
+                    )
+                    record_audit(
+                        repo,
+                        request,
+                        "source.sync_completed",
+                        "snapshot",
+                        snapshot.id,
+                        {"provider": provider},
+                    )
                 return {"snapshot_id": snapshot.id, "provider": provider}
             finally:
                 artifact.unlink(missing_ok=True)
-        return create_job(db_path, "sync", operation, context={"provider": provider, "created_by": principal.username})
+
+        return create_job(
+            db_path,
+            "sync",
+            operation,
+            context={"provider": provider, "created_by": principal.username},
+        )
 
     @app.post("/api/sources/{provider}/preview", status_code=202)
     def source_preview(provider: str, request: Request):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
+
         def operation(job_id: str) -> dict[str, Any]:
             artifact = Path(db_path).with_name(f".eare-preview-{provider}-{job_id}.zip")
             try:
@@ -3015,18 +5190,28 @@ def create_app(db_path: str | None = None):
                 config = _load_web_connector(provider)
                 secrets_config = secret_environment(config)
                 if secrets_config.get("password_file"):
-                    config.setdefault("credentials", {})["password_file"] = secrets_config["password_file"]
+                    config.setdefault("credentials", {})["password_file"] = secrets_config[
+                        "password_file"
+                    ]
                 result = run_exporter(config, artifact)
                 if result.returncode:
                     raise RunnerError(result.stderr.strip() or "Collector failed")
                 update_progress(db_path, job_id, "Analysing collected data")
-                preview = preview_import(db_path, artifact, provider=provider, source_config=config).as_dict()
+                preview = preview_import(
+                    db_path, artifact, provider=provider, source_config=config
+                ).as_dict()
                 with Repository(db_path) as repo:
                     record_audit(repo, request, "source.preview_completed", "provider", provider)
                 return preview
             finally:
                 artifact.unlink(missing_ok=True)
-        return create_job(db_path, "preview", operation, context={"provider": provider, "created_by": principal.username})
+
+        return create_job(
+            db_path,
+            "preview",
+            operation,
+            context={"provider": provider, "created_by": principal.username},
+        )
 
     def _authorized_job(principal: WebPrincipal, job_id: str) -> dict[str, Any]:
         try:
@@ -3035,9 +5220,15 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=404, detail="Job not found") from exc
         if principal.role == "ADMIN":
             return record
-        if principal.role != "OPERATOR" or not record.get("provider") or not record.get("created_by"):
+        if (
+            principal.role != "OPERATOR"
+            or not record.get("provider")
+            or not record.get("created_by")
+        ):
             raise HTTPException(status_code=403, detail="Job access is not authorized")
-        if record["created_by"] != principal.username or not principal.can_access(str(record["provider"])):
+        if record["created_by"] != principal.username or not principal.can_access(
+            str(record["provider"])
+        ):
             raise HTTPException(status_code=403, detail="Job access is not authorized")
         return record
 
@@ -3050,7 +5241,10 @@ def create_app(db_path: str | None = None):
     def job_events(job_id: str, request: Request):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
         _authorized_job(principal, job_id)
-        body = "".join(f"event: {event['event']}\ndata: {json.dumps(event)}\n\n" for event in get_events(db_path, job_id))
+        body = "".join(
+            f"event: {event['event']}\ndata: {json.dumps(event)}\n\n"
+            for event in get_events(db_path, job_id)
+        )
         return StreamingResponse(iter([body]), media_type="text/event-stream")
 
     @app.post("/api/review-items/{review_item_id}/decision")
@@ -3068,19 +5262,34 @@ def create_app(db_path: str | None = None):
             if principal.role in {"ADMIN", "OPERATOR"}:
                 _require_campaign_access(principal, campaign, repo)
             if campaign.status != "open":
-                raise HTTPException(status_code=409, detail="Decisions are only allowed for open campaigns")
-            if principal.role == "GROUP_OWNER" and (item.reviewer is None or item.reviewer.identity != principal.username):
-                raise HTTPException(status_code=403, detail="Review item is not assigned to this user")
+                raise HTTPException(
+                    status_code=409, detail="Decisions are only allowed for open campaigns"
+                )
+            if principal.role == "GROUP_OWNER" and (
+                item.reviewer is None or item.reviewer.identity != principal.username
+            ):
+                raise HTTPException(
+                    status_code=403, detail="Review item is not assigned to this user"
+                )
             value = body.get("value")
             comment = body.get("comment")
             if not isinstance(value, str) or (comment is not None and not isinstance(comment, str)):
-                raise HTTPException(status_code=400, detail="A decision value and optional comment are required")
+                raise HTTPException(
+                    status_code=400, detail="A decision value and optional comment are required"
+                )
             try:
                 result = create_decision(item, value, comment, principal.subject)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             repo.insert_append_only("decisions", result)
-            record_audit(repo, request, "review.decision_recorded", "review_item", item.id, {"decision": result.value})
+            record_audit(
+                repo,
+                request,
+                "review.decision_recorded",
+                "review_item",
+                item.id,
+                {"decision": result.value},
+            )
         return asdict(result)
 
     def _api_page(limit: int, offset: int) -> tuple[int, int]:
@@ -3113,8 +5322,13 @@ def create_app(db_path: str | None = None):
             for provider in (assignment.access_provider, assignment.identity_provider)
             if provider
         }
-        if principal.role != "ADMIN" and not can_access_campaign(principal.role, principal.scopes, providers):
-            raise HTTPException(status_code=403, detail="Golden Source includes providers outside your authorized domains")
+        if principal.role != "ADMIN" and not can_access_campaign(
+            principal.role, principal.scopes, providers
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Golden Source includes providers outside your authorized domains",
+            )
 
     @app.get("/api/v1/me", tags=["External User API"])
     def external_me(principal: WebPrincipal = Depends(current_api_user)):
@@ -3127,7 +5341,12 @@ def create_app(db_path: str | None = None):
         }
 
     @app.get("/api/v1/golden-sources", tags=["External User API"])
-    def external_golden_sources(principal: WebPrincipal = Depends(current_api_user), limit: int = 100, offset: int = 0, search: str | None = None):
+    def external_golden_sources(
+        principal: WebPrincipal = Depends(current_api_user),
+        limit: int = 100,
+        offset: int = 0,
+        search: str | None = None,
+    ):
         if principal.role not in {"ADMIN", "OPERATOR"}:
             raise HTTPException(status_code=403, detail="This role cannot access Golden Sources")
         bounded, start = _api_page(limit, offset)
@@ -3135,25 +5354,53 @@ def create_app(db_path: str | None = None):
             versions = repo.list_payloads("golden_source_versions")
             items = []
             for payload in repo.list_payloads("golden_sources"):
-                source_versions = [hydrate_golden_version(row) for row in versions if str(row.get("golden_source_id")) == str(payload.get("id"))]
+                source_versions = [
+                    hydrate_golden_version(row)
+                    for row in versions
+                    if str(row.get("golden_source_id")) == str(payload.get("id"))
+                ]
                 try:
                     _api_require_golden_access(principal, source_versions)
                 except HTTPException as exc:
                     if exc.status_code == 403:
                         continue
                     raise
-                active = next((row for row in source_versions if row.id == payload.get("active_version_id")), None)
-                items.append({
-                    "id": payload.get("id"),
-                    "name": payload.get("name"),
-                    "display_name": payload.get("display_name"),
-                    "active_version": ({"id": active.id, "version": active.version, "comment": active.comment, "created_at": active.created_at, "assignment_count": len(active.assignments)} if active else None),
-                })
+                active = next(
+                    (row for row in source_versions if row.id == payload.get("active_version_id")),
+                    None,
+                )
+                items.append(
+                    {
+                        "id": payload.get("id"),
+                        "name": payload.get("name"),
+                        "display_name": payload.get("display_name"),
+                        "active_version": (
+                            {
+                                "id": active.id,
+                                "version": active.version,
+                                "comment": active.comment,
+                                "created_at": active.created_at,
+                                "assignment_count": len(active.assignments),
+                            }
+                            if active
+                            else None
+                        ),
+                    }
+                )
         if search:
             needle = search.casefold()
-            items = [row for row in items if needle in f"{row.get('name', '')} {row.get('display_name', '')}".casefold()]
+            items = [
+                row
+                for row in items
+                if needle in f"{row.get('name', '')} {row.get('display_name', '')}".casefold()
+            ]
         items.sort(key=lambda row: str(row.get("name") or "").casefold())
-        return {"items": items[start:start + bounded], "total": len(items), "limit": bounded, "offset": start}
+        return {
+            "items": items[start : start + bounded],
+            "total": len(items),
+            "limit": bounded,
+            "offset": start,
+        }
 
     @app.get("/api/v1/golden-sources/{source_id}", tags=["External User API"])
     def external_golden_source(source_id: str, principal: WebPrincipal = Depends(current_api_user)):
@@ -3163,24 +5410,53 @@ def create_app(db_path: str | None = None):
             active_view = None
             if active is not None:
                 active_view = {
-                    "id": active.id, "version": active.version, "created_at": active.created_at,
-                    "source_type": active.source_type, "comment": active.comment,
+                    "id": active.id,
+                    "version": active.version,
+                    "created_at": active.created_at,
+                    "source_type": active.source_type,
+                    "comment": active.comment,
                     "assignment_count": len(active.assignments),
                 }
             return {"source": asdict(source), "active_version": active_view}
 
     @app.get("/api/v1/golden-sources/{source_id}/versions", tags=["External User API"])
-    def external_golden_versions(source_id: str, principal: WebPrincipal = Depends(current_api_user), limit: int = 100, offset: int = 0):
+    def external_golden_versions(
+        source_id: str,
+        principal: WebPrincipal = Depends(current_api_user),
+        limit: int = 100,
+        offset: int = 0,
+    ):
         bounded, start = _api_page(limit, offset)
         with Repository(db_path) as repo:
             _, versions, _ = _api_golden_context(repo, source_id)
             _api_require_golden_access(principal, versions)
             versions.sort(key=lambda item: item.version, reverse=True)
-            rows = [{"id": item.id, "version": item.version, "created_at": item.created_at, "source_type": item.source_type, "comment": item.comment, "assignment_count": len(item.assignments)} for item in versions]
-        return {"items": rows[start:start + bounded], "total": len(rows), "limit": bounded, "offset": start}
+            rows = [
+                {
+                    "id": item.id,
+                    "version": item.version,
+                    "created_at": item.created_at,
+                    "source_type": item.source_type,
+                    "comment": item.comment,
+                    "assignment_count": len(item.assignments),
+                }
+                for item in versions
+            ]
+        return {
+            "items": rows[start : start + bounded],
+            "total": len(rows),
+            "limit": bounded,
+            "offset": start,
+        }
 
     @app.get("/api/v1/golden-sources/{source_id}/versions/{version_id}", tags=["External User API"])
-    def external_golden_version(source_id: str, version_id: str, principal: WebPrincipal = Depends(current_api_user), limit: int = 100, offset: int = 0):
+    def external_golden_version(
+        source_id: str,
+        version_id: str,
+        principal: WebPrincipal = Depends(current_api_user),
+        limit: int = 100,
+        offset: int = 0,
+    ):
         bounded, start = _api_page(limit, offset)
         with Repository(db_path) as repo:
             _, versions, _ = _api_golden_context(repo, source_id)
@@ -3195,27 +5471,48 @@ def create_app(db_path: str | None = None):
                 row["comment"] = annotation.get("comment") if annotation else None
                 assignments.append(row)
             return {
-                "version": {"id": version.id, "version": version.version, "created_at": version.created_at, "source_type": version.source_type, "comment": version.comment},
-                "assignments": assignments[start:start + bounded],
-                "total_assignments": len(assignments), "limit": bounded, "offset": start,
+                "version": {
+                    "id": version.id,
+                    "version": version.version,
+                    "created_at": version.created_at,
+                    "source_type": version.source_type,
+                    "comment": version.comment,
+                },
+                "assignments": assignments[start : start + bounded],
+                "total_assignments": len(assignments),
+                "limit": bounded,
+                "offset": start,
             }
 
     @app.get("/api/v1/campaigns", tags=["External User API"])
-    def external_campaigns(principal: WebPrincipal = Depends(current_api_user), limit: int = 100, offset: int = 0, search: str | None = None, status: str | None = None):
+    def external_campaigns(
+        principal: WebPrincipal = Depends(current_api_user),
+        limit: int = 100,
+        offset: int = 0,
+        search: str | None = None,
+        status: str | None = None,
+    ):
         _api_require_campaign_role(principal)
         bounded, start = _api_page(limit, offset)
         with Repository(db_path) as repo:
             allowed = _authorized_campaign_ids(principal, repo)
         page_result = projected_rows(
-            db_path, "campaigns", limit=bounded, offset=start,
-            allowed_campaign_ids=allowed, search=search, status=status,
+            db_path,
+            "campaigns",
+            limit=bounded,
+            offset=start,
+            allowed_campaign_ids=allowed,
+            search=search,
+            status=status,
         )
         return page_result
 
     def _external_campaign_view(principal: WebPrincipal, campaign_id: str) -> dict[str, Any]:
         _api_require_campaign_role(principal)
         _require_campaign_id_access(principal, campaign_id)
-        page_result = projected_rows(db_path, "campaigns", limit=1, offset=0, filters={"id": campaign_id})
+        page_result = projected_rows(
+            db_path, "campaigns", limit=1, offset=0, filters={"id": campaign_id}
+        )
         view = next((row for row in page_result["items"] if row.get("id") == campaign_id), None)
         if view is None:
             raise HTTPException(status_code=404, detail="Campaign not found")
@@ -3227,18 +5524,30 @@ def create_app(db_path: str | None = None):
         return {"campaign": campaign_view}
 
     @app.get("/api/v1/campaigns/{campaign_id}/summary", tags=["External User API"])
-    def external_campaign_summary(campaign_id: str, principal: WebPrincipal = Depends(current_api_user)):
+    def external_campaign_summary(
+        campaign_id: str, principal: WebPrincipal = Depends(current_api_user)
+    ):
         campaign_view = _external_campaign_view(principal, campaign_id)
         reviews = projected_rows(db_path, "review_items", limit=1, offset=0, campaign=campaign_id)
         return {
             "campaign_id": campaign_id,
             "summary": reviews.get("summary", review_summary([])),
-            "reviewer_resolution": campaign_view.get("reviewer_resolution", {"resolved": 0, "unresolved": 0}),
-            "campaign": {key: campaign_view.get(key) for key in ("name", "status", "due_at", "opened_at", "closed_at")},
+            "reviewer_resolution": campaign_view.get(
+                "reviewer_resolution", {"resolved": 0, "unresolved": 0}
+            ),
+            "campaign": {
+                key: campaign_view.get(key)
+                for key in ("name", "status", "due_at", "opened_at", "closed_at")
+            },
         }
 
     @app.get("/api/v1/campaigns/{campaign_id}/review-items", tags=["External User API"])
-    def external_campaign_review_items(campaign_id: str, principal: WebPrincipal = Depends(current_api_user), limit: int = 100, offset: int = 0):
+    def external_campaign_review_items(
+        campaign_id: str,
+        principal: WebPrincipal = Depends(current_api_user),
+        limit: int = 100,
+        offset: int = 0,
+    ):
         if principal.role == "BUSINESS_ADMIN":
             raise HTTPException(status_code=403, detail="This role cannot access campaign reviews")
         if principal.role == "OPERATOR":
@@ -3247,7 +5556,8 @@ def create_app(db_path: str | None = None):
             with Repository(db_path) as repo:
                 if not any(
                     str(row.get("campaign_id")) == campaign_id
-                    and str((row.get("reviewer") or {}).get("identity", "")).casefold() == principal.username.casefold()
+                    and str((row.get("reviewer") or {}).get("identity", "")).casefold()
+                    == principal.username.casefold()
                     for row in repo.list_payloads("review_items")
                 ):
                     raise HTTPException(status_code=404, detail="Review items not found")
@@ -3255,13 +5565,19 @@ def create_app(db_path: str | None = None):
             raise HTTPException(status_code=403, detail="This role cannot access campaign reviews")
         bounded, start = _api_page(limit, offset)
         result = projected_rows(
-            db_path, "review_items", limit=bounded, offset=start, campaign=campaign_id,
+            db_path,
+            "review_items",
+            limit=bounded,
+            offset=start,
+            campaign=campaign_id,
             reviewer_username=principal.username if principal.role == "GROUP_OWNER" else None,
         )
         return result
 
     @app.get("/api/v1/review-items/{review_item_id}", tags=["External User API"])
-    def external_review_item(review_item_id: str, principal: WebPrincipal = Depends(current_api_user)):
+    def external_review_item(
+        review_item_id: str, principal: WebPrincipal = Depends(current_api_user)
+    ):
         if principal.role == "BUSINESS_ADMIN":
             raise HTTPException(status_code=403, detail="This role cannot access review items")
         with Repository(db_path) as repo:
@@ -3271,16 +5587,22 @@ def create_app(db_path: str | None = None):
             if principal.role == "GROUP_OWNER":
                 reviewer = (payload.get("reviewer") or {}).get("identity")
                 if str(reviewer or "").casefold() != principal.username.casefold():
-                    raise HTTPException(status_code=403, detail="Review item is not assigned to this user")
+                    raise HTTPException(
+                        status_code=403, detail="Review item is not assigned to this user"
+                    )
             elif principal.role == "OPERATOR":
-                campaign_payload = repo.get_payload("campaigns", str(payload.get("campaign_id") or ""))
+                campaign_payload = repo.get_payload(
+                    "campaigns", str(payload.get("campaign_id") or "")
+                )
                 if campaign_payload is None:
                     raise HTTPException(status_code=409, detail="Review item campaign is missing")
                 _require_campaign_access(principal, hydrate_campaign(campaign_payload), repo)
             elif principal.role != "ADMIN":
                 raise HTTPException(status_code=403, detail="This role cannot access review items")
             latest = _latest_decisions(repo.list_payloads("decisions"))
-            view = review_item_view(repo, payload, latest_decisions=latest, names=_display_names(repo))
+            view = review_item_view(
+                repo, payload, latest_decisions=latest, names=_display_names(repo)
+            )
             _add_review_provenance(repo, [view])
             return view
 
@@ -3318,7 +5640,12 @@ def create_app(db_path: str | None = None):
                 break
         components["schemas"] = {name: schemas[name] for name in referenced if name in schemas}
         schema["components"] = components
-        schema["tags"] = [{"name": "External User API", "description": "Read-only user API authenticated with an EARE API key."}]
+        schema["tags"] = [
+            {
+                "name": "External User API",
+                "description": "Read-only user API authenticated with an EARE API key.",
+            }
+        ]
         return schema
 
     @app.get("/swagger", include_in_schema=False, response_class=HTMLResponse)

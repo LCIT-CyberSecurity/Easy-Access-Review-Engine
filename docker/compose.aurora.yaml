@@ -23,6 +23,7 @@ services:
       EARE_DB_PATH: /data/access-review.db
       EARE_ADMIN_USERNAME: ${EARE_ADMIN_USERNAME:-admin}
       EARE_ADMIN_PASSWORD: ${EARE_ADMIN_PASSWORD:-SecretPassword}
+      EARE_KEYCLOAK_CLIENT_SECRET: ${EARE_KEYCLOAK_CLIENT_SECRET:-}
     volumes:
       - eare-aurora-data:/data
     expose:
@@ -45,7 +46,7 @@ services:
       eare-api:
         condition: service_healthy
     ports:
-      - "127.0.0.1:4175:80"
+      - "192.168.1.5:4175:80"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
       interval: 10s

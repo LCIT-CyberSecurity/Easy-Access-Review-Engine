@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import yaml
 
 import pytest
-from access_review_engine.application import import_file_to_repository
+from access_review_engine.application import import_file_to_repository, persist_import_result
+from access_review_engine.domain import PermissionCapabilityMapping, Provenance
 from access_review_engine.importers.keycloak import import_keycloak_zip
-from access_review_engine.services import calculate_effective_accesses
-from access_review_engine.storage import Repository
+from access_review_engine.services import (
+    calculate_effective_accesses,
+    create_golden_source,
+    promote_snapshot,
+)
+from access_review_engine.storage import Repository, hydrate_functional_model, hydrate_snapshot
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "keycloak"
 
@@ -101,6 +107,20 @@ def test_keycloak_v0_normalizes_objects_and_preserves_native_ids(tmp_path: Path)
         )
         == 2
     )
+    crm_admin = next(
+        item
+        for item in result.accesses
+        if item.control_object and item.control_object.native_id == "cr-crm-admin"
+    )
+    assert crm_admin.target is not None
+    assert crm_admin.target.component == {
+        "identifier": "c-crm",
+        "display_name": "CRM",
+    }
+    assert crm_admin.target.resource == {
+        "identifier": "cr-crm-admin",
+        "display_name": "admin",
+    }
 
 
 def test_keycloak_v0_effective_access_keeps_direct_and_inherited_paths(tmp_path: Path) -> None:
@@ -245,8 +265,267 @@ def test_service_account_can_be_standalone_and_client_target_is_human_readable(
     crm_admin = next(
         item for item in result.accesses if item.name == "client:c-crm:role:cr-crm-admin"
     )
-    assert crm_admin.target.component == {"identifier": "c-crm"}
+    assert crm_admin.target.component == {
+        "identifier": "c-crm",
+        "display_name": "CRM",
+    }
     assert crm_admin.control_object.metadata["client_display_name"] == "CRM"
+
+
+def _v2_artifact(tmp_path: Path) -> Path:
+    output = _artifact(tmp_path)
+    v2 = tmp_path / "keycloak-v2.zip"
+    authz = {
+        "authorization-resource-servers.jsonl": [
+            {
+                "id": "c-erp",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "policyEnforcementMode": "ENFORCING",
+                "decisionStrategy": "UNANIMOUS",
+            }
+        ],
+        "authorization-resources.jsonl": [
+            {
+                "id": "resource-invoices",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "Invoices",
+            },
+            {
+                "id": "resource-contacts",
+                "client_uuid": "c-crm",
+                "clientId": "crm",
+                "name": "Invoices",
+            },
+        ],
+        "authorization-scopes.jsonl": [
+            {"id": "scope-read", "client_uuid": "c-erp", "clientId": "erp", "name": "read"},
+            {
+                "id": "scope-download",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "download-report",
+            },
+            {"id": "scope-crm-read", "client_uuid": "c-crm", "clientId": "crm", "name": "read"},
+        ],
+        "authorization-policies.jsonl": [
+            {
+                "id": "policy-erp-read",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "ERP Reader",
+                "type": "role",
+                "logic": "POSITIVE",
+                "config": {"roles": [{"id": "cr-erp-read"}]},
+            },
+            {
+                "id": "policy-erp-complex",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "ERP Dynamic",
+                "type": "aggregate",
+                "decisionStrategy": "UNANIMOUS",
+                "policies": ["policy-erp-read"],
+            },
+            {
+                "id": "policy-crm-admin",
+                "client_uuid": "c-crm",
+                "clientId": "crm",
+                "name": "CRM Admin",
+                "type": "role",
+                "logic": "POSITIVE",
+                "config": {"roles": [{"id": "cr-crm-admin"}]},
+            },
+        ],
+        "authorization-permissions.jsonl": [
+            {
+                "id": "permission-erp-read",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "Invoices read",
+                "resourceIds": ["resource-invoices"],
+                "scopes": ["scope-read"],
+                "policies": ["policy-erp-read"],
+            },
+            {
+                "id": "permission-erp-complex",
+                "client_uuid": "c-erp",
+                "clientId": "erp",
+                "name": "Invoices dynamic",
+                "resourceIds": ["resource-invoices"],
+                "scopes": ["scope-download"],
+                "policies": ["policy-erp-complex"],
+            },
+            {
+                "id": "permission-crm-read",
+                "client_uuid": "c-crm",
+                "clientId": "crm",
+                "name": "CRM invoices read",
+                "resourceIds": ["resource-contacts"],
+                "scopes": ["scope-crm-read"],
+                "policies": ["policy-crm-admin"],
+            },
+        ],
+    }
+    with ZipFile(output) as source, ZipFile(v2, "w", ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            target.writestr(info.filename, source.read(info.filename))
+        for filename, rows in authz.items():
+            target.writestr(filename, "".join(json.dumps(row) + "\n" for row in rows))
+    return v2
+
+
+def test_keycloak_v2_authz_derives_only_safe_functional_rights(tmp_path: Path) -> None:
+    result = import_keycloak_zip(_v2_artifact(tmp_path))
+
+    assert result.functional_access_models is not None
+    model = next(
+        item
+        for item in result.functional_access_models
+        if item.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert model.completeness == "partial"
+    assert len(model.rights) == 1
+    assert model.rights[0].capability_id == "read"
+    assert model.rights[0].target.resource["identifier"] == "resource-invoices"
+    assert model.rights[0].native_permission == "keycloak:production:c-erp:scope:scope-read"
+    assert model.rights[0].provenance == "mapped"
+    lineage = model.rights[0].target.resource["metadata"]["keycloak_authorization"]
+    assert lineage["permission_id"] == "permission-erp-read"
+    assert lineage["policy_id"] == "policy-erp-read"
+    assert lineage["scope_name"] == "read"
+    assert not any(
+        item.native_permission.endswith(":scope:scope-download") for item in model.rights
+    )
+    assert any(item.label == "download-report" for item in result.capabilities)
+    assert any(
+        item.permission_identifier == "keycloak:production:c-erp:scope:scope-download"
+        for item in result.permission_capability_mappings
+    )
+
+    crm_model = next(
+        item
+        for item in result.functional_access_models
+        if item.access_name == "client:c-crm:role:cr-crm-admin"
+    )
+    assert crm_model.completeness == "complete"
+    assert crm_model.rights[0].target.resource["display_name"] == "Invoices"
+    assert crm_model.rights[0].target.resource["identifier"] == "resource-contacts"
+    assert crm_model.rights[0].target.component["identifier"] == "c-crm"
+    assert model.rights[0].target.resource["identifier"] == "resource-invoices"
+    assert model.rights[0].target.component["identifier"] == "c-erp"
+
+
+def test_keycloak_v1_artifact_without_authz_remains_unchanged(tmp_path: Path) -> None:
+    result = import_keycloak_zip(_artifact(tmp_path))
+    assert result.batch.completeness == "full"
+    assert result.functional_access_models == []
+
+
+def test_authz_models_survive_snapshot_and_initialize_golden_v2(tmp_path: Path) -> None:
+    database = tmp_path / "models.db"
+    with Repository(database) as repo:
+        snapshot = import_file_to_repository(repo, _v2_artifact(tmp_path))
+    with Repository(database) as repo:
+        rows = repo.load_snapshot_functional_models(snapshot.id)
+        models = [hydrate_functional_model(row) for row in rows]
+        assert any(item.label == "download-report" for item in repo.list_capabilities())
+        assert any(
+            item.permission_identifier == "keycloak:production:c-erp:scope:scope-download"
+            for item in repo.list_permission_capability_mappings()
+        )
+        imported = repo.list_payloads_by_provider("imports", "keycloak-v0")[-1]
+        evidence = imported["scope"]["authorization_evidence"]
+        assert evidence["authorization-policies.jsonl"]
+        assert evidence["authorization-permissions.jsonl"]
+        assert any(model.rights for model in models)
+        frozen = promote_snapshot(
+            create_golden_source("baseline"),
+            hydrate_snapshot(repo.get_payload("snapshots", snapshot.id)),
+            observed_functional_models=models,
+        )
+        assert frozen.schema_version == 2
+        assert frozen.expected_access_definitions
+        assert frozen.expected_access_relations
+        assert frozen.functional_access_models == models
+        assert (
+            next(model for model in models if model.access_name.endswith("cr-erp-read"))
+            .rights[0]
+            .target.resource["display_name"]
+            == "Invoices"
+        )
+
+
+def test_scoped_authz_import_keeps_previous_observed_rights(tmp_path: Path) -> None:
+    database = tmp_path / "partial.db"
+    with Repository(database) as repo:
+        first = import_file_to_repository(repo, _v2_artifact(tmp_path))
+    partial = _custom_artifact(tmp_path, manifest_changes={"completeness": "scoped"})
+    with Repository(database) as repo:
+        second = import_file_to_repository(repo, partial)
+    with Repository(database) as repo:
+        old = repo.load_snapshot_functional_models(first.id)
+        retained = repo.load_snapshot_functional_models(second.id)
+    assert old
+    assert {row["access_name"]: row["rights"] for row in retained} == {
+        row["access_name"]: row["rights"] for row in old
+    }
+    assert all(row["authoritative"] is False for row in retained)
+    assert all(row["completeness"] == "partial" for row in retained)
+
+
+def test_scoped_authz_subset_does_not_remove_previous_rights(tmp_path: Path) -> None:
+    artifact = _v2_artifact(tmp_path)
+    with Repository(tmp_path / "subset.db") as repo:
+        full = import_keycloak_zip(artifact)
+        model = full.functional_access_models[0]
+        access_name = model.access_name
+        full.functional_access_models = [
+            replace(
+                model, rights=(*model.rights, replace(model.rights[0], capability_id="approve"))
+            )
+        ]
+        first = persist_import_result(repo, full)
+        partial = import_keycloak_zip(artifact)
+        partial.batch.scope["completeness"] = "scoped"
+        partial.batch.completeness = "scoped"
+        second = persist_import_result(repo, partial)
+        first_model = next(
+            row
+            for row in repo.load_snapshot_functional_models(first.id)
+            if row["access_name"] == access_name
+        )
+        second_model = next(
+            row
+            for row in repo.load_snapshot_functional_models(second.id)
+            if row["access_name"] == access_name
+        )
+        assert len(first_model["rights"]) == 2
+        assert len(second_model["rights"]) == 2
+
+
+def test_source_mapping_does_not_overwrite_existing_manual_mapping(tmp_path: Path) -> None:
+    native_permission = "keycloak:production:c-erp:scope:scope-read"
+    database = tmp_path / "manual-mapping.db"
+    with Repository(database) as repo:
+        repo.save_permission_capability_mapping(
+            PermissionCapabilityMapping(
+                "keycloak-v0",
+                native_permission,
+                ("approve",),
+                Provenance.MANUAL,
+            )
+        )
+        import_file_to_repository(repo, _v2_artifact(tmp_path))
+        mapping = next(
+            item
+            for item in repo.list_permission_capability_mappings()
+            if item.permission_identifier == native_permission
+        )
+
+    assert mapping.capability_ids == ("approve",)
+    assert mapping.provenance == "manual"
 
 
 def _rows(filename: str) -> list[dict]:
@@ -354,15 +633,11 @@ def test_keycloak_artifact_persists_and_scoped_replay_does_not_delete(tmp_path: 
             tmp_path,
             row_changes={
                 "users.jsonl": [
-                    {**row, "username": "alice.renamed"}
-                    if row["id"] == "u-alice"
-                    else row
+                    {**row, "username": "alice.renamed"} if row["id"] == "u-alice" else row
                     for row in _rows("users.jsonl")
                 ],
                 "groups.jsonl": [
-                    {**row, "name": "Finance Corporate"}
-                    if row["id"] == "g-finance"
-                    else row
+                    {**row, "name": "Finance Corporate"} if row["id"] == "g-finance" else row
                     for row in _rows("groups.jsonl")
                 ],
             },

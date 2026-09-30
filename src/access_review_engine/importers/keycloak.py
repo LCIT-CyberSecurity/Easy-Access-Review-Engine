@@ -16,13 +16,18 @@ from zipfile import BadZipFile, ZipFile
 import yaml
 
 from access_review_engine.domain import (
+    SYSTEM_CAPABILITIES,
     Access,
     AccessAssignment,
     AccessRelation,
     AccessRelationType,
     AssignmentType,
+    Capability,
     Completeness,
     ControlObject,
+    ExpectedAccessModel,
+    FunctionalModelCompleteness,
+    FunctionalRight,
     Identity,
     IdentityStatus,
     IdentityType,
@@ -30,6 +35,8 @@ from access_review_engine.domain import (
     ImportStatus,
     Origin,
     Permission,
+    PermissionCapabilityMapping,
+    Provenance,
     Provider,
     Target,
     now_utc,
@@ -48,6 +55,11 @@ FILES = {
     "group-role-mappings.jsonl",
     "composite-role-relations.jsonl",
     "service-accounts.jsonl",
+    "authorization-resource-servers.jsonl",
+    "authorization-resources.jsonl",
+    "authorization-scopes.jsonl",
+    "authorization-policies.jsonl",
+    "authorization-permissions.jsonl",
     "collection-errors.json",
 }
 
@@ -65,6 +77,13 @@ _SURFACE_FILES = {
 }
 
 KEYCLOAK_V1_REQUIRED_SURFACES = frozenset(_SURFACE_FILES)
+KEYCLOAK_AUTHZ_FILES = {
+    "authorization-resource-servers.jsonl": "authorization_resource_servers",
+    "authorization-resources.jsonl": "authorization_resources",
+    "authorization-scopes.jsonl": "authorization_scopes",
+    "authorization-policies.jsonl": "authorization_policies",
+    "authorization-permissions.jsonl": "authorization_permissions",
+}
 SUPPORTED_COMPLETENESS = frozenset({"full", "scoped", "unknown"})
 MAX_ARCHIVE_BYTES = 500_000_000
 MAX_ARCHIVE_FILES = 32
@@ -222,6 +241,23 @@ def _read_artifact(path: str | Path) -> tuple[dict[str, Any], dict[str, list[dic
                 raise ValueError("FULL Keycloak artifact must define counts for every surface")
             if completeness == "full" and set(counts) != KEYCLOAK_V1_REQUIRED_SURFACES:
                 raise ValueError("FULL Keycloak artifact has incomplete counts")
+            authz_counts = manifest.get("authorization_counts", {})
+            if authz_counts is not None and not isinstance(authz_counts, dict):
+                raise ValueError("Manifest authorization_counts must be an object")
+            if isinstance(authz_counts, dict):
+                for filename, surface in KEYCLOAK_AUTHZ_FILES.items():
+                    if surface in authz_counts and int(authz_counts[surface]) != len(
+                        records[filename]
+                    ):
+                        raise ValueError(f"Authorization count mismatch for {surface}")
+            authz_status = manifest.get("authorization_services", {})
+            if authz_status is not None:
+                if not isinstance(authz_status, dict) or any(
+                    not isinstance(value, dict)
+                    or value.get("status") not in {"not_enabled", "collected", "error"}
+                    for value in authz_status.values()
+                ):
+                    raise ValueError("Manifest authorization_services has invalid status data")
             declared_errors = manifest.get("collection_errors")
             errors = records["collection-errors.json"]
             if errors and declared_errors is None:
@@ -253,6 +289,273 @@ def _unique_rows(rows: list[dict[str, Any]], filename: str) -> list[dict[str, An
             raise ValueError(f"{filename} contains conflicting duplicate id {identifier}")
         result[identifier] = row
     return list(result.values())
+
+
+def _authorization_refs(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    refs: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            refs.append(item.strip())
+        elif isinstance(item, dict):
+            reference = _text(item, "id", "name")
+            if reference:
+                refs.append(reference)
+    return refs
+
+
+def _role_policy_role(policy: dict[str, Any]) -> str | None:
+    if _text(policy, "type", "policyType").casefold() != "role":
+        return None
+    if _text(policy, "logic").casefold() not in {"", "positive"}:
+        return None
+    config = policy.get("config")
+    if isinstance(config, str):
+        try:
+            config = json.loads(config)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(config, dict):
+        return None
+    roles = config.get("roles")
+    if isinstance(roles, str):
+        try:
+            roles = json.loads(roles)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(roles, list) or len(roles) != 1:
+        return None
+    role = roles[0]
+    if isinstance(role, dict):
+        return _text(role, "id", "roleId", "name") or None
+    return str(role).strip() or None
+
+
+def _authorization_models(
+    records: dict[str, list[dict[str, Any]]],
+    clients_by_id: dict[str, dict[str, Any]],
+    role_access: dict[tuple[str, str, str], str],
+    provider_name: str,
+    realm: str,
+) -> tuple[
+    list[ExpectedAccessModel],
+    list[Capability],
+    list[PermissionCapabilityMapping],
+]:
+    resources = {
+        (_text(row, "client_uuid", "clientId"), _text(row, "id", "_id")): row
+        for row in records["authorization-resources.jsonl"]
+        if _text(row, "id", "_id")
+    }
+    scopes = {
+        (_text(row, "client_uuid", "clientId"), _text(row, "id")): row
+        for row in records["authorization-scopes.jsonl"]
+        if _text(row, "id")
+    }
+    policies = {
+        (_text(row, "client_uuid", "clientId"), _text(row, "id")): row
+        for row in records["authorization-policies.jsonl"]
+        if _text(row, "id")
+    }
+    system_capabilities = {item.id: item for item in SYSTEM_CAPABILITIES}
+    capabilities: dict[str, Capability] = {}
+    mappings: dict[tuple[str, str], PermissionCapabilityMapping] = {}
+    scope_capabilities: dict[tuple[str, str], tuple[str, str]] = {}
+    for (client_uuid, scope_id), scope in scopes.items():
+        scope_name = _text(scope, "name") or scope_id
+        native_permission = f"keycloak:{realm}:{client_uuid}:scope:{scope_id}"
+        if scope_name in system_capabilities:
+            capability_id = scope_name
+        else:
+            digest = sha256(f"{realm}:{client_uuid}:{scope_id}".encode()).hexdigest()[:20]
+            capability_id = f"keycloak_scope_{digest}"
+            capabilities[capability_id] = Capability(
+                capability_id,
+                scope_name,
+                f"Native Keycloak Authorization Scope {scope_name!r}.",
+            )
+        scope_capabilities[(client_uuid, scope_id)] = (capability_id, native_permission)
+        mappings[(provider_name, native_permission)] = PermissionCapabilityMapping(
+            provider_name,
+            native_permission,
+            (capability_id,),
+            Provenance.MAPPED,
+        )
+    rights_by_access: dict[str, list[FunctionalRight]] = {}
+    state_by_access: dict[str, dict[str, bool]] = {}
+
+    def related_roles(
+        client_uuid: str,
+        policy_id: str,
+        visited: set[str] | None = None,
+    ) -> set[str]:
+        """Find role dependencies for completeness only; complex policies never grant rights."""
+        seen = visited or set()
+        if policy_id in seen or len(seen) >= 8:
+            return set()
+        seen = seen | {policy_id}
+        policy = policies.get((client_uuid, policy_id), {})
+        direct = _role_policy_role(policy)
+        if direct:
+            return {direct}
+        config = policy.get("config", {})
+        if isinstance(config, str):
+            try:
+                config = json.loads(config)
+            except json.JSONDecodeError:
+                return set()
+        if not isinstance(config, dict):
+            return set()
+        references = _authorization_refs(policy.get("policies")) or _authorization_refs(
+            config.get("policies")
+        )
+        return set().union(*(related_roles(client_uuid, ref, seen) for ref in references))
+
+    for permission in records["authorization-permissions.jsonl"]:
+        client_uuid = _text(permission, "client_uuid", "clientId")
+        client = clients_by_id.get(client_uuid, {})
+        policies_for_permission = _authorization_refs(
+            permission.get("policies", permission.get("policyIds"))
+        )
+        resource_refs = _authorization_refs(
+            permission.get("resources", permission.get("resourceIds"))
+        )
+        scope_refs = _authorization_refs(permission.get("scopes", permission.get("scopeIds")))
+        policy = (
+            policies.get((client_uuid, policies_for_permission[0]))
+            if len(policies_for_permission) == 1
+            else None
+        )
+        role_ref = _role_policy_role(policy or {}) if policy else None
+        if role_ref is None:
+            for policy_id in policies_for_permission:
+                for related_role in related_roles(client_uuid, policy_id):
+                    for key, name in role_access.items():
+                        if key[1] == related_role and key[2] in {"", client_uuid}:
+                            state = state_by_access.setdefault(
+                                name, {"complex": False, "seen": False}
+                            )
+                            state["complex"] = True
+            continue
+        role_key = next(
+            (key for key in role_access if key[1] == role_ref and key[2] in {"", client_uuid}),
+            None,
+        )
+        if role_key is None and role_ref:
+            role_key = next(
+                (key for key in role_access if key[2] == client_uuid and key[1] == role_ref),
+                None,
+            )
+        if role_key is None:
+            continue
+        access_name = role_access[role_key]
+        state = state_by_access.setdefault(access_name, {"complex": False, "seen": False})
+        state["seen"] = True
+        if not resource_refs or not scope_refs:
+            state["complex"] = True
+            continue
+        for resource_ref in resource_refs:
+            resource = resources.get((client_uuid, resource_ref))
+            if resource is None:
+                state["complex"] = True
+                continue
+            for scope_ref in scope_refs:
+                scope = scopes.get((client_uuid, scope_ref))
+                capability_mapping = scope_capabilities.get((client_uuid, scope_ref))
+                if scope is None or capability_mapping is None:
+                    state["complex"] = True
+                    continue
+                capability_id, native_permission = capability_mapping
+                policy_id = policies_for_permission[0]
+                authorization_metadata = {
+                    "realm": realm,
+                    "client_uuid": client_uuid,
+                    "client_id": _text(permission, "clientId") or _text(client, "clientId"),
+                    "resource_id": resource_ref,
+                    "resource_name": _text(resource, "name", "displayName") or resource_ref,
+                    "scope_id": scope_ref,
+                    "scope_name": _text(scope, "name") or scope_ref,
+                    "permission_id": _text(permission, "id"),
+                    "permission_name": _text(permission, "name"),
+                    "permission_type": _text(permission, "type"),
+                    "permission_decision_strategy": _text(
+                        permission, "decisionStrategy", "decision_strategy"
+                    ),
+                    "policy_id": policy_id,
+                    "policy_name": _text(policy or {}, "name"),
+                    "policy_type": _text(policy or {}, "type", "policyType"),
+                    "policy_logic": _text(policy or {}, "logic"),
+                    "policy_decision_strategy": _text(
+                        policy or {}, "decisionStrategy", "decision_strategy"
+                    ),
+                }
+                target = Target(
+                    service={
+                        "identifier": "Keycloak",
+                        "realm": realm,
+                        "metadata": {"source": "keycloak_authorization_services"},
+                    },
+                    component={
+                        "identifier": client_uuid,
+                        "display_name": _text(client, "name", "clientId") or client_uuid,
+                        "metadata": {
+                            "realm": realm,
+                            "client_uuid": client_uuid,
+                            "client_id": _text(permission, "clientId") or _text(client, "clientId"),
+                        },
+                    },
+                    resource={
+                        "identifier": resource_ref,
+                        "display_name": _text(resource, "name", "displayName") or resource_ref,
+                        "metadata": {"keycloak_authorization": authorization_metadata},
+                    },
+                )
+                rights_by_access.setdefault(access_name, []).append(
+                    FunctionalRight(
+                        target=target,
+                        capability_id=capability_id,
+                        provenance=Provenance.MAPPED,
+                        native_permission=native_permission,
+                    )
+                )
+    models: list[ExpectedAccessModel] = []
+    for access_name, state in state_by_access.items():
+        rights = tuple(rights_by_access.get(access_name, ()))
+        if not rights:
+            completeness = FunctionalModelCompleteness.NOT_DEFINED
+        elif state["complex"]:
+            completeness = FunctionalModelCompleteness.PARTIAL
+        else:
+            completeness = FunctionalModelCompleteness.COMPLETE
+        models.append(ExpectedAccessModel(provider_name, access_name, completeness, rights))
+    return models, list(capabilities.values()), list(mappings.values())
+
+
+def _complex_authorization_permissions(
+    records: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, str]]:
+    policies = {
+        (_text(row, "client_uuid", "clientId"), _text(row, "id")): row
+        for row in records["authorization-policies.jsonl"]
+        if _text(row, "id")
+    }
+    result = []
+    for permission in records["authorization-permissions.jsonl"]:
+        client_uuid = _text(permission, "client_uuid", "clientId")
+        policy_refs = _authorization_refs(permission.get("policies", permission.get("policyIds")))
+        policy = policies.get((client_uuid, policy_refs[0])) if len(policy_refs) == 1 else None
+        if policy is not None and _role_policy_role(policy) is not None:
+            continue
+        result.append(
+            {
+                "client_uuid": client_uuid,
+                "client_id": _text(permission, "clientId"),
+                "permission_id": _text(permission, "id"),
+                "name": _text(permission, "name"),
+            }
+        )
+    return result
 
 
 def import_keycloak_zip(path: str | Path) -> ImportResult:
@@ -354,6 +657,7 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
         client_id: str | None = None,
         client: dict[str, Any] | None = None,
         resource_identifier: str | None = None,
+        description: str | None = None,
     ) -> None:
         if name in access_by_key:
             return
@@ -382,13 +686,18 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
                 component=(
                     {
                         "identifier": client_id,
+                        "display_name": _text(client or {}, "name", "clientId") or client_id,
                     }
                     if client_id
-                    else {"identifier": "realm"}
+                    else {"identifier": "realm", "display_name": realm}
                 ),
-                resource={"identifier": resource_identifier or native_id},
+                resource={
+                    "identifier": resource_identifier or native_id,
+                    "display_name": display_name,
+                },
             ),
             display_name=display_name,
+            description=description,
         )
         accesses.append(access_by_key[name])
 
@@ -399,6 +708,7 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
             group_id,
             "keycloak_group",
             _text(row, "name") or group_id,
+            description=_text(row, "description") or None,
         )
     role_access: dict[tuple[str, str, str], str] = {}
     for row in realm_roles + client_roles:
@@ -424,6 +734,7 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
             label,
             client_id or None,
             clients_by_id.get(client_id) if client_id else None,
+            description=_text(row, "description") or None,
         )
         role_access[(kind, role_id, client_id)] = name
 
@@ -562,6 +873,14 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
             )
         )
 
+    functional_models, capabilities, permission_capability_mappings = _authorization_models(
+        records,
+        clients_by_id,
+        role_access,
+        provider_name,
+        realm,
+    )
+
     if unresolved and is_full:
         raise ValueError(
             f"Keycloak artifact contains unresolved structural references: {len(unresolved)}"
@@ -578,6 +897,11 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
         }
     )
     scope["completeness"] = completeness
+    scope["authorization_services"] = manifest.get("authorization_services", {})
+    scope["authorization_evidence"] = {
+        filename: records[filename] for filename in KEYCLOAK_AUTHZ_FILES if records[filename]
+    }
+    scope["authorization_complex_permissions"] = _complex_authorization_permissions(records)
     if errors:
         scope["collection_errors"] = errors
     if unresolved:
@@ -592,4 +916,14 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
         stable_checksum({"manifest": checksum_manifest, "records": records}),
         completed_at=now_utc(),
     )
-    return ImportResult(batch, provider, identities, accesses, assignments, relations)
+    return ImportResult(
+        batch,
+        provider,
+        identities,
+        accesses,
+        assignments,
+        relations,
+        functional_access_models=functional_models,
+        capabilities=capabilities,
+        permission_capability_mappings=permission_capability_mappings,
+    )

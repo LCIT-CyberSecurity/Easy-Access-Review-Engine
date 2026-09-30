@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import Iterable
 
 from access_review_engine.domain import (
     Access,
@@ -25,7 +25,6 @@ from access_review_engine.domain import (
     Finding,
     FunctionalComparisonState,
     FunctionalModelCompleteness,
-    PermissionCapabilityMapping,
     FunctionalRight,
     GoldenAccessComment,
     GoldenSource,
@@ -36,7 +35,9 @@ from access_review_engine.domain import (
     IdentityType,
     JsonDict,
     ObjectRef,
+    Origin,
     OwnerRef,
+    PermissionCapabilityMapping,
     RemediationAction,
     RemediationActionType,
     ReviewItem,
@@ -260,7 +261,12 @@ def compare_functional_access_models(
             if right_ref in expected_rights and right_ref in observed_rights:
                 state = FunctionalComparisonState.EXPECTED_AND_OBSERVED
             elif right_ref in expected_rights:
-                state = FunctionalComparisonState.MISSING
+                state = (
+                    FunctionalComparisonState.MISSING
+                    if observed_model is not None
+                    and observed_model.completeness == FunctionalModelCompleteness.COMPLETE
+                    else FunctionalComparisonState.UNKNOWN_NOT_ASSERTED
+                )
             elif completeness == FunctionalModelCompleteness.COMPLETE:
                 state = FunctionalComparisonState.UNEXPECTED
             else:
@@ -291,6 +297,7 @@ def map_native_permission(
         for capability_id in mapping.capability_ids
     }
     return tuple(sorted(capability_ids))
+
 
 def _add_effective_access(
     results: dict[tuple[str, str, str, str], EffectiveAccess],
@@ -332,7 +339,9 @@ def _relation_diagnostic(kind: str, relation: AccessRelation) -> JsonDict:
     }
 
 
-def validate_owner(owner: OwnerRef | None, subject: Identity, identities: dict[tuple[str, str], Identity]) -> bool:
+def validate_owner(
+    owner: OwnerRef | None, subject: Identity, identities: dict[tuple[str, str], Identity]
+) -> bool:
     if owner is None:
         return False
     if (owner.provider, owner.identity) == identity_key(subject):
@@ -355,7 +364,11 @@ def owner_findings(identity: Identity, identities: dict[tuple[str, str], Identit
         findings.append(Finding.ACCOUNT_EXPIRED)
     if identity.account_owner and not validate_owner(identity.account_owner, identity, identities):
         findings.append(Finding.INVALID_OWNER)
-    if identity.type == IdentityType.TECHNICAL_ACCOUNT and not identity.built_in and not identity.account_owner:
+    if (
+        identity.type == IdentityType.TECHNICAL_ACCOUNT
+        and not identity.built_in
+        and not identity.account_owner
+    ):
         findings.append(Finding.TECHNICAL_ACCOUNT_WITHOUT_OWNER)
     if identity.type == IdentityType.SHARED_ACCOUNT and not identity.account_owner:
         findings.append(Finding.SHARED_ACCOUNT_WITHOUT_OWNER)
@@ -372,7 +385,11 @@ def _is_past_datetime(value: object) -> bool:
     text = str(value).strip()
     for fmt in (None, "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%m/%d/%Y %I:%M:%S %p"):
         try:
-            dt = datetime.fromisoformat(text.replace("Z", "+00:00")) if fmt is None else datetime.strptime(text, fmt)
+            dt = (
+                datetime.fromisoformat(text.replace("Z", "+00:00"))
+                if fmt is None
+                else datetime.strptime(text, fmt)
+            )
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=UTC)
             return dt < datetime.now(UTC)
@@ -446,13 +463,58 @@ def compare_snapshot(
 ) -> list[dict[str, object]]:
     identities = {identity_key(identity): identity for identity in snapshot.identities}
     accesses = {access_key(access): access for access in snapshot.accesses}
-    observed_assignments = {assignment.comparison_key(): assignment for assignment in snapshot.access_assignments}
+    observed_assignment_list = list(snapshot.access_assignments)
+    direct_keys = {assignment.comparison_key() for assignment in observed_assignment_list}
+    assignments_by_id = {assignment.id: assignment for assignment in observed_assignment_list}
+    relation_by_id = {relation.id: relation for relation in snapshot.access_relations}
+    effective = calculate_effective_accesses(
+        snapshot.access_assignments,
+        snapshot.access_relations,
+        snapshot.accesses,
+    )
+    for effective_access in effective.effective_accesses:
+        effective_key = (
+            effective_access.access_provider,
+            effective_access.access_name,
+            effective_access.identity_provider,
+            effective_access.identity_identifier,
+        )
+        if effective_access.direct or effective_key in direct_keys or not effective_access.paths:
+            continue
+        path = effective_access.paths[0]
+        source_assignment = assignments_by_id.get(path.assignment_id)
+        composite_path = any(
+            relation_by_id.get(relation_id)
+            and relation_by_id[relation_id].origin.raw.get("composite") is True
+            for relation_id in path.relation_ids
+        )
+        if source_assignment is None or not composite_path:
+            continue
+        observed_assignment_list.append(
+            AccessAssignment(
+                effective_access.access_provider,
+                effective_access.access_name,
+                effective_access.identity_provider,
+                effective_access.identity_identifier,
+                Origin(
+                    source_assignment.origin.assignment_type,
+                    False,
+                    True,
+                    source=f"derived:{source_assignment.id}",
+                    raw={"derived": True, "composite": True},
+                ),
+                id=f"derived:{source_assignment.id}:{effective_access.access_provider}:{effective_access.access_name}",
+            )
+        )
+    observed_assignments = {
+        assignment.comparison_key(): assignment for assignment in observed_assignment_list
+    }
     observed_legacy = set(observed_assignments)
     observed_legacy_aliases: set[tuple[str, str, str, str]] = set()
     observed_legacy_without_stable: set[tuple[str, str, str, str]] = set()
     observed_stable: dict[tuple[str, str, str, str], tuple[str, str, str, str] | None] = {}
     assignment_origins: dict[tuple[str, str, str, str], list[AccessAssignment]] = {}
-    for assignment in snapshot.access_assignments:
+    for assignment in observed_assignment_list:
         legacy_key = assignment.comparison_key()
         assignment_origins.setdefault(legacy_key, []).append(assignment)
         access = accesses.get((assignment.provider, assignment.access_name))
@@ -518,16 +580,18 @@ def compare_snapshot(
             classification = ComparisonState.MISSING
         else:
             classification = ComparisonState.UNKNOWN_DUE_TO_SCOPE
-        rows.append(_comparison_row(
-            row_key,
-            expected=True,
-            observed=observed_key is not None,
-            classification=classification,
-            identities=identities,
-            accesses=accesses,
-            assignment_origins=assignment_origins,
-            import_scope=import_scope,
-        ))
+        rows.append(
+            _comparison_row(
+                row_key,
+                expected=True,
+                observed=observed_key is not None,
+                classification=classification,
+                identities=identities,
+                accesses=accesses,
+                assignment_origins=assignment_origins,
+                import_scope=import_scope,
+            )
+        )
 
     for observed_key in sorted(observed_legacy):
         if observed_key in matched_observed:
@@ -542,16 +606,18 @@ def compare_snapshot(
         else:
             classification = ComparisonState.UNEXPECTED
             expected = False
-        rows.append(_comparison_row(
-            observed_key,
-            expected=expected,
-            observed=True,
-            classification=classification,
-            identities=identities,
-            accesses=accesses,
-            assignment_origins=assignment_origins,
-            import_scope=import_scope,
-        ))
+        rows.append(
+            _comparison_row(
+                observed_key,
+                expected=expected,
+                observed=True,
+                classification=classification,
+                identities=identities,
+                accesses=accesses,
+                assignment_origins=assignment_origins,
+                import_scope=import_scope,
+            )
+        )
 
     return sorted(
         rows,
@@ -579,7 +645,9 @@ def _comparison_row(
     identity = identities.get((identity_provider, identity_identifier))
     findings: list[str] = []
     for assignment in assignment_origins.get(key, []):
-        if assignment.origin.raw.get("unresolved_foreign_principal") or assignment.origin.raw.get("unresolved"):
+        if assignment.origin.raw.get("unresolved_foreign_principal") or assignment.origin.raw.get(
+            "unresolved"
+        ):
             findings.append(Finding.UNRESOLVED_FOREIGN_PRINCIPAL)
         if assignment.origin.raw.get("unknown_member_type"):
             findings.append(Finding.UNKNOWN_MEMBER_TYPE)
@@ -618,7 +686,9 @@ def _observed_stable_key(
     identity = identities.get((assignment.identity_provider, assignment.identity_identifier))
     if identity is None:
         return None
-    raw_access_native = assignment.origin.raw.get("GroupSID") or assignment.origin.raw.get("group_native_id")
+    raw_access_native = assignment.origin.raw.get("GroupSID") or assignment.origin.raw.get(
+        "group_native_id"
+    )
     access_native_id = str(raw_access_native) if raw_access_native else None
     if access_native_id is None and access and access.control_object:
         access_native_id = access.control_object.native_id
@@ -642,7 +712,9 @@ def _is_incomplete_scope(scope: dict[str, object] | None) -> bool:
     return bool(scope and scope.get("completeness") not in {None, "full", Completeness.FULL})
 
 
-def _in_authoritative_scope(provider: str, access_name: str, scope: dict[str, object] | None) -> bool:
+def _in_authoritative_scope(
+    provider: str, access_name: str, scope: dict[str, object] | None
+) -> bool:
     if _is_incomplete_scope(scope):
         return False
     if not scope:
@@ -771,15 +843,35 @@ def evolve_golden_version(
         active.assignments if assignments is _UNSET else assignments,  # type: ignore[arg-type]
         source_type,
         previous_versions,
-        source_snapshot_id=active.source_snapshot_id if source_snapshot_id is _UNSET else source_snapshot_id,  # type: ignore[arg-type]
-        source_campaign_id=active.source_campaign_id if source_campaign_id is _UNSET else source_campaign_id,  # type: ignore[arg-type]
+        source_snapshot_id=active.source_snapshot_id
+        if source_snapshot_id is _UNSET
+        else source_snapshot_id,  # type: ignore[arg-type]
+        source_campaign_id=active.source_campaign_id
+        if source_campaign_id is _UNSET
+        else source_campaign_id,  # type: ignore[arg-type]
         parent_version_id=active.id,
         comment=active.comment if comment is _UNSET else comment,  # type: ignore[arg-type]
-        golden_authentication_policy=(active.golden_authentication_policy if golden_authentication_policy is _UNSET else golden_authentication_policy),  # type: ignore[arg-type]
+        golden_authentication_policy=(
+            active.golden_authentication_policy
+            if golden_authentication_policy is _UNSET
+            else golden_authentication_policy
+        ),  # type: ignore[arg-type]
         schema_version=active.schema_version if schema_version is _UNSET else schema_version,  # type: ignore[arg-type]
-        expected_access_definitions=(active.expected_access_definitions if expected_access_definitions is _UNSET else expected_access_definitions),  # type: ignore[arg-type]
-        expected_access_relations=(active.expected_access_relations if expected_access_relations is _UNSET else expected_access_relations),  # type: ignore[arg-type]
-        functional_access_models=(active.functional_access_models if functional_access_models is _UNSET else functional_access_models),  # type: ignore[arg-type]
+        expected_access_definitions=(
+            active.expected_access_definitions
+            if expected_access_definitions is _UNSET
+            else expected_access_definitions
+        ),  # type: ignore[arg-type]
+        expected_access_relations=(
+            active.expected_access_relations
+            if expected_access_relations is _UNSET
+            else expected_access_relations
+        ),  # type: ignore[arg-type]
+        functional_access_models=(
+            active.functional_access_models
+            if functional_access_models is _UNSET
+            else functional_access_models
+        ),  # type: ignore[arg-type]
         access_comments=(active.access_comments if access_comments is _UNSET else access_comments),  # type: ignore[arg-type]
     )
 
@@ -788,6 +880,7 @@ def golden_version_from_snapshot(
     golden_source: GoldenSource,
     snapshot: Snapshot,
     previous_versions: Iterable[GoldenSourceVersion] = (),
+    observed_functional_models: Iterable[ExpectedAccessModel] = (),
 ) -> GoldenSourceVersion:
     identities = {identity_key(identity): identity for identity in snapshot.identities}
     accesses = {access_key(access): access for access in snapshot.accesses}
@@ -816,13 +909,37 @@ def golden_version_from_snapshot(
                 access_name=item.access_name,
                 identity_provider=item.identity_provider,
                 identity_identifier=item.identity_identifier,
-                access_native_id=access.control_object.native_id if access and access.control_object else None,
-                access_permission=access.permission.identifier if access and access.permission else None,
+                access_native_id=access.control_object.native_id
+                if access and access.control_object
+                else None,
+                access_permission=access.permission.identifier
+                if access and access.permission
+                else None,
                 identity_native_id=identity.native_id if identity else None,
             )
         )
     parent_id = max(previous, key=lambda item: item.version).id if previous else None
     latest = max(previous, key=lambda item: item.version) if previous else None
+    selected_accesses = {(item.access_provider, item.access_name) for item in assignments}
+    # Freeze the downstream definitions as well: a group is only meaningful if
+    # its granted roles remain explainable after the live catalogue changes.
+    pending = list(selected_accesses)
+    while pending:
+        parent = pending.pop()
+        for relation in snapshot.access_relations:
+            if relation.parent_key() != parent or relation.child_key() in selected_accesses:
+                continue
+            selected_accesses.add(relation.child_key())
+            pending.append(relation.child_key())
+    definitions = [
+        access for access in snapshot.accesses if access_key(access) in selected_accesses
+    ]
+    relations = [
+        relation
+        for relation in snapshot.access_relations
+        if relation.parent_key() in selected_accesses and relation.child_key() in selected_accesses
+    ]
+    observed_models = list(observed_functional_models)
     return create_golden_version(
         golden_source,
         assignments,
@@ -831,10 +948,16 @@ def golden_version_from_snapshot(
         source_snapshot_id=snapshot.id,
         parent_version_id=parent_id,
         golden_authentication_policy=snapshot.authentication_posture,
-        schema_version=latest.schema_version if latest else 1,
-        expected_access_definitions=latest.expected_access_definitions if latest else (),
-        expected_access_relations=latest.expected_access_relations if latest else (),
-        functional_access_models=latest.functional_access_models if latest else (),
+        schema_version=2,
+        expected_access_definitions=latest.expected_access_definitions
+        if latest and latest.expected_access_definitions
+        else definitions,
+        expected_access_relations=latest.expected_access_relations
+        if latest and latest.expected_access_relations
+        else relations,
+        functional_access_models=latest.functional_access_models
+        if latest and latest.functional_access_models
+        else observed_models,
         access_comments=latest.access_comments if latest else (),
     )
 
@@ -843,9 +966,12 @@ def promote_snapshot(
     golden_source: GoldenSource,
     snapshot: Snapshot,
     previous_versions: Iterable[GoldenSourceVersion] = (),
+    observed_functional_models: Iterable[ExpectedAccessModel] = (),
 ) -> GoldenSourceVersion:
     """Create the next Golden Source version from a snapshot for a mutating workflow."""
-    return golden_version_from_snapshot(golden_source, snapshot, previous_versions)
+    return golden_version_from_snapshot(
+        golden_source, snapshot, previous_versions, observed_functional_models
+    )
 
 
 def _reject_duplicate_stable_golden_keys(assignments: Iterable[GoldenSourceAssignment]) -> None:
@@ -859,9 +985,7 @@ def _reject_duplicate_stable_golden_keys(assignments: Iterable[GoldenSourceAssig
         seen.add(stable_key)
 
 
-def golden_diff(
-    old: GoldenSourceVersion, new: GoldenSourceVersion
-) -> list[dict[str, str]]:
+def golden_diff(old: GoldenSourceVersion, new: GoldenSourceVersion) -> list[dict[str, str]]:
     old_remaining = set(old.assignments)
     new_remaining = set(new.assignments)
     rows: list[dict[str, str]] = []
@@ -957,7 +1081,7 @@ def open_campaign(
     identities = {identity_key(identity): identity for identity in snapshot.identities}
     accesses = {access_key(access): access for access in snapshot.accesses}
     items: list[ReviewItem] = []
-    for row in snapshot.comparison_states:
+    for row in reviewable_comparison_states(snapshot):
         access = accesses.get((str(row["access_provider"]), str(row["access_name"])))
         identity = identities.get((str(row["identity_provider"]), str(row["identity_identifier"])))
         reviewer = _resolve_reviewer(access, identity, campaign, fallback_reviewer)
@@ -971,7 +1095,9 @@ def open_campaign(
                 identity_status=identity.status if identity else IdentityStatus.UNKNOWN,
                 access_provider=str(row["access_provider"]),
                 access_name=str(row["access_name"]),
-                control_object=asdict(access.control_object) if access and access.control_object else {},
+                control_object=asdict(access.control_object)
+                if access and access.control_object
+                else {},
                 permission=asdict(access.permission) if access and access.permission else {},
                 target=asdict(access.target) if access and access.target else None,
                 description=access.description if access else None,
@@ -992,6 +1118,20 @@ def open_campaign(
     return campaign, items
 
 
+def reviewable_comparison_states(snapshot: Snapshot) -> list[dict[str, object]]:
+    """Exclude composite role containers from review rows while retaining their children."""
+    composite_parents = {
+        (relation.parent_provider, relation.parent_access_name)
+        for relation in snapshot.access_relations
+        if relation.origin.raw.get("composite") is True
+    }
+    return [
+        row
+        for row in snapshot.comparison_states
+        if (str(row["access_provider"]), str(row["access_name"])) not in composite_parents
+    ]
+
+
 def _resolve_reviewer(
     access: Access | None,
     identity: Identity | None,
@@ -1003,18 +1143,20 @@ def _resolve_reviewer(
         if access and access.access_owner
         else identity.account_owner
         if identity and identity.account_owner
-        else campaign.default_reviewer
-        or campaign.manager
-        or fallback_reviewer
+        else campaign.default_reviewer or campaign.manager or fallback_reviewer
     )
 
 
-def create_decision(review_item: ReviewItem, value: str, comment: str | None, decided_by: str | None) -> Decision:
+def create_decision(
+    review_item: ReviewItem, value: str, comment: str | None, decided_by: str | None
+) -> Decision:
     if value not in set(DecisionValue):
         raise ValueError(f"Unsupported decision: {value}")
     if value in {DecisionValue.REVOKE, DecisionValue.NOT_APPLICABLE} and not comment:
         raise ValueError(f"{value} decisions require a comment")
-    return Decision(review_item_id=review_item.id, value=value, comment=comment, decided_by=decided_by)
+    return Decision(
+        review_item_id=review_item.id, value=value, comment=comment, decided_by=decided_by
+    )
 
 
 def latest_decisions(decisions: Iterable[Decision]) -> dict[str, Decision]:
@@ -1024,7 +1166,9 @@ def latest_decisions(decisions: Iterable[Decision]) -> dict[str, Decision]:
     return latest
 
 
-def close_campaign(campaign: Campaign, review_items: list[ReviewItem], decisions: list[Decision]) -> Campaign:
+def close_campaign(
+    campaign: Campaign, review_items: list[ReviewItem], decisions: list[Decision]
+) -> Campaign:
     decided = set(latest_decisions(decisions))
     pending = [item.id for item in review_items if item.id not in decided]
     if pending:
@@ -1050,18 +1194,18 @@ def promote_campaign(
         raise ValueError("Cannot promote campaign with pending decisions")
     base = set(previous_version.assignments) if previous_version else set()
     identities = {
-        identity_key(identity): identity for identity in (observed_snapshot.identities if observed_snapshot else [])
+        identity_key(identity): identity
+        for identity in (observed_snapshot.identities if observed_snapshot else [])
     }
     accesses = {
-        access_key(access): access for access in (observed_snapshot.accesses if observed_snapshot else [])
+        access_key(access): access
+        for access in (observed_snapshot.accesses if observed_snapshot else [])
     }
     candidates = {
-        item.id: _golden_assignment_from_review(item, identities, accesses)
-        for item in review_items
+        item.id: _golden_assignment_from_review(item, identities, accesses) for item in review_items
     }
     previous_matches = {
-        item.id: _matching_previous_assignment(base, candidates[item.id])
-        for item in review_items
+        item.id: _matching_previous_assignment(base, candidates[item.id]) for item in review_items
     }
     if mode == "full_replace":
         result: set[GoldenSourceAssignment] = set()
@@ -1183,11 +1327,17 @@ def remediation_from_decisions(
     for decision in latest_decisions(decisions).values():
         item = items[decision.review_item_id]
         if decision.value == DecisionValue.REVOKE:
-            actions.append(RemediationAction(review_item_id=item.id, action=RemediationActionType.REVOKE))
+            actions.append(
+                RemediationAction(review_item_id=item.id, action=RemediationActionType.REVOKE)
+            )
         elif decision.value == DecisionValue.APPROVE and item.expected and not item.observed:
-            actions.append(RemediationAction(review_item_id=item.id, action=RemediationActionType.GRANT))
+            actions.append(
+                RemediationAction(review_item_id=item.id, action=RemediationActionType.GRANT)
+            )
     return actions
 
 
-def audit(event_type: str, object_type: str | None = None, object_id: str | None = None) -> AuditEvent:
+def audit(
+    event_type: str, object_type: str | None = None, object_id: str | None = None
+) -> AuditEvent:
     return AuditEvent(event_type=event_type, object_type=object_type, object_id=object_id)

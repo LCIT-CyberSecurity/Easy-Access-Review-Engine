@@ -90,6 +90,12 @@ const s = (v: unknown, f = "—") =>
 const ui = (key: string, options?: Record<string, string | number>) => String(i18n.t(key, options as never));
 const count = (rows: Row[], keep: (row: Row) => boolean) => rows.filter(keep).length;
 const DEFAULT_GOLDEN_CAPABILITIES = ["read", "write", "delete", "execute", "approve", "admin", "grant"];
+export const todayDateInputValue = (value = new Date()): string => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 /** A business permission may combine several rights ("read, write, execute"); it is stored as one list. */
 export const splitPermissions = (value: unknown): string[] =>
   Array.from(new Set(s(value, "").split(/[,;|]/).map((part) => part.trim()).filter(Boolean)));
@@ -287,6 +293,65 @@ const targetText = (v: unknown): string => {
     .filter(Boolean)
     .join(" · ");
 };
+export const keycloakApplicationText = (row: Row): string => {
+  const target = (row.target ?? {}) as Row;
+  const service = (target.service ?? {}) as Row;
+  const component = (target.component ?? {}) as Row;
+  const provider = s(row.access_provider).toLowerCase();
+  if (provider !== "keycloak-integration" && s(service.identifier).toLowerCase() !== "keycloak") return "";
+  if (s(component.identifier).toLowerCase() !== "realm") {
+    return s(component.display_name, s(component.identifier, ""));
+  }
+  return [s(service.identifier, "Keycloak"), s(service.realm)].filter(Boolean).join(" · ");
+};
+const ownerText = (v: unknown): string => {
+  if (!v) return "Not assigned";
+  if (typeof v === "string") return v;
+  const owner = v as Row;
+  return s(owner.display_name, s(owner.identity, s(owner.identifier, s(owner.username, "Not assigned"))));
+};
+export const reviewPermissionText = (permission: unknown): string => {
+  const value = (permission ?? {}) as Row;
+  if (s(value.identifier).toLowerCase() === "member") return "Group membership";
+  if (s(value.identifier).toLowerCase() === "role") return "Role assignment";
+  return permissionText(permission) || "—";
+};
+export const reviewTargetText = (row: Row): { label: string; technical: string } => {
+  const target = (row.target ?? {}) as Row;
+  const service = (target.service ?? {}) as Row;
+  const component = (target.component ?? {}) as Row;
+  const resource = (target.resource ?? {}) as Row;
+  const provider = s(row.access_provider);
+  const accessName = s(row.access_display_name, s(row.access_name));
+  if (provider === "keycloak-integration" || s(service.identifier).toLowerCase() === "keycloak") {
+    const kind = s(row.permission && (row.permission as Row).identifier).toLowerCase() === "member" ? "Group" : "Role";
+    const realm = s(service.realm, s(component.display_name, s(component.identifier, "Keycloak realm")));
+    const technical = [refText(resource), refText(component), refText(service)].filter(Boolean).join(" · ");
+    return { label: `${realm} · ${kind} ${accessName}`, technical };
+  }
+  return { label: targetText(row.target) || accessName || "—", technical: "" };
+};
+export const reviewDerivedAccessText = (row: Row): string =>
+  Array.isArray(row.derived_accesses)
+    ? row.derived_accesses.map((item: Row) => s(item.display_name, s(item.name))).filter(Boolean).join(", ")
+    : "";
+export const functionalRightsText = (row: Row): string => {
+  const rights = arr(row.functional_rights);
+  if (!rights.length) return s(row.functional_completeness) === "partial"
+    ? "Functional model partial — dynamic/complex policy not statically resolved"
+    : "Functional permissions not exposed by Keycloak";
+  const grouped = new Map<string, Set<string>>();
+  for (const right of rights) {
+    const resource = s(right.resource, "Resource not named");
+    const actions = grouped.get(resource) ?? new Set<string>();
+    actions.add(s(right.capability_label, s(right.capability)));
+    grouped.set(resource, actions);
+  }
+  const result = [...grouped].map(([resource, actions]) => `${resource} · ${[...actions].join(", ")}`).join("; ");
+  return s(row.functional_completeness) === "partial" ? `${result}; functional model partial` : result;
+};
+export const filterSystemReviews = (rows: Row[], mode: "business" | "system" | "all"): Row[] =>
+  rows.filter((row) => mode === "all" || Boolean(row.system_access) === (mode === "system"));
 const contextField = (context: unknown, field: string): Row => {
   const root = (context ?? {}) as Row;
   return ((((root.fields ?? {}) as Row)[field] ?? {}) as Row);
@@ -331,11 +396,14 @@ function BusinessContext({ context, manualStatus, includeOwner = true }: { conte
 const describeAccess = (row: Row): string => {
   const described = s(row.description, "");
   if (described) return described;
+  const permissionPayload = (row.permission ?? {}) as Row;
   const permission = permissionText(row.permission),
+    accessName = s(row.access_display_name, s(row.access_name)),
     target = targetText(row.target);
-  if (permission.toLowerCase() === "member") return "Group membership";
+  if (s(permissionPayload.identifier).toLowerCase() === "member" || permission.toLowerCase() === "member") return accessName ? `Group membership · ${accessName}` : "Group membership";
+  if (s(permissionPayload.identifier).toLowerCase() === "role" || permission.toLowerCase() === "role") return accessName ? `Role assignment · ${accessName}` : "Role assignment";
   if (permission && target) return `${permission} on ${target}`;
-  return permission || target || "";
+  return permission || target || accessName || "";
 };
 const describeIdentity = (row: Row): string =>
   [s(row.display_name, ""), s(row.description, ""), s(row.email, "")].filter(Boolean).join(" · ");
@@ -3263,7 +3331,9 @@ function CampaignWorkflow({ status, pending }: { status: string; pending: number
       </div>
       <p className="muted workflow-note">
         {status === "draft" ? "Prepare the scope, observed state, expected state and reviewers before opening." : null}
-        {status === "open" ? "Reviewers certify access rights. Close the campaign when every review is decided." : null}
+        {status === "open" ? (pending === 0
+          ? "All reviews are decided. Close the campaign to freeze the result."
+          : "Reviewers certify access rights. Close the campaign when every review is decided.") : null}
         {status === "closed" ? "The result is frozen. Remediation actions and the final report are now available." : null}
       </p>
     </section>
@@ -3372,7 +3442,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
       pilot: principal.username,
       snapshot_id: "",
       golden_source_version_id: "",
-      due_at: "",
+      due_at: todayDateInputValue(),
       scope_type: "all",
     }),
     accessQuery = useQuery({
@@ -3716,6 +3786,8 @@ function CampaignDetail() {
       },
     },
     [confirmAction, setConfirmAction] = useState<string | null>(null),
+    [reviewView, setReviewView] = useState("pending"),
+    [accessFilter, setAccessFilter] = useState<"business" | "system" | "all">("business"),
     toast = useToast(),
     m = useMutation({
       mutationFn: (a: string) => postJson("campaigns/" + id + "/" + a),
@@ -3825,6 +3897,13 @@ function CampaignDetail() {
       }),
     unexpectedCount = reviews.filter((row) => row.classification === "unexpected").length,
     revokedCount = reviews.filter((row) => row.decision === "revoke").length,
+    decided = reviews.filter((row) => Boolean(row.decision)),
+    statusReviews = reviewView === "pending"
+      ? reviews.filter((row) => !row.decision)
+      : reviewView === "decided"
+        ? decided
+        : reviews,
+    visibleReviews = filterSystemReviews(statusReviews, accessFilter),
     status = s(c?.status),
     pending = Number(c?.pending ?? reviews.filter((r) => !r.decision).length),
     ctas = campaignCtas(status, pending);
@@ -3849,7 +3928,7 @@ function CampaignDetail() {
               <NavLink className="button subtle" key={action} to={target}>{labels[action]}</NavLink>
             ) : (
               <button
-                className={action === "open" ? "button primary" : "button subtle"}
+                className={action === "open" || action === "close" ? "button primary" : "button subtle"}
                 key={action}
                 disabled={action === "close-disabled"}
                 title={action === "close-disabled" ? `${pending} reviews still need a decision` : undefined}
@@ -3862,6 +3941,18 @@ function CampaignDetail() {
         </div>
       </Head>
       <CampaignWorkflow status={status} pending={pending} />
+      {status === "open" && pending === 0 ? (
+        <section className="campaign-close-prompt" role="status" aria-live="polite">
+          <div>
+            <span className="eyebrow">Review complete</span>
+            <h2>All reviews are finished</h2>
+            <p>Every access review has a decision. Close the campaign to freeze the result and create any remediation actions.</p>
+          </div>
+          <button className="button primary" type="button" onClick={() => setConfirmAction("close")}>
+            Close campaign
+          </button>
+        </section>
+      ) : null}
       <div className="tabs">
         <button
           className={tab === "overview" ? "text-button active" : "text-button"}
@@ -4042,18 +4133,43 @@ function CampaignDetail() {
               ])}
             />
           </section>
+          <div className="metrics">
+            <div className="metric metric-alert"><div className="metric-label">To review</div><strong>{pending}</strong><small>Only pending access reviews</small></div>
+            <div className="metric"><div className="metric-label">Processed</div><strong>{decided.length}</strong><small>Decision already recorded</small></div>
+            <div className="metric"><div className="metric-label">Progress</div><strong>{reviews.length ? Math.round((decided.length / reviews.length) * 100) : 100}%</strong><small>{decided.length} of {reviews.length} reviews processed</small></div>
+          </div>
+          <section className="panel">
+            <div className="panel-title">
+              <div><h2>Review queue</h2><span className="muted">Pending reviews are shown first.</span></div>
+              <div className="button-row">
+                {[["pending", `To review (${pending})`], ["all", `All (${reviews.length})`], ["decided", `Processed (${decided.length})`]].map(([value, label]) => (
+                  <button className={reviewView === value ? "button primary" : "button subtle"} key={value} onClick={() => setReviewView(value)}>{label}</button>
+                ))}
+                {([[
+                  "business",
+                  "Business",
+                ], ["system", "System"], ["all", "All access"]] as const).map(([value, label]) => (
+                  <button className={accessFilter === value ? "button primary" : "button subtle"} key={value} onClick={() => setAccessFilter(value)}>{label}</button>
+                ))}
+              </div>
+            </div>
           <Table
-          cols={["Identity", "Access", "Classification", "Decision", "Decide"]}
-          rows={reviews.map((r) => [
+          cols={["Identity", "Application", "Access / role", "What it allows", "Via / origin", "Reviewer", "Status", "Action"]}
+          rows={visibleReviews.map((r) => [
             <button className="link-button" onClick={() => setSelected(r)}>
               {s(r.identity_display_name, s(r.identity_identifier))}
+              <Sub>{s(r.identity_provider)}</Sub>
             </button>,
-            s(r.access_display_name, s(r.access_name)),
-            <Status v={r.classification} />,
+            <span>{s(r.application, "Keycloak")}</span>,
+            <div><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>{reviewPermissionText(r.permission)}</Sub>{arr(r.grants).length ? <Sub>Grants: {arr(r.grants).map((grant) => s(grant.display_name)).join(", ")}</Sub> : null}</div>,
+            <span>{functionalRightsText(r)}</span>,
+            <span>{s(r.via, r.direct ? "Direct assignment" : "Inherited")}</span>,
+            <div>{ownerText(r.reviewer)}<Sub>{r.reviewer ? "Responsible reviewer" : "No reviewer assigned"}</Sub></div>,
             <Status v={r.decision ?? "pending"} />,
-            <RowDecision item={r} done={() => q.refetch()} />,
+            r.decision ? <span className="muted">Decision recorded</span> : <RowDecision item={r} done={() => q.refetch()} />,
           ])}
         />
+          </section>
         </>
       )}{" "}
       {tab === "findings" && (
@@ -4195,7 +4311,14 @@ function GoldenFunctionalSuggestions({ rows, onEdit }: { rows: Row[]; onEdit: (r
         return (
           <article key={`${s(row.access_provider)}:${s(row.access_name)}`}>
             <strong>{s(row.access_display_name, s(row.access_name))}</strong>
-            <small>{s(row.access_provider)} · {row.business_context_conflicts ? "Conflict requires review" : "No context conflict"}</small>
+            <small>Application: {s(row.application, "Not identified")} · Source: {s(row.access_provider)} · Completeness: {s(row.observed_completeness, "not_defined")}</small>
+            <p>Observed from source: {functionalRightsText({ functional_rights: row.observed_functional_rights, functional_completeness: row.observed_completeness })}</p>
+            <p>Golden expected: {functionalRightsText({ functional_rights: arr(row.effective_functional_rights).map((right) => {
+              const resource = ((right.target as Row)?.resource ?? {}) as Row;
+              return { resource: s(resource.display_name, s(resource.identifier)), capability: right.capability_id };
+            }) })}</p>
+            {row.functional_authorization_changed ? <p className="form-error">Functional authorization changed</p> : null}
+            {row.business_context_conflicts ? <p className="form-error">Business context conflict requires review</p> : null}
             <BusinessContext context={{ fields: row.business_context_fields }} />
             {arr(row.direct_functional_rights).length ? <p className="muted">Direct expected rights: {arr(row.direct_functional_rights).map((right) => s(right.capability_id)).join(", ")}</p> : null}
             {arr(row.effective_functional_rights).length > arr(row.direct_functional_rights).length ? <p className="muted">Inherited / effective rights: {arr(row.effective_functional_rights).map((right) => `${s(right.capability_id)} · ${s(right.granted_by)}`).join(", ")}</p> : null}
@@ -4836,24 +4959,22 @@ function Golden() {
                 className="golden-access-table"
                 cols={[
                   "Access right",
-                  "What it allows",
                   "Application",
-                  "Permission",
-                  "Owner",
+                  "What it allows",
                   "Source",
                   "Expected holders",
                   "Comment",
+                  "Owner",
                   "Actions",
                 ]}
                 fields={[
                   "access_display_name",
-                  "access_description",
                   "access_target",
-                  "access_permission",
-                  "access_owner",
+                  "access_description",
                   "access_provider",
                   "expected_identities",
                   "access_comment",
+                  "access_owner",
                   null,
                 ]}
                 sorting={sorting}
@@ -4871,8 +4992,7 @@ function Golden() {
                   const permissionOptions = capabilityOptions.length
                     ? capabilityOptions.map((option) => s(option.id, s(option.label)))
                     : DEFAULT_GOLDEN_CAPABILITIES;
-                  const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || "";
-                  const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
+                  const application = contextValue(r.business_context, "application", "manual") || s(r.application) || contextValue(r.business_context, "application", "source") || keycloakApplicationText({ ...r, target: r.access_target });
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
                   const ownerDisplay = owner ? ownerDisplayLabel(owner, arr(ownerOptions.data?.items), s(r.access_provider)) : "";
                   const applicationCell = editing
@@ -4885,21 +5005,21 @@ function Golden() {
                       /><small>Observed: {contextValue(r.business_context, "application", "source") || "—"}</small></div>
                     : <button className="link-button" title={splitPermissions(application).join(", ")} onClick={() => requestAccessEdit(r)}>{applicationSummary(application) || "—"}</button>;
                   const permissionCell = editing
-                    ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>Observed: {contextValue(r.business_context, "business_permission", "source") || "—"}</small></div>
-                    : <button className="link-button" onClick={() => requestAccessEdit(r)}>{businessPermission ? joinPermissions(splitPermissions(businessPermission)) : "Not provided"}</button>;
+                    ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>{functionalRightsText(r)}</small></div>
+                    : <span>{functionalRightsText(r)}</span>;
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.access_display_name, s(r.access_name))}
                     </button>,
-                    <Sub>
-                      {describeAccess({
-                        description: r.access_description,
-                        permission: r.access_permission,
-                        target: r.access_target,
-                      })}
-                    </Sub>,
                     applicationCell,
                     permissionCell,
+                    s(r.access_provider),
+                    <button className="link-button" onClick={() => setHolders(r)}>
+                      {s(r.expected_identities, "0")} people
+                    </button>,
+                    <button className="link-button" onClick={() => { setAccessCommenting(r); setAccessComment(s(r.access_comment, "")); }}>
+                      {s(r.access_comment, "Add comment")}
+                    </button>,
                     editing ? (
                       <div className="inline-edit-stack"><select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} disabled={saveAccessRow.isPending}>
                         <option value="">Select owner</option>
@@ -4910,13 +5030,6 @@ function Golden() {
                         })}
                       </select><small>Observed: {contextValue(r.business_context, "owner", "source") || "—"}</small></div>
                     ) : <button className="link-button" onClick={() => requestAccessEdit(r)}>{ownerDisplay || "—"}</button>,
-                    s(r.access_provider),
-                    <button className="link-button" onClick={() => setHolders(r)}>
-                      {s(r.expected_identities, "0")} people
-                    </button>,
-                    <button className="link-button" onClick={() => { setAccessCommenting(r); setAccessComment(s(r.access_comment, "")); }}>
-                      {s(r.access_comment, "Add comment")}
-                    </button>,
                     <div className="row-actions golden-access-actions">
                       {editing ? <>
                         {accessEditIsDirty(editingAccess) ? <span className="unsaved-indicator">Unsaved changes</span> : null}

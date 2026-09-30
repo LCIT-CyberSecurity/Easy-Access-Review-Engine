@@ -1,5 +1,6 @@
 import sqlite3
 import tempfile
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -255,6 +256,29 @@ if TestClient is not None:
         empty_accesses = {**payload, "scope": {"type": "accesses", "values": []}}
         assert client.post("/api/campaigns/preview", json=empty_accesses).status_code == 400
         assert client.post("/api/campaigns", json=empty_accesses).status_code == 400
+
+
+    def test_campaign_create_defaults_due_date_to_today(tmp_path):
+        db = tmp_path / "campaign-date.db"
+        client = _operator_client(db)
+        snapshot = create_snapshot(
+            [Provider("corp", "generic")],
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        with Repository(db) as repo:
+            repo.upsert("snapshots", asdict(snapshot))
+
+        response = client.post(
+            "/api/campaigns",
+            json={"name": "Today", "snapshot_id": snapshot.id, "scope": {"type": "all"}},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["due_at"] == time.strftime("%Y-%m-%d")
 
 
     def test_campaign_detail_metrics_cover_more_than_five_hundred_reviews(tmp_path):

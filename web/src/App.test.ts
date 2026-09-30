@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, sourceSupportsAttributeMapping, splitPermissions } from "./App";
+import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, functionalRightsText, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {
@@ -19,6 +19,40 @@ describe("ActionMenu", () => {
     expect(html).toContain('aria-label="More actions for Alice"');
     expect(html).toContain("Reset password");
     expect(html).toContain("Disable");
+  });
+});
+
+describe("Campaign date defaults", () => {
+  it("formats the local date for date inputs", () => {
+    expect(todayDateInputValue(new Date(2026, 8, 29))).toBe("2026-09-29");
+  });
+});
+
+describe("Campaign review labels", () => {
+  it("explains ERP resources and actions without inventing CRM permissions", () => {
+    expect(functionalRightsText({
+      application: "ERP", access_display_name: "ERP-Accountant", functional_completeness: "complete",
+      functional_rights: [
+        { resource: "Invoices", capability: "read", capability_label: "Read" },
+        { resource: "Invoices", capability: "approve", capability_label: "Approve" },
+        { resource: "Suppliers", capability: "read", capability_label: "Read" },
+      ],
+    })).toBe("Invoices · Read, Approve; Suppliers · Read");
+    expect(functionalRightsText({ application: "CRM", access_display_name: "CRM-Sales", functional_rights: [] }))
+      .toBe("Functional permissions not exposed by Keycloak");
+  });
+  it("explains Keycloak role and group targets without hiding technical identifiers", () => {
+    const role = reviewTargetText({
+      access_provider: "keycloak-integration",
+      access_display_name: "default-roles-eare-crashtest",
+      permission: { identifier: "role" },
+      target: { service: { identifier: "Keycloak", realm: "eare-crashtest" }, component: { identifier: "realm" }, resource: { identifier: "role-id" } },
+    });
+    expect(reviewPermissionText({ identifier: "role" })).toBe("Role assignment");
+    expect(role.label).toBe("eare-crashtest · Role default-roles-eare-crashtest");
+    expect(role.technical).toContain("role-id");
+    expect(reviewPermissionText({ identifier: "member" })).toBe("Group membership");
+    expect(reviewDerivedAccessText({ derived_accesses: [{ display_name: "view-profile" }, { display_name: "offline_access" }] })).toBe("view-profile, offline_access");
   });
 });
 
