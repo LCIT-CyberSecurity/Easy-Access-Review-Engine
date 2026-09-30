@@ -48,6 +48,7 @@ AUTHZ_SURFACES = tuple(surface for surface in SURFACE_FILES if surface.startswit
 AUTHZ_PAGINATED_SURFACES = tuple(
     surface for surface in AUTHZ_SURFACES if surface != "authorization_resource_servers"
 )
+MAX_PAGES = 10_000
 
 
 class KeycloakError(RuntimeError):
@@ -91,8 +92,15 @@ def _pages(
 ) -> tuple[list[dict[str, Any]], int]:
     rows: list[dict[str, Any]] = []
     page = 0
+    seen_pages: set[str] = set()
     while True:
+        if page >= MAX_PAGES:
+            raise KeycloakError(f"Keycloak pagination exceeded {MAX_PAGES} pages")
         values = _retry(lambda page=page: collector.list(surface, page, page_size, **kwargs))
+        signature = json.dumps(values, sort_keys=True, default=str)
+        if signature in seen_pages and values:
+            raise KeycloakError(f"Keycloak pagination did not advance for {surface}")
+        seen_pages.add(signature)
         page += 1
         rows.extend(values)
         if len(values) < page_size:

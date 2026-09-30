@@ -183,13 +183,29 @@ def _add_review_provenance(repo: Repository, rows: list[dict[str, Any]]) -> None
             for identity in payload.get("identities", [])
             if isinstance(identity, dict)
         }
-        models = [
-            hydrate_functional_model(item)
-            for item in repo.load_snapshot_functional_models(snapshot_id)
-        ]
+        model_rows = repo.load_snapshot_functional_models(snapshot_id)
+        models = [hydrate_functional_model(item) for item in model_rows]
+        capabilities = repo.list_capabilities()
+        model_evidence = {
+            (str(item.get("access_provider")), str(item.get("access_name"))): item.get(
+                "evidence", {}
+            )
+            for item in model_rows
+        }
         snapshot_contexts[snapshot_id] = {
-            (access.provider, access.name): functional_context(
-                access, snapshot.accesses, snapshot.access_relations, models
+            (access.provider, access.name): (
+                functional_context(
+                    access,
+                    snapshot.accesses,
+                    snapshot.access_relations,
+                    models,
+                    capabilities=capabilities,
+                )
+                | {
+                    "source_evidence": model_evidence.get(
+                        (access.provider, access.name), {}
+                    )
+                }
             )
             for access in snapshot.accesses
         }

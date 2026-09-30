@@ -417,6 +417,124 @@ def test_keycloak_v2_authz_derives_only_safe_functional_rights(tmp_path: Path) -
     assert model.rights[0].target.component["identifier"] == "c-erp"
 
 
+def test_keycloak_v3_does_not_match_policy_display_name_as_role_identity(tmp_path: Path) -> None:
+    artifact = _v2_artifact(tmp_path)
+    policy_rows = [
+        {
+            "id": "policy-name-only",
+            "client_uuid": "c-erp",
+            "clientId": "erp",
+            "name": "ERP Reader",
+            "type": "role",
+            "logic": "POSITIVE",
+            "config": {"roles": [{"name": "Read"}]},
+        }
+    ]
+    permission_rows = [
+        {
+            "id": "permission-name-only",
+            "client_uuid": "c-erp",
+            "clientId": "erp",
+            "name": "Invoices name-only",
+            "resourceIds": ["resource-invoices"],
+            "scopes": ["scope-read"],
+            "policies": ["policy-name-only"],
+        }
+    ]
+    custom = tmp_path / "name-only-policy.zip"
+    with ZipFile(artifact) as source, ZipFile(custom, "w", ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            if info.filename not in {
+                "authorization-policies.jsonl",
+                "authorization-permissions.jsonl",
+            }:
+                target.writestr(info, source.read(info.filename))
+        target.writestr(
+            "authorization-policies.jsonl",
+            "".join(json.dumps(row) + "\n" for row in policy_rows),
+        )
+        target.writestr(
+            "authorization-permissions.jsonl",
+            "".join(json.dumps(row) + "\n" for row in permission_rows),
+        )
+    result = import_keycloak_zip(custom)
+
+    assert not any(
+        model.rights
+        for model in result.functional_access_models
+        if model.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert any(
+        item["permission_id"] == "permission-name-only"
+        for item in result.batch.scope["authorization_complex_permissions"]
+    )
+
+
+def test_keycloak_v3_resolves_arbitrary_role_resource_and_scope_names(tmp_path: Path) -> None:
+    source = _v2_artifact(tmp_path)
+    with ZipFile(source) as source_zip:
+        client_roles = [
+            json.loads(line)
+            for line in source_zip.read("client-roles.jsonl").splitlines()
+            if line
+        ]
+    for role in client_roles:
+        if role["id"] == "cr-erp-read":
+            role["name"] = "FOO_9284"
+    replacements = {
+        "client-roles.jsonl": client_roles,
+        "authorization-resources.jsonl": [
+            {"id": "resource-arbitrary", "client_uuid": "c-erp", "name": "object-441"}
+        ],
+        "authorization-scopes.jsonl": [
+            {
+                "id": "scope-arbitrary",
+                "client_uuid": "c-erp",
+                "name": "perform_operation_xyz",
+            }
+        ],
+        "authorization-policies.jsonl": [
+            {
+                "id": "policy-arbitrary",
+                "client_uuid": "c-erp",
+                "name": "policy-17",
+                "type": "role",
+                "logic": "POSITIVE",
+                "config": {"roles": [{"id": "cr-erp-read"}]},
+            }
+        ],
+        "authorization-permissions.jsonl": [
+            {
+                "id": "permission-arbitrary",
+                "client_uuid": "c-erp",
+                "name": "permission-42",
+                "resourceIds": ["resource-arbitrary"],
+                "scopes": ["scope-arbitrary"],
+                "policies": ["policy-arbitrary"],
+            }
+        ],
+    }
+    output = tmp_path / "arbitrary-names.zip"
+    with ZipFile(source) as source_zip, ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for info in source_zip.infolist():
+            if info.filename in replacements:
+                continue
+            target.writestr(info, source_zip.read(info.filename))
+        for filename, rows in replacements.items():
+            target.writestr(filename, "".join(json.dumps(row) + "\n" for row in rows))
+
+    result = import_keycloak_zip(output)
+    model = next(
+        model
+        for model in result.functional_access_models
+        if model.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert model.completeness == "complete"
+    assert model.rights[0].target.resource["display_name"] == "object-441"
+    assert model.rights[0].capability_id.startswith("keycloak_scope_")
+    assert any(capability.label == "perform_operation_xyz" for capability in result.capabilities)
+
+
 def test_keycloak_v1_artifact_without_authz_remains_unchanged(tmp_path: Path) -> None:
     result = import_keycloak_zip(_artifact(tmp_path))
     assert result.batch.completeness == "full"

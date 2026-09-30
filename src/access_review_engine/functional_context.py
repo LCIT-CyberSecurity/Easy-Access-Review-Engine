@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import Iterable
 from typing import Any
 
-from access_review_engine.domain import Access, AccessRelation, ExpectedAccessModel
+from access_review_engine.domain import Access, AccessRelation, Capability, ExpectedAccessModel
 
 
 def _label(node: dict[str, Any] | None) -> str:
@@ -61,10 +61,12 @@ def functional_context(
     models: Iterable[ExpectedAccessModel],
     *,
     max_depth: int = 8,
+    capabilities: Iterable[Capability] | None = None,
 ) -> dict[str, Any]:
     """Resolve bounded downstream grants without inferring rights from role names."""
     by_key = {(item.provider, item.name): item for item in accesses}
     by_model = {(item.access_provider, item.access_name): item for item in models}
+    capability_labels = {item.id: item.label for item in (capabilities or ())}
     adjacency: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for relation in relations:
         if relation.relation_type == "grants":
@@ -76,6 +78,7 @@ def functional_context(
     rights: dict[tuple[str, str, str], dict[str, Any]] = {}
     applications: set[str] = set()
     completeness = "not_defined"
+    model_seen = False
     while queue:
         key, depth, path = queue.popleft()
         current = by_key.get(key)
@@ -105,6 +108,7 @@ def functional_context(
                 )
         model = by_model.get(key)
         if model:
+            model_seen = True
             if model.completeness == "partial":
                 completeness = "partial"
             elif model.completeness == "complete" and completeness == "not_defined":
@@ -124,7 +128,9 @@ def functional_context(
                         "resource": resource,
                         "resource_id": str((target.resource or {}).get("identifier") or ""),
                         "capability": right.capability_id,
-                        "capability_label": right.capability_id.replace("_", " ").title(),
+                        "capability_label": capability_labels.get(
+                            right.capability_id, right.capability_id
+                        ),
                         "granted_by": current.display_name or current.name if current else key[1],
                         "provenance": right.provenance,
                         "native_permission": right.native_permission,
@@ -139,10 +145,19 @@ def functional_context(
                     seen.add(child)
                     queue.append((child, depth + 1, (*path, child)))
     business_apps = {name for name in applications if not name.startswith("Keycloak realm ")}
+    explanation = ""
+    if completeness == "not_defined":
+        explanation = (
+            "Authorization rights depend on dynamic or conditional policies and cannot be "
+            "fully determined from the collected configuration."
+            if model_seen
+            else "Functional permissions are not exposed by the source."
+        )
     return {
         "application": ", ".join(sorted(business_apps or applications)),
         "functional_rights": list(rights.values()),
         "functional_completeness": completeness,
+        "functional_explanation": explanation,
         "grants": grants,
         "system_access": system_access(access),
         "access_type": access.control_object.type if access.control_object else "access",

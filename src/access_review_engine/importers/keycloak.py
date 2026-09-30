@@ -292,6 +292,11 @@ def _unique_rows(rows: list[dict[str, Any]], filename: str) -> list[dict[str, An
 
 
 def _authorization_refs(value: Any) -> list[str]:
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    if isinstance(value, dict):
+        reference = _text(value, "id", "name")
+        return [reference] if reference else []
     if not isinstance(value, list):
         return []
     refs: list[str] = []
@@ -328,7 +333,12 @@ def _role_policy_role(policy: dict[str, Any]) -> str | None:
         return None
     role = roles[0]
     if isinstance(role, dict):
-        return _text(role, "id", "roleId", "name") or None
+        # Keycloak role policies expose the native role UUID.  A display name
+        # is not a safe fallback: the same role name may exist in multiple
+        # clients, and a name-only match could grant a right to the wrong
+        # Access.  Plain strings are retained because some Keycloak versions
+        # return the native reference directly as a string.
+        return _text(role, "id", "roleId") or None
     return str(role).strip() or None
 
 
@@ -534,7 +544,7 @@ def _authorization_models(
 
 def _complex_authorization_permissions(
     records: dict[str, list[dict[str, Any]]],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     policies = {
         (_text(row, "client_uuid", "clientId"), _text(row, "id")): row
         for row in records["authorization-policies.jsonl"]
@@ -553,6 +563,21 @@ def _complex_authorization_permissions(
                 "client_id": _text(permission, "clientId"),
                 "permission_id": _text(permission, "id"),
                 "name": _text(permission, "name"),
+                "type": _text(permission, "type"),
+                "resource_ids": _authorization_refs(
+                    permission.get("resources", permission.get("resourceIds"))
+                ),
+                "scope_ids": _authorization_refs(
+                    permission.get("scopes", permission.get("scopeIds"))
+                ),
+                "policy_ids": policy_refs,
+                "decision_strategy": _text(
+                    permission, "decisionStrategy", "decision_strategy"
+                ),
+                "policy_types": [
+                    _text(policies.get((client_uuid, policy_id), {}), "type", "policyType")
+                    for policy_id in policy_refs
+                ],
             }
         )
     return result

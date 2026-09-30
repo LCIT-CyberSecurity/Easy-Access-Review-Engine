@@ -337,9 +337,11 @@ export const reviewDerivedAccessText = (row: Row): string =>
     : "";
 export const functionalRightsText = (row: Row): string => {
   const rights = arr(row.functional_rights);
-  if (!rights.length) return s(row.functional_completeness) === "partial"
-    ? "Functional model partial — dynamic/complex policy not statically resolved"
-    : "Functional permissions not exposed by Keycloak";
+  if (!rights.length) {
+    return (typeof row.functional_explanation === "string" && row.functional_explanation) || (s(row.functional_completeness) === "partial"
+      ? "Functional model partial — dynamic/complex policy not statically resolved"
+      : "Functional permissions not exposed by Keycloak");
+  }
   const grouped = new Map<string, Set<string>>();
   for (const right of rights) {
     const resource = s(right.resource, "Resource not named");
@@ -348,7 +350,9 @@ export const functionalRightsText = (row: Row): string => {
     grouped.set(resource, actions);
   }
   const result = [...grouped].map(([resource, actions]) => `${resource} · ${[...actions].join(", ")}`).join("; ");
-  return s(row.functional_completeness) === "partial" ? `${result}; functional model partial` : result;
+  return s(row.functional_completeness) === "partial"
+    ? `${result}; functional model partial — some permissions are conditional or dynamic`
+    : result;
 };
 export const filterSystemReviews = (rows: Row[], mode: "business" | "system" | "all"): Row[] =>
   rows.filter((row) => mode === "all" || Boolean(row.system_access) === (mode === "system"));
@@ -2966,7 +2970,13 @@ function ReviewDrawer({
   const paths = arr(item.paths),
     who = s(item.identity_display_name, s(item.identity_identifier)),
     what = s(item.access_display_name, s(item.access_name)),
-    latest = (item.latest_decision ?? null) as Row | null;
+    latest = (item.latest_decision ?? null) as Row | null,
+    functionalRights = arr(item.functional_rights),
+    evidence = (functionalRights.find((right) => right.source_evidence)?.source_evidence ?? item.source_evidence ?? {}) as Row,
+    evidenceScopes = functionalRights
+      .map((right) => s((right.source_evidence as Row | undefined)?.scope_name))
+      .filter(Boolean)
+      .filter((value, index, values) => values.indexOf(value) === index);
   return (
     <Drawer title={who} close={close}>
       <section className="drawer-section">
@@ -2981,6 +2991,29 @@ function ReviewDrawer({
         <p>{describeAccess(item) || "The source provided no description for this access."}</p>
         <p>Source: {s(item.access_provider)}</p>
         <p>Granted via: {s(item.technical_grant, "Direct assignment")} · Technical permission: {s(item.technical_permission, "—")}</p>
+      </section>
+      <section className="drawer-section">
+        <h4>WHAT THIS ACCESS ALLOWS</h4>
+        {functionalRights.length ? <p className="drawer-functional-rights">{functionalRightsText(item)}</p> : <p>{functionalRightsText(item)}</p>}
+        {s(item.functional_completeness) === "partial" && functionalRights.length ? (
+          <p className="muted">Some permissions depend on conditional or dynamic authorization rules.</p>
+        ) : null}
+        {Object.keys(evidence).length ? (
+          <details className="functional-evidence">
+            <summary>Technical authorization evidence</summary>
+            <dl>
+              {evidence.client_id ? <><dt>Application client</dt><dd>{s(evidence.client_id)}</dd></> : null}
+              {evidence.permission_name ? <><dt>Permission</dt><dd>{s(evidence.permission_name)}</dd></> : null}
+              {evidence.policy_name ? <><dt>Policy</dt><dd>{s(evidence.policy_name)}</dd></> : null}
+              {evidence.resource_name ? <><dt>Resource</dt><dd>{s(evidence.resource_name)}</dd></> : null}
+              {evidenceScopes.length ? <><dt>Scopes</dt><dd>{evidenceScopes.join(", ")}</dd></> : null}
+              {evidence.permission_decision_strategy ? <><dt>Decision strategy</dt><dd>{s(evidence.permission_decision_strategy)}</dd></> : null}
+            </dl>
+            {arr(evidence.complex_permissions).length ? (
+              <p className="muted">Complex or dynamic permissions preserved: {arr(evidence.complex_permissions).map((permission) => s(permission.name, s(permission.permission_id))).join(", ")}</p>
+            ) : null}
+          </details>
+        ) : null}
       </section>
       <section className="drawer-section">
         <h4>BUSINESS CONTEXT</h4>

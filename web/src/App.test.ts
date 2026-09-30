@@ -40,6 +40,15 @@ describe("Campaign review labels", () => {
     })).toBe("Invoices · Read, Approve; Suppliers · Read");
     expect(functionalRightsText({ application: "CRM", access_display_name: "CRM-Sales", functional_rights: [] }))
       .toBe("Functional permissions not exposed by Keycloak");
+    expect(functionalRightsText({
+      functional_rights: [],
+      functional_completeness: "not_defined",
+      functional_explanation: "Authorization rights depend on dynamic or conditional policies.",
+    })).toContain("dynamic or conditional policies");
+    expect(functionalRightsText({
+      functional_completeness: "partial",
+      functional_rights: [{ resource: "object-441", capability: "keycloak_scope_abc", capability_label: "perform_operation_xyz" }],
+    })).toContain("perform_operation_xyz");
   });
   it("explains Keycloak role and group targets without hiding technical identifiers", () => {
     const role = reviewTargetText({

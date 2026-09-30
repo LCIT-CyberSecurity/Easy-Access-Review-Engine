@@ -65,6 +65,15 @@ def test_documented_authorization_endpoints_paginate_at_boundaries(
     assert client.calls == list(range(pages))
 
 
+def test_pagination_fails_closed_when_endpoint_ignores_page_parameters() -> None:
+    class NonPaginatingClient:
+        def list(self, _surface: str, _page: int, _size: int, **_kwargs: object):
+            return [{"id": "same-row"}]
+
+    with pytest.raises(KeycloakError, match="pagination did not advance"):
+        _pages(NonPaginatingClient(), "authorization_resources", 1)
+
+
 class FakeKeycloak:
     def __init__(self, page_size: int = 2) -> None:
         self.page_size = page_size

@@ -1552,6 +1552,7 @@ def create_app(db_path: str | None = None):
             snapshot = hydrate_snapshot(payload)
             model_rows = repo.load_snapshot_functional_models(snapshot_id)
             models = [hydrate_functional_model(row) for row in model_rows]
+            capabilities = repo.list_capabilities()
             items = []
             for model, stored in zip(models, model_rows, strict=True):
                 access = next(
@@ -1565,7 +1566,11 @@ def create_app(db_path: str | None = None):
                 if access is None:
                     continue
                 context = functional_context(
-                    access, snapshot.accesses, snapshot.access_relations, [model]
+                    access,
+                    snapshot.accesses,
+                    snapshot.access_relations,
+                    [model],
+                    capabilities=capabilities,
                 )
                 items.append(
                     {
@@ -2105,6 +2110,7 @@ def create_app(db_path: str | None = None):
             if active is None:
                 raise HTTPException(status_code=409, detail="Golden Source has no version yet")
             identity_names, access_names = _display_names(repo)
+            capabilities = repo.list_capabilities()
             access_payloads = repo.list_payloads("accesses")
             catalog = {
                 (str(row.get("provider")), str(row.get("name"))): row for row in access_payloads
@@ -2146,6 +2152,7 @@ def create_app(db_path: str | None = None):
                             functional_accesses.values(),
                             active.expected_access_relations,
                             active.functional_access_models,
+                            capabilities=capabilities,
                         )
                         if key in functional_accesses
                         else {}
@@ -2349,6 +2356,7 @@ def create_app(db_path: str | None = None):
             if active is None:
                 raise HTTPException(status_code=409, detail="Golden Source has no version yet")
             rows = functional_access_rows(repo, active)
+            capabilities = repo.list_capabilities()
             observed_models = []
             observed_contexts = {}
             providers = {row["access_provider"] for row in rows}
@@ -2386,6 +2394,7 @@ def create_app(db_path: str | None = None):
                             snapshot.accesses,
                             snapshot.access_relations,
                             models,
+                            capabilities=capabilities,
                         )
             differences = compare_functional_access_models(
                 active.functional_access_models,

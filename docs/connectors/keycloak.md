@@ -1,4 +1,4 @@
-# Keycloak V1 / V2 connector
+# Keycloak V1 / V2 / V3 connector
 
 The connector is read-only and uses the Keycloak Admin REST API. One EARE
 provider is bound to exactly one realm; changing the realm for an existing
@@ -62,3 +62,38 @@ OAuth token request.
 Unsupported: Organizations, fine-grained admin permissions as audited
 objects, automatic AD/LDAP identity reconciliation, provisioning, writes to
 Keycloak, and multiple realms in one EARE source.
+
+## Keycloak Authorization Services V3
+
+V3 keeps the native Authorization Services evidence separate from its cautious
+interpretation. The path is:
+
+`Keycloak Admin REST → JSONL artifact → Keycloak importer → generic EARE Target / Capability / FunctionalRight → Golden / Campaign / Review`.
+
+Resources become generic `Target` nodes (`Keycloak` service, client/application
+component, native resource identifier). Scopes remain native actions and become
+system Capabilities only when an explicit EARE mapping exists; otherwise EARE
+creates a stable custom Capability whose human label is the native scope name.
+The scope ID is retained as `native_permission`. Roles remain `Access` objects
+and assignments remain `Identity → Access`.
+
+The reviewer-facing model has three possible completeness states:
+
+- `complete`: every derived Resource + Scope right is statically demonstrated;
+- `partial`: some rights are demonstrated, while other permissions depend on
+  conditional or complex policy evaluation;
+- `not_defined`: no static FunctionalRight can safely be produced. Native
+  permissions, policies, relationships and source evidence remain available;
+  this does not mean that the access has no rights.
+
+Role names, resource names and scope names are never used as authorization
+rules. Native IDs are preferred for role-policy matching, so equal display
+names in separate clients do not collide. Positive single-role RBAC policies
+can be resolved; multi-policy, aggregate, group/user, client, time, JavaScript,
+attribute/context and unknown providers are preserved as evidence unless their
+relationship is mathematically unambiguous.
+
+The Review screen presents the generic `What this access allows` context before
+technical evidence. Technical details retain the client, permission, policy,
+resource, scopes and decision strategy so an administrator can trace every
+derived right without exposing internal IDs as business labels.

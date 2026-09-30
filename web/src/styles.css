@@ -1611,6 +1611,12 @@ html:has(.login-page), body:has(.login-page) { background: #081a30; }
 .campaign-close-prompt { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 0 0 16px; padding: 20px 24px; background: var(--success-soft); border: 1px solid var(--success-line); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); }
 .campaign-close-prompt h2 { margin: 3px 0 4px; }
 .campaign-close-prompt p { margin: 0; color: var(--text-secondary); }
+.drawer-functional-rights { font-size: 16px; line-height: 1.65; white-space: pre-line; }
+.functional-evidence { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+.functional-evidence summary { color: var(--text-secondary); cursor: pointer; font-weight: 600; }
+.functional-evidence dl { display: grid; grid-template-columns: minmax(120px, 0.7fr) minmax(0, 1.3fr); gap: 6px 12px; margin: 12px 0 0; }
+.functional-evidence dt { color: var(--text-faint); }
+.functional-evidence dd { margin: 0; overflow-wrap: anywhere; }
 /* A row of actions under a table or a sentence keeps its distance from it. */
 .table-wrap + .button-row,
 p + .button-row { margin-top: 14px; }
