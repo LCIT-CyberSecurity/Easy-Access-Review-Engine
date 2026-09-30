@@ -12,6 +12,8 @@ from access_review_engine.domain import (
     AccessAssignment,
     AccessRelation,
     Completeness,
+    ExpectedAccessModel,
+    FunctionalModelCompleteness,
     GoldenSourceVersion,
     Identity,
     ProviderType,
@@ -30,7 +32,11 @@ from access_review_engine.importers.openldap import (
     import_openldap_ldif,
     import_openldap_zip,
 )
-from access_review_engine.services import create_snapshot, reconcile_identities
+from access_review_engine.services import (
+    create_snapshot,
+    functional_right_key,
+    reconcile_identities,
+)
 from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
 from access_review_engine.storage import (
     Repository,
@@ -38,6 +44,7 @@ from access_review_engine.storage import (
     hydrate_access_relation,
     hydrate_assignment,
     hydrate_authentication_posture,
+    hydrate_functional_model,
     hydrate_identity,
     hydrate_provider,
 )
@@ -101,7 +108,8 @@ def persist_import_result(
         result.provider.created_at = existing_provider.created_at
 
     previous_import_scopes = [
-        row.get("scope", {}) for row in repo.list_payloads_by_provider("imports", result.provider.name)
+        row.get("scope", {})
+        for row in repo.list_payloads_by_provider("imports", result.provider.name)
     ]
     result.batch.scope = _provider_import_scope(
         result.provider.name,
@@ -121,6 +129,21 @@ def persist_import_result(
         repo.upsert("providers", result.provider)
         repo.insert_append_only("imports", result.batch)
 
+        known_capability_ids = {item.id for item in repo.list_capabilities()}
+        for capability in result.capabilities or []:
+            if capability.id not in known_capability_ids:
+                repo.save_capability(capability)
+                known_capability_ids.add(capability.id)
+        known_mappings = {
+            (item.provider, item.permission_identifier)
+            for item in repo.list_permission_capability_mappings()
+        }
+        for mapping in result.permission_capability_mappings or []:
+            mapping_key = (mapping.provider, mapping.permission_identifier)
+            if mapping_key not in known_mappings:
+                repo.save_permission_capability_mapping(mapping)
+                known_mappings.add(mapping_key)
+
         existing_identities = _load_identities(repo, result.provider.name)
         imported_identities = _dedupe_identities(result.identities)
         _reject_identity_rename_collisions(existing_identities, imported_identities)
@@ -139,9 +162,9 @@ def persist_import_result(
         _reject_access_rename_collisions(existing_accesses, result.accesses)
         access_renames = _detect_access_renames(existing_accesses, result.accesses)
         accesses = _reconcile_accesses(existing_accesses, result.accesses)
-        obsolete_access_ids = {
-            access.id for access in existing_accesses
-        } - {access.id for access in accesses}
+        obsolete_access_ids = {access.id for access in existing_accesses} - {
+            access.id for access in accesses
+        }
         repo.delete_ids("accesses", obsolete_access_ids)
         for access in accesses:
             repo.upsert("accesses", access)
@@ -203,13 +226,66 @@ def persist_import_result(
             authentication_posture=authentication_posture,
         )
         repo.insert_append_only("snapshots", snapshot)
+        observed_models = {
+            (model.access_provider, model.access_name): model
+            for model in (result.functional_access_models or [])
+        }
+        previous_models: dict[tuple[str, str], ExpectedAccessModel] = {}
+        if not authoritative:
+            for previous_snapshot in reversed(repo.list_payloads("snapshots")):
+                if previous_snapshot.get("id") == snapshot.id:
+                    continue
+                previous_rows = repo.load_snapshot_functional_models(str(previous_snapshot["id"]))
+                if previous_rows:
+                    previous_models = {
+                        (
+                            str(row["access_provider"]),
+                            str(row["access_name"]),
+                        ): hydrate_functional_model(row)
+                        for row in previous_rows
+                        if row.get("access_provider") == result.provider.name
+                    }
+                    if previous_models:
+                        break
+            for key in set(previous_models) | set(observed_models):
+                previous = previous_models.get(key)
+                incoming = observed_models.get(key)
+                rights = {
+                    functional_right_key(right): right
+                    for model in (previous, incoming)
+                    if model is not None
+                    for right in model.rights
+                }
+                observed_models[key] = ExpectedAccessModel(
+                    key[0],
+                    key[1],
+                    FunctionalModelCompleteness.PARTIAL
+                    if rights
+                    else FunctionalModelCompleteness.NOT_DEFINED,
+                    tuple(rights.values()),
+                )
+        evidence = {"collection_completeness": result.batch.completeness}
+        if result.provider.type == "keycloak":
+            evidence["authorization_services"] = result.batch.scope.get(
+                "authorization_services", {}
+            )
+            evidence["complex_permissions"] = result.batch.scope.get(
+                "authorization_complex_permissions", []
+            )
+        repo.save_snapshot_functional_models(
+            snapshot.id,
+            result.batch.id,
+            list(observed_models.values()),
+            authoritative=authoritative,
+            evidence=evidence,
+        )
     return snapshot
+
 
 def _is_authoritative_full(result: ImportResult) -> bool:
     scope = result.batch.scope or {}
-    if (
-        result.provider.type == ProviderType.OPENLDAP
-        and not _matches_openldap_authoritative_scope(scope)
+    if result.provider.type == ProviderType.OPENLDAP and not _matches_openldap_authoritative_scope(
+        scope
     ):
         return False
     if result.provider.type in {"google_workspace", "gcp_iam"}:
@@ -264,16 +340,22 @@ def _provider_import_scope(
     elif provider_type == "keycloak":
         _apply_keycloak_authoritative_scope(source, previous_scopes)
     elif provider_type in {"google_workspace", "gcp_iam"}:
-        if "authoritative_scope" not in source and source.get("connector_type") in {"google_workspace", "gcp_iam"}:
+        if "authoritative_scope" not in source and source.get("connector_type") in {
+            "google_workspace",
+            "gcp_iam",
+        }:
             source["authoritative_scope"] = {
-                key: value for key, value in source.items()
+                key: value
+                for key, value in source.items()
                 if key in {"connector_type", "customer_id", "scope", "surfaces"}
             }
         _apply_google_authoritative_scope(source, previous_scopes)
     return source
 
 
-def _apply_google_authoritative_scope(scope: dict[str, object], previous_scopes: Iterable[dict[str, object]]) -> None:
+def _apply_google_authoritative_scope(
+    scope: dict[str, object], previous_scopes: Iterable[dict[str, object]]
+) -> None:
     declared = scope.get("authoritative_scope")
     if not isinstance(declared, dict):
         scope["completeness"] = str(Completeness.SCOPED)
@@ -283,21 +365,34 @@ def _apply_google_authoritative_scope(scope: dict[str, object], previous_scopes:
         (
             item.get("authoritative_scope") or item
             for item in reversed(list(previous_scopes))
-            if isinstance(item, dict)
-            and _is_google_scope(item.get("authoritative_scope") or item)
+            if isinstance(item, dict) and _is_google_scope(item.get("authoritative_scope") or item)
         ),
         None,
     )
     scope["authoritative_scope"] = canonical
-    if isinstance(previous, dict) and _canonical_google_scope(previous) != canonical and scope.get("completeness") == str(Completeness.FULL):
+    if (
+        isinstance(previous, dict)
+        and _canonical_google_scope(previous) != canonical
+        and scope.get("completeness") == str(Completeness.FULL)
+    ):
         scope["completeness"] = str(Completeness.SCOPED)
 
 
 def _canonical_google_scope(scope: dict[str, object]) -> dict[str, object]:
     connector = str(scope.get("connector_type") or "").strip()
     if connector == "google_workspace":
-        return {"connector_type": connector, "customer_id": str(scope.get("customer_id") or "").strip(), "surfaces": sorted(str(item) for item in scope.get("surfaces", []) if str(item).strip())}
-    return {"connector_type": connector, "scope": str(scope.get("scope") or "").strip(), "surfaces": sorted(str(item) for item in scope.get("surfaces", []) if str(item).strip())}
+        return {
+            "connector_type": connector,
+            "customer_id": str(scope.get("customer_id") or "").strip(),
+            "surfaces": sorted(
+                str(item) for item in scope.get("surfaces", []) if str(item).strip()
+            ),
+        }
+    return {
+        "connector_type": connector,
+        "scope": str(scope.get("scope") or "").strip(),
+        "surfaces": sorted(str(item) for item in scope.get("surfaces", []) if str(item).strip()),
+    }
 
 
 def _is_google_scope(scope: object) -> bool:
@@ -307,14 +402,32 @@ def _is_google_scope(scope: object) -> bool:
     }
 
 
-def _apply_keycloak_authoritative_scope(scope: dict[str, object], previous_scopes: Iterable[dict[str, object]]) -> None:
+def _apply_keycloak_authoritative_scope(
+    scope: dict[str, object], previous_scopes: Iterable[dict[str, object]]
+) -> None:
     declared = scope.get("authoritative_scope")
     if not isinstance(declared, dict):
-        declared = {key: scope[key] for key in ("connector_type", "realm", "surfaces") if key in scope}
-    canonical = {"connector_type": "keycloak", "realm": str(declared.get("realm") or "").strip(), "surfaces": sorted(str(item) for item in declared.get("surfaces", []) if str(item).strip())}
+        declared = {
+            key: scope[key] for key in ("connector_type", "realm", "surfaces") if key in scope
+        }
+    canonical = {
+        "connector_type": "keycloak",
+        "realm": str(declared.get("realm") or "").strip(),
+        "surfaces": sorted(str(item) for item in declared.get("surfaces", []) if str(item).strip()),
+    }
     scope["authoritative_scope"] = canonical
-    previous = next((item.get("authoritative_scope") for item in reversed(list(previous_scopes)) if isinstance(item, dict) and isinstance(item.get("authoritative_scope"), dict)), None)
-    if isinstance(previous, dict) and str(previous.get("realm") or "").strip() != canonical["realm"]:
+    previous = next(
+        (
+            item.get("authoritative_scope")
+            for item in reversed(list(previous_scopes))
+            if isinstance(item, dict) and isinstance(item.get("authoritative_scope"), dict)
+        ),
+        None,
+    )
+    if (
+        isinstance(previous, dict)
+        and str(previous.get("realm") or "").strip() != canonical["realm"]
+    ):
         raise ValueError("KEYCLOAK_REALM_SCOPE_CHANGED")
 
 
@@ -342,20 +455,18 @@ def _configured_openldap_authoritative_scope(
         )
         if isinstance(previous_declared, dict):
             return _canonical_openldap_scope(previous_declared)
-    if (
-        scope.get("completeness") == str(Completeness.FULL)
-        and _supported_openldap_authoritative_candidate(scope)
-    ):
+    if scope.get("completeness") == str(
+        Completeness.FULL
+    ) and _supported_openldap_authoritative_candidate(scope):
         return _canonical_openldap_scope(scope)
     return None
 
 
 def _matches_openldap_authoritative_scope(scope: dict[str, object]) -> bool:
     expected = scope.get("authoritative_scope")
-    return (
-        isinstance(expected, dict)
-        and _canonical_openldap_scope(scope) == _canonical_openldap_scope(expected)
-    )
+    return isinstance(expected, dict) and _canonical_openldap_scope(
+        scope
+    ) == _canonical_openldap_scope(expected)
 
 
 def _supported_openldap_authoritative_candidate(scope: dict[str, object]) -> bool:
@@ -363,7 +474,8 @@ def _supported_openldap_authoritative_candidate(scope: dict[str, object]) -> boo
     return (
         bool(canonical["base_dn"])
         and canonical["search_scope"] == "sub"
-        and canonical["filter"] in {
+        and canonical["filter"]
+        in {
             "".join(DEFAULT_OPENLDAP_FILTER.split()).lower(),
             "(objectclass=*)",
             "objectclass=*",
@@ -545,8 +657,13 @@ def _reconcile_accesses(existing: Iterable[Access], imported: Iterable[Access]) 
             position = reconciled.index(previous)
             previous_native_id = _access_native_id(previous)
             old_key = (previous.provider, previous.name)
-            if previous_native_id is not None and native_id is not None and previous_native_id != native_id:
-                # Same logical name, new source object: keep the unique key and replace the source object.
+            if (
+                previous_native_id is not None
+                and native_id is not None
+                and previous_native_id != native_id
+            ):
+                # Same logical name and a new source object: retain the unique key
+                # while replacing the source object.
                 reconciled[position] = access
             elif old_key != key:
                 # Stable native identity with a renamed Access keeps its repository identity.
@@ -826,7 +943,9 @@ def _resolve_unresolved_assignments(repo: Repository) -> bool:
             repo.upsert("access_assignments", assignment)
             if previous_ref != (assignment.identity_provider, assignment.identity_identifier):
                 for payload in repo.list_payloads_by_provider("identities", previous_ref[0]):
-                    if payload.get("identifier") != previous_ref[1] or not payload.get("metadata", {}).get("unresolved"):
+                    if payload.get("identifier") != previous_ref[1] or not payload.get(
+                        "metadata", {}
+                    ).get("unresolved"):
                         continue
                     payload["status"] = "deleted"
                     payload.setdefault("metadata", {})["resolved_to"] = {
@@ -859,16 +978,16 @@ def _resolve_non_authoritative_unresolved_observations(repo: Repository) -> None
             repo.upsert("imports", row)
 
 
-def _assignment_resolver(repo: Repository) -> tuple[
+def _assignment_resolver(
+    repo: Repository,
+) -> tuple[
     dict[str, Identity],
     dict[str, Identity],
     dict[tuple[str, str], Identity],
     dict[tuple[str, str], Identity | None],
 ]:
     identities = _load_identities(repo)
-    provider_types = {
-        row["name"]: row["type"] for row in repo.list_payloads("providers")
-    }
+    provider_types = {row["name"]: row["type"] for row in repo.list_payloads("providers")}
     google_candidates: dict[tuple[str, str], dict[tuple[str, str], Identity]] = {}
     for identity in identities:
         if isinstance(identity.metadata, dict) and identity.metadata.get("unresolved"):
@@ -876,7 +995,9 @@ def _assignment_resolver(repo: Repository) -> tuple[
         if identity.type not in {"user_account", "group", "technical_account"}:
             continue
         values = [identity.identifier, identity.email or ""]
-        values.extend(identity.metadata.get("aliases", []) if isinstance(identity.metadata, dict) else [])
+        values.extend(
+            identity.metadata.get("aliases", []) if isinstance(identity.metadata, dict) else []
+        )
         for value in values:
             if value:
                 google_candidates.setdefault((identity.type, str(value).casefold()), {})[
@@ -911,7 +1032,9 @@ def _resolve_assignment(
 ) -> bool:
     if not assignment.origin.raw.get("unresolved"):
         return False
-    identities_by_sid, identities_by_ldap_dn, identities_by_provider_uid, identities_by_google = resolver
+    identities_by_sid, identities_by_ldap_dn, identities_by_provider_uid, identities_by_google = (
+        resolver
+    )
     identity = None
     sid = assignment.origin.raw.get("member_sid")
     if sid:
@@ -933,10 +1056,19 @@ def _resolve_assignment(
         kind, _, value = raw.partition(":")
         if raw.startswith("deleted:"):
             _, kind, value = raw.split(":", 2)
-        identity_type = {"user": "user_account", "group": "group", "domain": "group", "serviceAccount": "technical_account"}.get(kind)
+        identity_type = {
+            "user": "user_account",
+            "group": "group",
+            "domain": "group",
+            "serviceAccount": "technical_account",
+        }.get(kind)
         if identity_type and value:
             identity = identities_by_google.get((identity_type, value.casefold()))
-    if identity is not None and assignment.origin.raw.get("principal") and identity.provider == assignment.provider:
+    if (
+        identity is not None
+        and assignment.origin.raw.get("principal")
+        and identity.provider == assignment.provider
+    ):
         identity = None
     if identity is not None and (identity.provider, identity.identifier) == (
         assignment.identity_provider,
@@ -1034,7 +1166,10 @@ def _zip_source_type(path: Path) -> str | None:
             names = zf.namelist()
             if len(names) != len(set(names)):
                 raise ValueError("Archive contains duplicate filenames")
-            if len(names) > 16:
+            # Keycloak V2 has the ten V1 members plus five Authorization
+            # Services surfaces and its manifest/error files. Each importer
+            # applies its own tighter source-specific member allowlist.
+            if len(names) > 32:
                 raise ValueError("Archive contains too many files")
             if any(name.startswith("/") or ".." in Path(name).parts for name in names):
                 raise ValueError("Unsafe ZIP path detected")

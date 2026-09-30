@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 project=eare-keycloak-crashtest
 compose=(docker compose -p "$project" -f compose.yaml)
-api_url=${EARE_URL:-http://127.0.0.1:4175}
+api_url=${EARE_URL:-http://192.168.1.5:4175}
 realm=eare-crashtest
 
 json_value() {
@@ -95,8 +95,7 @@ for identifier in ("alice", "bob", "service-account-svc-backup"):
 
 for access_name in (
     "group:",
-    "accountant",
-    "invoice-read",
+    "ERP-Accountant",
     "Backup-Operator",
 ):
     baseline_names = {
@@ -168,14 +167,37 @@ test -n "$api_container"
 test -n "$ldap_container"
 docker exec -i "$ldap_container" ldapadd -x -H ldap://127.0.0.1:389 \
   -D cn=admin,dc=eare,dc=test -w "$EARE_LDAP_PASSWORD" \
-  -f /dev/stdin < seed/openldap/custom/seed.ldif >/dev/null
+  -f /dev/stdin < ../fixtures/universal-directory/seed.ldif >/dev/null
 until curl -fsS http://127.0.0.1:8180/realms/master >/dev/null; do sleep 2; done
 KEYCLOAK_CONTAINER="$keycloak_container" \
 KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
 EARE_KEYCLOAK_CLIENT_SECRET="$EARE_KEYCLOAK_CLIENT_SECRET" \
 EARE_LDAP_PASSWORD="$EARE_LDAP_PASSWORD" \
 ./seed-keycloak.sh
-until curl -fsS "$api_url/api/health" >/dev/null; do sleep 2; done
+ldap_users=$(docker exec "$ldap_container" ldapsearch -LLL -x -H ldap://127.0.0.1:389 \
+  -D cn=admin,dc=eare,dc=test -w "$EARE_LDAP_PASSWORD" \
+  -b ou=people,dc=eare,dc=test '(objectClass=inetOrgPerson)' uid)
+grep -q 'uid: alice' <<<"$ldap_users"
+grep -q 'uid: bob' <<<"$ldap_users"
+ldap_finance=$(docker exec "$ldap_container" ldapsearch -LLL -x -H ldap://127.0.0.1:389 \
+  -D cn=admin,dc=eare,dc=test -w "$EARE_LDAP_PASSWORD" \
+  -b cn=Finance,ou=groups,dc=eare,dc=test -s base member)
+grep -q 'member: uid=alice,' <<<"$ldap_finance"
+grep -q 'member: uid=bob,' <<<"$ldap_finance"
+kc() { docker exec "$keycloak_container" /opt/keycloak/bin/kcadm.sh "$@"; }
+user_id() { kc get users -r "$realm" -q username="$1" --fields id --format csv --noquotes | tail -1; }
+ldap_component=$(kc get components -r "$realm" -q name=ldap --fields id --format csv --noquotes | tail -1)
+for username in alice bob; do
+  uid=$(user_id "$username")
+  [[ -n "$uid" ]] || { echo "missing federated user $username" >&2; exit 1; }
+  kc get "users/$uid" -r "$realm" --fields federationLink --format csv --noquotes | grep -q "$ldap_component"
+  kc get "users/$uid/groups" -r "$realm" --fields name --format csv --noquotes | grep -q Finance
+done
+for attempt in {1..60}; do
+  if curl -fsS "$api_url/api/health" >/dev/null; then break; fi
+  if [[ "$attempt" == 60 ]]; then echo "EARE API did not become healthy" >&2; exit 1; fi
+  sleep 2
+done
 
 cookie=$(mktemp)
 trap 'rm -f "$cookie" authz-export.zip; rm -f .env.runtime' EXIT
@@ -211,7 +233,7 @@ start_sync() {
 start_sync
 docker exec "$api_container" python -c 'import json; from access_review_engine.collectors.keycloak import collect; collect({"provider":"keycloak-uat-direct","connection":{"base_url":"http://keycloak:8080","realm":"eare-crashtest","client_id":"eare-collector"},"credentials":{"client_secret_env":"EARE_KEYCLOAK_CLIENT_SECRET"},"collection":{"page_size":100,"timeout":30,"allow_partial":False}}, "/tmp/authz-export.zip")'
 docker cp "$api_container:/tmp/authz-export.zip" authz-export.zip >/dev/null
-python3 - authz-export.zip <<'PY'
+docker exec -i "$api_container" python - /tmp/authz-export.zip <<'PY'
 import json
 import sys
 from zipfile import ZipFile
@@ -232,6 +254,7 @@ with ZipFile(sys.argv[1]) as archive:
     if erp["status"] != "collected":
         raise SystemExit(f"ERP Authorization Services status: {erp['status']}")
     for filename in (
+        "authorization-resource-servers.jsonl",
         "authorization-resources.jsonl",
         "authorization-scopes.jsonl",
         "authorization-policies.jsonl",
@@ -250,35 +273,62 @@ curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > initial-snapshots.jso
 curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > initial-imports.json
 assert_latest_import initial-imports.json full
 curl -fsS -b "$cookie" "$api_url/api/identities/bob/accesses" > baseline-bob-effective.json
-assert_effective_roles baseline-bob-effective.json "accountant,invoice-read"
+assert_effective_roles baseline-bob-effective.json "ERP-Accountant"
 initial_snapshot_id="$sync_snapshot_id"
 test -n "$initial_snapshot_id"
+curl -fsS -b "$cookie" "$api_url/api/snapshots/$initial_snapshot_id/functional-access-models" > observed-models.json
+python3 - observed-models.json <<'PY'
+import json
+import sys
+items = json.load(open(sys.argv[1], encoding="utf-8"))["items"]
+model = next(item for item in items if item["access_display_name"] == "ERP-Accountant")
+rights = {(r["application"], r["resource"], r["capability"]) for r in model["rights"]}
+expected = {("ERP", "Invoices", "read"), ("ERP", "Invoices", "approve"), ("ERP", "Suppliers", "read")}
+if model["completeness"] != "complete" or not expected.issubset(rights):
+    raise SystemExit(f"ERP-Accountant functional model is incomplete: {model}")
+if ("ERP", "Payments", "approve") in rights:
+    raise SystemExit("complex ERP policy was flattened into a static functional right")
+for right in model["rights"]:
+    if not right.get("provenance") or not right.get("native_permission") or not right.get("source_evidence"):
+        raise SystemExit(f"functional right provenance is incomplete: {right}")
+PY
 
 curl -fsS -b "$cookie" -H 'Content-Type: application/json' \
   -d "{\"name\":\"keycloak-crashtest-golden\",\"display_name\":\"Keycloak CrashTest Golden\",\"snapshot_id\":\"$initial_snapshot_id\"}" \
   "$api_url/api/golden-sources/baseline" > golden.json
 golden_version_id=$(json_value golden.json 'version.id')
 test -n "$golden_version_id"
+test "$(json_value golden.json version.schema_version)" = 2
+curl -fsS -b "$cookie" "$api_url/api/golden-sources/keycloak-crashtest-golden/accesses" > golden-accesses.json
+grep -q 'Invoices' golden-accesses.json
+grep -q 'Suppliers' golden-accesses.json
 
-kc() { docker exec "$keycloak_container" /opt/keycloak/bin/kcadm.sh "$@"; }
-user_id() { kc get users -r "$realm" -q username="$1" --fields id --format csv --noquotes | tail -1; }
 client_id() { kc get clients -r "$realm" -q clientId="$1" --fields id --format csv --noquotes | tail -1; }
 
-charlie=$(user_id charlie)
+diane=$(user_id diane)
 bob=$(user_id bob)
 erp=$(client_id erp)
-erp_admin_role=$(kc get "clients/$erp/roles/admin" -r "$realm" --fields id --format csv --noquotes | tail -1)
+erp_admin_role=$(kc get "clients/$erp/roles/ERP-Admin" -r "$realm" --fields id --format csv --noquotes | tail -1)
 finance=$(kc get groups -r "$realm" -q search=Finance --fields id --format csv --noquotes | tail -1)
 finance_access="group:${finance}:member"
-kc add-roles -r "$realm" --uid "$charlie" --cid "$erp" --roleid "$erp_admin_role" >/dev/null
-kc delete "users/$bob/groups/$finance" -r "$realm" >/dev/null
+kc add-roles -r "$realm" --uid "$diane" --cid "$erp" --roleid "$erp_admin_role" >/dev/null
+docker exec -i "$ldap_container" ldapmodify -x -H ldap://127.0.0.1:389 \
+  -D cn=admin,dc=eare,dc=test -w "$EARE_LDAP_PASSWORD" >/dev/null <<'LDIF'
+dn: cn=Finance,ou=groups,dc=eare,dc=test
+changetype: modify
+delete: member
+member: uid=bob,ou=people,dc=eare,dc=test
+LDIF
+ldap_component=$(kc get components -r "$realm" -q name=ldap --fields id --format csv --noquotes | tail -1)
+ldap_mapper=$(kc get components -r "$realm" -q name=ldap-groups --fields id --format csv --noquotes | tail -1)
+kc create "user-storage/$ldap_component/mappers/$ldap_mapper/sync" -r "$realm" -q direction=fedToKeycloak >/dev/null
 
 start_sync
 curl -fsS -b "$cookie" "$api_url/api/snapshots?limit=10" > observed-snapshots.json
 curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > observed-imports.json
 assert_latest_import observed-imports.json full
 curl -fsS -b "$cookie" "$api_url/api/identities/bob/accesses" > drift-bob-effective.json
-assert_effective_roles_absent drift-bob-effective.json "accountant,invoice-read"
+assert_effective_roles_absent drift-bob-effective.json "ERP-Accountant"
 observed_snapshot_id="$sync_snapshot_id"
 test -n "$observed_snapshot_id" && test "$observed_snapshot_id" != "$initial_snapshot_id"
 
@@ -295,7 +345,7 @@ unexpected_id=$(python3 - campaign-detail.json "$erp_admin_role" <<'PY'
 import json
 import sys
 for item in json.load(open(sys.argv[1], encoding="utf-8"))["reviews"]:
-    if item.get("classification") == "unexpected" and item.get("identity_identifier") == "charlie" and item.get("access_name", "").endswith(sys.argv[2]):
+    if item.get("classification") == "unexpected" and item.get("identity_identifier") == "diane" and item.get("access_name", "").endswith(sys.argv[2]):
         print(item["id"])
         break
 PY
@@ -330,14 +380,14 @@ grep -q 'unexpected' report.json
 grep -q 'missing' report.json
 grep -q 'expected_and_observed' report.json
 
-# Exercise scoped collection handling by temporarily removing only user-read
-# permissions from the collector service account.
+# Exercise scoped collection handling while leaving all V1 surfaces readable.
+# Keycloak 25 requires view-authorization for the AuthZ collection endpoints.
 realm_management=$(client_id realm-management)
 collector_user=$(user_id service-account-eare-collector)
 kc remove-roles -r "$realm" --uid "$collector_user" --cclientid realm-management \
-  --rolename query-users --rolename view-users >/dev/null
+  --rolename view-authorization >/dev/null
 mapping_after_remove=$(kc get "users/$collector_user/role-mappings/clients/$realm_management" -r "$realm" --format json)
-! grep -q 'query-users' <<<"$mapping_after_remove"
+! grep -q 'view-authorization' <<<"$mapping_after_remove"
 partial_payload=$(python3 -c 'import json,sys; value=json.load(sys.stdin); value["collection"]["allow_partial"]=True; print(json.dumps(value,separators=(",",":")))' <<<"$source_payload")
 curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d "$partial_payload" \
   "$api_url/api/system/sources" >/dev/null
@@ -347,7 +397,7 @@ curl -fsS -b "$cookie" "$api_url/api/imports?limit=100" > partial-imports.json
 assert_latest_import partial-imports.json scoped
 assert_scoped_safety observed-snapshots.json partial-snapshots.json
 curl -fsS -b "$cookie" "$api_url/api/identities/bob/accesses" > partial-bob-effective.json
-assert_effective_roles_absent partial-bob-effective.json "accountant,invoice-read"
+assert_effective_roles_absent partial-bob-effective.json "ERP-Accountant"
 
 python3 - partial-imports.json <<'PY'
 import json
@@ -357,12 +407,31 @@ if latest["completeness"] != "scoped":
     raise SystemExit("partial import was not scoped")
 if not latest.get("scope", {}).get("collection_errors"):
     raise SystemExit("partial import did not expose collection_errors")
+authorization = latest.get("scope", {}).get("authorization_services", {})
+erp = next((row for row in authorization.values() if row.get("clientId") == "erp"), None)
+if erp is None or erp.get("status") != "error":
+    raise SystemExit(f"enabled ERP Authorization Services was not marked error: {erp}")
+PY
+
+curl -fsS -b "$cookie" \
+  "$api_url/api/snapshots/$sync_snapshot_id/functional-access-models" > partial-models.json
+python3 - observed-models.json partial-models.json <<'PY'
+import json
+import sys
+
+def rights(path):
+    items = json.load(open(path, encoding="utf-8"))["items"]
+    model = next(item for item in items if item["access_display_name"] == "ERP-Accountant")
+    return {(row["resource_id"], row["capability"]) for row in model["rights"]}
+
+if not rights(sys.argv[1]).issubset(rights(sys.argv[2])):
+    raise SystemExit("partial AuthZ collection removed previously observed functional rights")
 PY
 
 kc add-roles -r "$realm" --uid "$collector_user" --cclientid realm-management \
-  --rolename query-users --rolename view-users >/dev/null
+  --rolename view-authorization >/dev/null
 mapping_after_restore=$(kc get "users/$collector_user/role-mappings/clients/$realm_management" -r "$realm" --format json)
-grep -q 'query-users' <<<"$mapping_after_restore"
+grep -q 'view-authorization' <<<"$mapping_after_restore"
 curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d "$source_payload" \
   "$api_url/api/system/sources" >/dev/null
 start_sync
@@ -384,6 +453,21 @@ if docker exec "$api_container" sh -c \
   echo "Keycloak secret canary leaked into EARE data" >&2
   exit 1
 fi
+if grep -a -q EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK authz-export.zip; then
+  echo "Keycloak secret canary leaked into the artifact" >&2
+  exit 1
+fi
+if docker logs "$api_container" 2>&1 | grep -q EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK; then
+  echo "Keycloak secret canary leaked into API logs" >&2
+  exit 1
+fi
+docker exec "$api_container" python - <<'PY'
+import sqlite3
+
+connection = sqlite3.connect("/data/access-review.db")
+connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()
+connection.close()
+PY
 
 echo "PASS: Keycloak/EARE infrastructure, source configuration, Test Connection and initial sync"
 echo "PASS: Golden Source, drift, second sync, campaign, findings, decisions and reporting"

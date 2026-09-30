@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from access_review_engine.domain import (
     SYSTEM_CAPABILITIES,
@@ -16,6 +17,8 @@ from access_review_engine.domain import (
     AuthenticationPosture,
     Campaign,
     Decision,
+    ExpectedAccessModel,
+    FunctionalRight,
     GoldenSource,
     GoldenSourceVersion,
     Identity,
@@ -26,6 +29,9 @@ from access_review_engine.domain import (
     Resource,
     ReviewItem,
     Snapshot,
+    Target,
+    now_utc,
+    stable_checksum,
 )
 
 TABLES = {
@@ -44,6 +50,7 @@ TABLES = {
     "snapshot_resources",
     "snapshot_accesses",
     "snapshot_assignments",
+    "snapshot_functional_access_models",
     "campaigns",
     "review_items",
     "decisions",
@@ -76,7 +83,7 @@ class Repository:
         self._transaction_depth = 0
         self.init_schema()
 
-    def __enter__(self) -> "Repository":
+    def __enter__(self) -> Repository:
         return self
 
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> bool:
@@ -100,12 +107,19 @@ class Repository:
             )
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_providers_name ON providers(name)")
         cur.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_ref "
-            "ON identities(provider, name)"
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_ref ON identities(provider, name)"
         )
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_access_ref ON accesses(provider, name)")
-        cur.execute("CREATE INDEX IF NOT EXISTS ix_assignments_access ON access_assignments(provider, name)")
-        cur.execute("CREATE INDEX IF NOT EXISTS ix_assignments_identity ON access_assignments(provider)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS ix_assignments_access ON access_assignments(provider, name)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS ix_assignments_identity ON access_assignments(provider)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS ix_snapshot_functional_models_snapshot "
+            "ON snapshot_functional_access_models(json_extract(payload, '$.snapshot_id'))"
+        )
         cur.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_access_relation_ref "
             "ON access_relations(provider, name)"
@@ -206,8 +220,48 @@ class Repository:
         ]
 
     def get_payload(self, table: str, object_id: str) -> dict[str, Any] | None:
-        row = self.conn.execute(f"SELECT payload FROM {table} WHERE id = ?", (object_id,)).fetchone()
+        row = self.conn.execute(
+            f"SELECT payload FROM {table} WHERE id = ?", (object_id,)
+        ).fetchone()
         return None if row is None else json.loads(row["payload"])
+
+    def save_snapshot_functional_models(
+        self,
+        snapshot_id: str,
+        source_import_id: str,
+        models: list[ExpectedAccessModel],
+        *,
+        authoritative: bool,
+        evidence: dict[str, Any] | None = None,
+    ) -> None:
+        """Append observed models with their snapshot in the caller's transaction."""
+        for model in models:
+            self.insert_append_only(
+                "snapshot_functional_access_models",
+                {
+                    "id": stable_checksum((snapshot_id, model.access_provider, model.access_name)),
+                    "snapshot_id": snapshot_id,
+                    "source_import_id": source_import_id,
+                    "access_provider": model.access_provider,
+                    "access_name": model.access_name,
+                    "completeness": model.completeness,
+                    "rights": [asdict(right) for right in model.rights],
+                    "authoritative": authoritative,
+                    "evidence": evidence or {},
+                    "created_at": now_utc(),
+                },
+            )
+
+    def load_snapshot_functional_models(self, snapshot_id: str) -> list[dict[str, Any]]:
+        """Read only the immutable models attached to one snapshot."""
+        return [
+            json.loads(row["payload"])
+            for row in self.conn.execute(
+                "SELECT payload FROM snapshot_functional_access_models "
+                "WHERE json_extract(payload, '$.snapshot_id') = ? ORDER BY provider, id",
+                (snapshot_id,),
+            )
+        ]
 
     def find_by_name(self, table: str, name: str) -> dict[str, Any] | None:
         row = self.conn.execute(f"SELECT payload FROM {table} WHERE name = ?", (name,)).fetchone()
@@ -333,7 +387,9 @@ class Repository:
 
     def _row(self, obj: Any, payload: str) -> tuple[Any, ...]:
         data = json.loads(payload)
-        provider = data.get("provider") or data.get("access_provider") or data.get("identity_provider")
+        provider = (
+            data.get("provider") or data.get("access_provider") or data.get("identity_provider")
+        )
         name = data.get("name") or data.get("identifier") or data.get("golden_source_id")
         if isinstance(obj, Identity) and data.get("status") == IdentityStatus.DELETED:
             name = f"{name}#deleted:{data.get('native_id') or data['id']}"
@@ -374,14 +430,17 @@ def hydrate_access(data: dict[str, Any]) -> Access:
 
     owner = data.get("access_owner")
     return Access(
-        **(data | {
-            "control_object": ControlObject(**data["control_object"])
-            if data.get("control_object")
-            else None,
-            "permission": Permission(**data["permission"]) if data.get("permission") else None,
-            "target": Target(**data["target"]) if data.get("target") else None,
-            "access_owner": OwnerRef(**owner) if owner else None,
-        })
+        **(
+            data
+            | {
+                "control_object": ControlObject(**data["control_object"])
+                if data.get("control_object")
+                else None,
+                "permission": Permission(**data["permission"]) if data.get("permission") else None,
+                "target": Target(**data["target"]) if data.get("target") else None,
+                "access_owner": OwnerRef(**owner) if owner else None,
+            }
+        )
     )
 
 
@@ -401,6 +460,23 @@ def hydrate_authentication_posture(data: dict[str, Any] | None) -> Authenticatio
     if not data:
         return None
     return AuthenticationPosture(**data)
+
+
+def hydrate_functional_model(data: dict[str, Any]) -> ExpectedAccessModel:
+    return ExpectedAccessModel(
+        access_provider=str(data["access_provider"]),
+        access_name=str(data["access_name"]),
+        completeness=str(data["completeness"]),
+        rights=tuple(
+            FunctionalRight(
+                target=Target(**right["target"]),
+                capability_id=str(right["capability_id"]),
+                provenance=str(right.get("provenance", "mapped")),
+                native_permission=right.get("native_permission"),
+            )
+            for right in data.get("rights", [])
+        ),
+    )
 
 
 def hydrate_snapshot(data: dict[str, Any]) -> Snapshot:
@@ -503,8 +579,12 @@ def hydrate_review_item(data: dict[str, Any]) -> ReviewItem:
         **(
             data
             | {
-                "account_owner": OwnerRef(**data["account_owner"]) if data.get("account_owner") else None,
-                "access_owner": OwnerRef(**data["access_owner"]) if data.get("access_owner") else None,
+                "account_owner": OwnerRef(**data["account_owner"])
+                if data.get("account_owner")
+                else None,
+                "access_owner": OwnerRef(**data["access_owner"])
+                if data.get("access_owner")
+                else None,
                 "reviewer": OwnerRef(**data["reviewer"]) if data.get("reviewer") else None,
             }
         )

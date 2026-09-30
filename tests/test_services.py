@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from access_review_engine.domain import (
     Access,
     AccessAssignment,
@@ -34,16 +33,55 @@ from access_review_engine.services import (
     promote_snapshot,
     remediation_from_decisions,
 )
+from access_review_engine.web_use_cases import prepare_campaign_review
+
+
+def test_golden_owner_routes_campaign_without_mutating_snapshot() -> None:
+    identity = Identity("corp-ad", "bob", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)
+    observed_access = _access("erp")
+    golden_access = _access("erp", OwnerRef("corp-ad", "paul"))
+    snapshot = create_snapshot(
+        [Provider("corp-ad", "active_directory")],
+        [identity],
+        [],
+        [observed_access],
+        [AccessAssignment("corp-ad", "erp", "corp-ad", "bob", Origin("group", True, False))],
+        ["import-1"],
+    )
+    golden = create_golden_version(
+        create_golden_source("baseline"),
+        [GoldenSourceAssignment("corp-ad", "erp", "corp-ad", "bob")],
+        "manual_import",
+        expected_access_definitions=[golden_access],
+        schema_version=2,
+    )
+    campaign = Campaign("review", snapshot.id, allow_unresolved_reviewers=True)
+    prepared = prepare_campaign_review(campaign, snapshot, golden)
+    _, items = open_campaign(campaign, prepared.snapshot)
+    assert items[0].reviewer == OwnerRef("corp-ad", "paul")
+    assert observed_access.access_owner is None
 
 
 def test_comparison_findings_and_scope() -> None:
     owner = Identity("corp-ad", "owner", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)
-    disabled = Identity("corp-ad", "disabled.user", IdentityType.USER_ACCOUNT, IdentityStatus.DISABLED)
-    tech = Identity("corp-ad", "svc.no.owner", IdentityType.TECHNICAL_ACCOUNT, IdentityStatus.ACTIVE)
+    disabled = Identity(
+        "corp-ad", "disabled.user", IdentityType.USER_ACCOUNT, IdentityStatus.DISABLED
+    )
+    tech = Identity(
+        "corp-ad", "svc.no.owner", IdentityType.TECHNICAL_ACCOUNT, IdentityStatus.ACTIVE
+    )
     access = _access("finance-read", OwnerRef("corp-ad", "owner"))
     observed = [
-        AccessAssignment("corp-ad", "finance-read", "corp-ad", "disabled.user", Origin("group", True, False, "GG")),
-        AccessAssignment("corp-ad", "finance-read", "corp-ad", "svc.no.owner", Origin("group", True, False, "GG")),
+        AccessAssignment(
+            "corp-ad",
+            "finance-read",
+            "corp-ad",
+            "disabled.user",
+            Origin("group", True, False, "GG"),
+        ),
+        AccessAssignment(
+            "corp-ad", "finance-read", "corp-ad", "svc.no.owner", Origin("group", True, False, "GG")
+        ),
     ]
     golden = create_golden_version(
         create_golden_source("baseline"),
@@ -66,17 +104,27 @@ def test_comparison_findings_and_scope() -> None:
     )
 
     rows = {(r["access_name"], r["identity_identifier"]): r for r in snapshot.comparison_states}
-    assert rows[("finance-read", "disabled.user")]["classification"] == ComparisonState.EXPECTED_AND_OBSERVED
+    assert (
+        rows[("finance-read", "disabled.user")]["classification"]
+        == ComparisonState.EXPECTED_AND_OBSERVED
+    )
     assert Finding.DISABLED_WITH_ACCESS in rows[("finance-read", "disabled.user")]["findings"]
     assert rows[("finance-read", "svc.no.owner")]["classification"] == ComparisonState.UNEXPECTED
-    assert Finding.TECHNICAL_ACCOUNT_WITHOUT_OWNER in rows[("finance-read", "svc.no.owner")]["findings"]
-    assert rows[("hr-read", "missing.user")]["classification"] == ComparisonState.UNKNOWN_DUE_TO_SCOPE
+    assert (
+        Finding.TECHNICAL_ACCOUNT_WITHOUT_OWNER
+        in rows[("finance-read", "svc.no.owner")]["findings"]
+    )
+    assert (
+        rows[("hr-read", "missing.user")]["classification"] == ComparisonState.UNKNOWN_DUE_TO_SCOPE
+    )
 
 
 def test_no_reference_never_marks_unauthorized() -> None:
     identity = Identity("corp-ad", "jean.dupont", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)
     access = _access("crm")
-    assignment = AccessAssignment("corp-ad", "crm", "corp-ad", "jean.dupont", Origin("group", True, False))
+    assignment = AccessAssignment(
+        "corp-ad", "crm", "corp-ad", "jean.dupont", Origin("group", True, False)
+    )
     snapshot = create_snapshot([], [identity], [], [access], [assignment], ["import-1"])
     assert snapshot.comparison_states[0]["classification"] == ComparisonState.NO_REFERENCE
 
@@ -91,8 +139,12 @@ def test_multiple_origins_same_access_identity_are_preserved() -> None:
     identity = Identity("corp-ad", "jean.dupont", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)
     access = _access("finance")
     assignments = [
-        AccessAssignment("corp-ad", "finance", "corp-ad", "jean.dupont", Origin("direct", True, False, "direct")),
-        AccessAssignment("corp-ad", "finance", "corp-ad", "jean.dupont", Origin("group", True, False, "GG")),
+        AccessAssignment(
+            "corp-ad", "finance", "corp-ad", "jean.dupont", Origin("direct", True, False, "direct")
+        ),
+        AccessAssignment(
+            "corp-ad", "finance", "corp-ad", "jean.dupont", Origin("group", True, False, "GG")
+        ),
     ]
     snapshot = create_snapshot([], [identity], [], [access], assignments, ["import-1"])
     assert len(snapshot.access_assignments) == 2
@@ -121,7 +173,6 @@ def test_golden_source_promote_diff_and_campaign_rules() -> None:
     assert not v2.assignments
     assert golden_diff(v1, v2)[0]["status"] == "removed"
     assert remediation_from_decisions(items, [decision])[0].action == "revoke"
-
 
 
 def test_golden_diff_uses_stable_keys_and_rejects_stable_mismatch() -> None:
@@ -219,6 +270,7 @@ def test_create_golden_version_rejects_duplicate_stable_keys() -> None:
     else:
         raise AssertionError("duplicate stable Golden key was accepted")
 
+
 def test_campaign_rejects_pending_promotion_and_close() -> None:
     owner = OwnerRef("corp-ad", "owner")
     owner_identity = Identity("corp-ad", "owner", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)
@@ -239,14 +291,24 @@ def test_campaign_reviews_effective_children_instead_of_composite_parent() -> No
     child = _access("invoice-read", OwnerRef("local", "admin"))
     parent.provider = "keycloak"
     child.provider = "keycloak"
-    assignment = AccessAssignment("keycloak", parent.name, "keycloak", identity.identifier, Origin("role", True, False))
+    assignment = AccessAssignment(
+        "keycloak", parent.name, "keycloak", identity.identifier, Origin("role", True, False)
+    )
     relation = AccessRelation(
-        "keycloak", parent.name, "keycloak", child.name, AccessRelationType.GRANTS,
+        "keycloak",
+        parent.name,
+        "keycloak",
+        child.name,
+        AccessRelationType.GRANTS,
         Origin("role", False, True, raw={"composite": True}),
     )
-    snapshot = create_snapshot([], [identity], [], [parent, child], [assignment], ["import-1"], access_relations=[relation])
+    snapshot = create_snapshot(
+        [], [identity], [], [parent, child], [assignment], ["import-1"], access_relations=[relation]
+    )
 
-    _, items = open_campaign(Campaign("composite", snapshot.id, allow_unresolved_reviewers=True), snapshot)
+    _, items = open_campaign(
+        Campaign("composite", snapshot.id, allow_unresolved_reviewers=True), snapshot
+    )
 
     assert [item.access_name for item in items] == [child.name]
 

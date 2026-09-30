@@ -13,8 +13,8 @@ test lab.
 
 The collector requests users, groups and nested groups, memberships, clients,
 realm roles, client roles, user and group mappings, composite relations and
-service accounts. It emits the versioned Keycloak artifact consumed by the V0
-normalizer. Direct mappings are observations (`AccessAssignment`); group and
+service accounts. It emits the versioned Keycloak artifact consumed by the
+Keycloak normalizer. Direct mappings are observations (`AccessAssignment`); group and
 composite inheritance remains in `AccessRelation` and is calculated by EARE.
 
 ## Keycloak V1
@@ -53,8 +53,10 @@ failed required surface cannot produce a `full` artifact. Scoped artifacts are
 not authoritative for deletion/revocation.
 
 The collector account should be a dedicated confidential client with service
-account and only the realm-management view/query permissions needed by the
-enabled surfaces. No Admin API write operation is used; the only POST is the
+account and only the realm-management permissions needed by the enabled
+surfaces. On Keycloak 25, the lab grants `view-authorization` for the AuthZ
+objects and `manage-clients` for the resource-server settings endpoint. The
+collector still performs no Admin API write operation; the only POST is the
 OAuth token request.
 
 Unsupported: Organizations, fine-grained admin permissions as audited

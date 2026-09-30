@@ -13,8 +13,9 @@ from access_review_engine.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
-    AuthenticationPosture,
     AssignmentType,
+    AuthenticationPosture,
+    Capability,
     Completeness,
     ControlObject,
     Identity,
@@ -24,6 +25,7 @@ from access_review_engine.domain import (
     ImportStatus,
     Origin,
     Permission,
+    PermissionCapabilityMapping,
     Provider,
     ProviderType,
     stable_checksum,
@@ -31,7 +33,12 @@ from access_review_engine.domain import (
 from access_review_engine.source_mapping import map_access_business_context
 
 REQUIRED_AD_FILES = {"manifest.yaml", "users.csv", "groups.csv", "memberships.csv"}
-OPTIONAL_AD_FILES = {"service_accounts.csv", "computers.csv", "collection-errors.csv", "authentication-posture.json"}
+OPTIONAL_AD_FILES = {
+    "service_accounts.csv",
+    "computers.csv",
+    "collection-errors.csv",
+    "authentication-posture.json",
+}
 ALLOWED_AD_FILES = REQUIRED_AD_FILES | OPTIONAL_AD_FILES
 MAX_AD_ZIP_FILES = 16
 DEFAULT_AD_ARCHIVE_BYTES = 500_000_000
@@ -65,6 +72,8 @@ class ImportResult:
     access_relations: list[AccessRelation] | None = None
     authentication_posture: AuthenticationPosture | None = None
     functional_access_models: list[Any] | None = None
+    capabilities: list[Capability] | None = None
+    permission_capability_mappings: list[PermissionCapabilityMapping] | None = None
 
 
 def import_ad_zip(
@@ -109,14 +118,23 @@ def import_ad_zip(
             users = _read_csv(zf, "users.csv")
             groups = _read_csv(zf, "groups.csv")
             memberships = _read_csv(zf, "memberships.csv")
-            service_accounts = _read_csv(zf, "service_accounts.csv") if "service_accounts.csv" in unique_names else []
+            service_accounts = (
+                _read_csv(zf, "service_accounts.csv")
+                if "service_accounts.csv" in unique_names
+                else []
+            )
             computers = _read_csv(zf, "computers.csv") if "computers.csv" in unique_names else []
             collection_errors = (
-                _read_csv(zf, "collection-errors.csv") if "collection-errors.csv" in unique_names else []
+                _read_csv(zf, "collection-errors.csv")
+                if "collection-errors.csv" in unique_names
+                else []
             )
             authentication_posture = (
-                _read_authentication_posture(zf.read("authentication-posture.json"), str(provider_name))
-                if "authentication-posture.json" in unique_names else None
+                _read_authentication_posture(
+                    zf.read("authentication-posture.json"), str(provider_name)
+                )
+                if "authentication-posture.json" in unique_names
+                else None
             )
     except BadZipFile as exc:
         raise ValueError("Invalid ZIP archive") from exc
@@ -134,11 +152,23 @@ def import_ad_zip(
     identities.extend(_group_identity(provider.name, row) for row in groups)
 
     group_row_by_sid = {row.get("SID", ""): row for row in groups if row.get("SID")}
-    group_row_by_name = {row.get("SamAccountName", ""): row for row in groups if row.get("SamAccountName")}
-    identity_by_sid = {identity.native_id: identity for identity in identities if identity.native_id}
+    group_row_by_name = {
+        row.get("SamAccountName", ""): row for row in groups if row.get("SamAccountName")
+    }
+    identity_by_sid = {
+        identity.native_id: identity for identity in identities if identity.native_id
+    }
     global_by_sid = _global_identity_index([*(known_identities or []), *identities])
-    group_by_sid = {identity.native_id: identity for identity in identities if identity.type == IdentityType.GROUP}
-    group_by_name = {identity.identifier: identity for identity in identities if identity.type == IdentityType.GROUP}
+    group_by_sid = {
+        identity.native_id: identity
+        for identity in identities
+        if identity.type == IdentityType.GROUP
+    }
+    group_by_name = {
+        identity.identifier: identity
+        for identity in identities
+        if identity.type == IdentityType.GROUP
+    }
 
     accesses: list[Access] = []
     assignments: list[AccessAssignment] = []
@@ -168,14 +198,24 @@ def import_ad_zip(
             )
             accesses.append(_group_access(provider.name, group, group_row, source_config))
             seen_accesses.add(access_name)
-        member_provider, member_identifier, raw_flags = _resolve_member(provider.name, row, identity_by_sid, global_by_sid)
+        member_provider, member_identifier, raw_flags = _resolve_member(
+            provider.name, row, identity_by_sid, global_by_sid
+        )
         if not member_identifier:
             continue
         membership_type = row.get("MembershipType") or "direct"
-        assignment_type = "primary_group" if membership_type == "primary_group" else AssignmentType.GROUP
+        assignment_type = (
+            "primary_group" if membership_type == "primary_group" else AssignmentType.GROUP
+        )
         raw = {key: value for key, value in row.items() if value}
         raw.update(raw_flags)
-        fingerprint_key = (provider.name, access_name, member_provider, member_identifier, stable_checksum(raw))
+        fingerprint_key = (
+            provider.name,
+            access_name,
+            member_provider,
+            member_identifier,
+            stable_checksum(raw),
+        )
         if fingerprint_key in seen_assignments:
             continue
         seen_assignments.add(fingerprint_key)
@@ -196,7 +236,9 @@ def import_ad_zip(
         )
 
     _validate_collection_error_count(manifest, len(collection_errors))
-    completeness = _effective_completeness(manifest, collection_errors, unresolved_group_memberships)
+    completeness = _effective_completeness(
+        manifest, collection_errors, unresolved_group_memberships
+    )
     checksum = stable_checksum(
         {
             "manifest": manifest,
@@ -227,20 +269,37 @@ def import_ad_zip(
 
     batch.completed_at = now_utc()
     return ImportResult(
-        batch, provider, identities, accesses, assignments, authentication_posture=authentication_posture
+        batch,
+        provider,
+        identities,
+        accesses,
+        assignments,
+        authentication_posture=authentication_posture,
     )
 
 
 _FORBIDDEN_AUTH_KEYS = {
-    "userpassword", "unicodepwd", "supplementalcredentials", "ntpwdhistory",
-    "passwordhash", "token", "accesstoken", "refreshtoken", "apikey",
-    "privatekey", "clientsecret", "credential", "credentials",
+    "userpassword",
+    "unicodepwd",
+    "supplementalcredentials",
+    "ntpwdhistory",
+    "passwordhash",
+    "token",
+    "accesstoken",
+    "refreshtoken",
+    "apikey",
+    "privatekey",
+    "clientsecret",
+    "credential",
+    "credentials",
 }
+
 
 def _read_authentication_posture(raw: bytes, expected_provider: str) -> AuthenticationPosture:
     payload = json.loads(raw.decode("utf-8-sig"))
     if not isinstance(payload, dict):
         raise ValueError("authentication-posture.json must contain an object")
+
     def clean(value: object) -> object:
         if isinstance(value, dict):
             result = {}
@@ -252,6 +311,7 @@ def _read_authentication_posture(raw: bytes, expected_provider: str) -> Authenti
         if isinstance(value, list):
             return [clean(item) for item in value]
         return value
+
     safe = clean(payload)
     provider = safe.get("provider")
     if not isinstance(provider, str) or not provider:
@@ -277,7 +337,9 @@ def _validate_zip_members(
 ) -> None:
     total = 0
     for info in zf.infolist():
-        member_limit = max_memberships_file_bytes if info.filename == "memberships.csv" else max_file_bytes
+        member_limit = (
+            max_memberships_file_bytes if info.filename == "memberships.csv" else max_file_bytes
+        )
         if info.file_size > member_limit:
             raise ValueError("Archive member exceeds configured maximum size")
         total += info.file_size
@@ -315,7 +377,11 @@ def _effective_completeness(
         values.append(str(Completeness.UNKNOWN))
     if unresolved_group_memberships:
         values.append(str(Completeness.UNKNOWN))
-    precedence = {str(Completeness.UNKNOWN): 0, str(Completeness.SCOPED): 1, str(Completeness.FULL): 2}
+    precedence = {
+        str(Completeness.UNKNOWN): 0,
+        str(Completeness.SCOPED): 1,
+        str(Completeness.FULL): 2,
+    }
     return min(values, key=lambda value: precedence.get(value, 0))
 
 
@@ -415,7 +481,9 @@ def _service_account_identity(provider: str, row: dict[str, str]) -> Identity:
         description=row.get("Description") or None,
         metadata={
             "principal_kind": "managed_service_account",
-            "managed_service_account_type": MANAGED_SERVICE_ACCOUNT_CLASSES.get(object_class, "msa"),
+            "managed_service_account_type": MANAGED_SERVICE_ACCOUNT_CLASSES.get(
+                object_class, "msa"
+            ),
             "distinguished_name": row.get("DistinguishedName") or None,
             "service_principal_name": row.get("ServicePrincipalName") or None,
             "primary_group_id": row.get("PrimaryGroupID") or None,
@@ -536,7 +604,9 @@ def _global_identity_index(identities: list[Identity]) -> dict[str, Identity | N
 
 def _classify_user(row: dict[str, str], rules: dict[str, object]) -> str:
     shared = rules.get("shared_account") if isinstance(rules.get("shared_account"), dict) else {}
-    technical = rules.get("technical_account") if isinstance(rules.get("technical_account"), dict) else {}
+    technical = (
+        rules.get("technical_account") if isinstance(rules.get("technical_account"), dict) else {}
+    )
     sam = row.get("SamAccountName", "")
     dn = row.get("DistinguishedName", "")
     if _matches_account_rules(row, sam, dn, shared):
@@ -550,10 +620,14 @@ def _matches_account_rules(row: dict[str, str], sam: str, dn: str, rules: object
     if not isinstance(rules, dict):
         return False
     prefixes = rules.get("samaccountname_prefixes", [])
-    if isinstance(prefixes, list) and any(sam.lower().startswith(str(prefix).lower()) for prefix in prefixes):
+    if isinstance(prefixes, list) and any(
+        sam.lower().startswith(str(prefix).lower()) for prefix in prefixes
+    ):
         return True
     dn_contains = rules.get("dn_contains", [])
-    if isinstance(dn_contains, list) and any(str(part).lower() in dn.lower() for part in dn_contains):
+    if isinstance(dn_contains, list) and any(
+        str(part).lower() in dn.lower() for part in dn_contains
+    ):
         return True
     return bool(rules.get("has_service_principal_name") and row.get("ServicePrincipalName"))
 
@@ -572,7 +646,11 @@ def _is_past_datetime(value: str | None) -> bool:
     normalized = value.strip()
     for fmt in (None, "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%m/%d/%Y %I:%M:%S %p"):
         try:
-            dt = datetime.fromisoformat(normalized.replace("Z", "+00:00")) if fmt is None else datetime.strptime(normalized, fmt)
+            dt = (
+                datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+                if fmt is None
+                else datetime.strptime(normalized, fmt)
+            )
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=UTC)
             return dt < datetime.now(UTC)

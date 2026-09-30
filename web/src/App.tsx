@@ -335,6 +335,23 @@ export const reviewDerivedAccessText = (row: Row): string =>
   Array.isArray(row.derived_accesses)
     ? row.derived_accesses.map((item: Row) => s(item.display_name, s(item.name))).filter(Boolean).join(", ")
     : "";
+export const functionalRightsText = (row: Row): string => {
+  const rights = arr(row.functional_rights);
+  if (!rights.length) return s(row.functional_completeness) === "partial"
+    ? "Functional model partial — dynamic/complex policy not statically resolved"
+    : "Functional permissions not exposed by Keycloak";
+  const grouped = new Map<string, Set<string>>();
+  for (const right of rights) {
+    const resource = s(right.resource, "Resource not named");
+    const actions = grouped.get(resource) ?? new Set<string>();
+    actions.add(s(right.capability_label, s(right.capability)));
+    grouped.set(resource, actions);
+  }
+  const result = [...grouped].map(([resource, actions]) => `${resource} · ${[...actions].join(", ")}`).join("; ");
+  return s(row.functional_completeness) === "partial" ? `${result}; functional model partial` : result;
+};
+export const filterSystemReviews = (rows: Row[], mode: "business" | "system" | "all"): Row[] =>
+  rows.filter((row) => mode === "all" || Boolean(row.system_access) === (mode === "system"));
 const contextField = (context: unknown, field: string): Row => {
   const root = (context ?? {}) as Row;
   return ((((root.fields ?? {}) as Row)[field] ?? {}) as Row);
@@ -3768,6 +3785,7 @@ function CampaignDetail() {
     },
     [confirmAction, setConfirmAction] = useState<string | null>(null),
     [reviewView, setReviewView] = useState("pending"),
+    [accessFilter, setAccessFilter] = useState<"business" | "system" | "all">("business"),
     toast = useToast(),
     m = useMutation({
       mutationFn: (a: string) => postJson("campaigns/" + id + "/" + a),
@@ -3878,11 +3896,12 @@ function CampaignDetail() {
     unexpectedCount = reviews.filter((row) => row.classification === "unexpected").length,
     revokedCount = reviews.filter((row) => row.decision === "revoke").length,
     decided = reviews.filter((row) => Boolean(row.decision)),
-    visibleReviews = reviewView === "pending"
+    statusReviews = reviewView === "pending"
       ? reviews.filter((row) => !row.decision)
       : reviewView === "decided"
         ? decided
         : reviews,
+    visibleReviews = filterSystemReviews(statusReviews, accessFilter),
     status = s(c?.status),
     pending = Number(c?.pending ?? reviews.filter((r) => !r.decision).length),
     ctas = campaignCtas(status, pending);
@@ -4112,18 +4131,25 @@ function CampaignDetail() {
                 {[["pending", `To review (${pending})`], ["all", `All (${reviews.length})`], ["decided", `Processed (${decided.length})`]].map(([value, label]) => (
                   <button className={reviewView === value ? "button primary" : "button subtle"} key={value} onClick={() => setReviewView(value)}>{label}</button>
                 ))}
+                {([[
+                  "business",
+                  "Business",
+                ], ["system", "System"], ["all", "All access"]] as const).map(([value, label]) => (
+                  <button className={accessFilter === value ? "button primary" : "button subtle"} key={value} onClick={() => setAccessFilter(value)}>{label}</button>
+                ))}
               </div>
             </div>
           <Table
-          cols={["Identity", "Access / permission", "Target", "Group/access owner", "Reviewer", "Status", "Action"]}
+          cols={["Identity", "Application", "Access / role", "What it allows", "Via / origin", "Reviewer", "Status", "Action"]}
           rows={visibleReviews.map((r) => [
             <button className="link-button" onClick={() => setSelected(r)}>
               {s(r.identity_display_name, s(r.identity_identifier))}
               <Sub>{s(r.identity_provider)}</Sub>
             </button>,
-            <div><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>{reviewPermissionText(r.permission)}</Sub></div>,
-            <div><strong>{reviewTargetText(r).label}</strong>{reviewDerivedAccessText(r) ? <Sub>Includes: {reviewDerivedAccessText(r)}</Sub> : null}{reviewTargetText(r).technical ? <Sub>Technical: {reviewTargetText(r).technical}</Sub> : null}</div>,
-            <div>{ownerText(r.access_owner ?? r.account_owner)}<Sub>{r.access_owner || r.account_owner ? "Owner of the access/group" : "No owner resolved"}</Sub></div>,
+            <span>{s(r.application, "Keycloak")}</span>,
+            <div><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>{reviewPermissionText(r.permission)}</Sub>{arr(r.grants).length ? <Sub>Grants: {arr(r.grants).map((grant) => s(grant.display_name)).join(", ")}</Sub> : null}</div>,
+            <span>{functionalRightsText(r)}</span>,
+            <span>{s(r.via, r.direct ? "Direct assignment" : "Inherited")}</span>,
             <div>{ownerText(r.reviewer)}<Sub>{r.reviewer ? "Responsible reviewer" : "No reviewer assigned"}</Sub></div>,
             <Status v={r.decision ?? "pending"} />,
             r.decision ? <span className="muted">Decision recorded</span> : <RowDecision item={r} done={() => q.refetch()} />,
@@ -4271,7 +4297,14 @@ function GoldenFunctionalSuggestions({ rows, onEdit }: { rows: Row[]; onEdit: (r
         return (
           <article key={`${s(row.access_provider)}:${s(row.access_name)}`}>
             <strong>{s(row.access_display_name, s(row.access_name))}</strong>
-            <small>{s(row.access_provider)} · {row.business_context_conflicts ? "Conflict requires review" : "No context conflict"}</small>
+            <small>Application: {s(row.application, "Not identified")} · Source: {s(row.access_provider)} · Completeness: {s(row.observed_completeness, "not_defined")}</small>
+            <p>Observed from source: {functionalRightsText({ functional_rights: row.observed_functional_rights, functional_completeness: row.observed_completeness })}</p>
+            <p>Golden expected: {functionalRightsText({ functional_rights: arr(row.effective_functional_rights).map((right) => {
+              const resource = ((right.target as Row)?.resource ?? {}) as Row;
+              return { resource: s(resource.display_name, s(resource.identifier)), capability: right.capability_id };
+            }) })}</p>
+            {row.functional_authorization_changed ? <p className="form-error">Functional authorization changed</p> : null}
+            {row.business_context_conflicts ? <p className="form-error">Business context conflict requires review</p> : null}
             <BusinessContext context={{ fields: row.business_context_fields }} />
             {arr(row.direct_functional_rights).length ? <p className="muted">Direct expected rights: {arr(row.direct_functional_rights).map((right) => s(right.capability_id)).join(", ")}</p> : null}
             {arr(row.effective_functional_rights).length > arr(row.direct_functional_rights).length ? <p className="muted">Inherited / effective rights: {arr(row.effective_functional_rights).map((right) => `${s(right.capability_id)} · ${s(right.granted_by)}`).join(", ")}</p> : null}
@@ -4912,24 +4945,22 @@ function Golden() {
                 className="golden-access-table"
                 cols={[
                   "Access right",
-                  "What it allows",
                   "Application",
-                  "Permission",
-                  "Owner",
+                  "What it allows",
                   "Source",
                   "Expected holders",
                   "Comment",
+                  "Owner",
                   "Actions",
                 ]}
                 fields={[
                   "access_display_name",
-                  "access_description",
                   "access_target",
-                  "access_permission",
-                  "access_owner",
+                  "access_description",
                   "access_provider",
                   "expected_identities",
                   "access_comment",
+                  "access_owner",
                   null,
                 ]}
                 sorting={sorting}
@@ -4947,19 +4978,7 @@ function Golden() {
                   const permissionOptions = capabilityOptions.length
                     ? capabilityOptions.map((option) => s(option.id, s(option.label)))
                     : DEFAULT_GOLDEN_CAPABILITIES;
-                  const target = (r.access_target ?? {}) as Row;
-                  const service = (target.service ?? {}) as Row;
-                  const technicalPermission = s(r.access_permission, "").toLowerCase();
-                  const accessLabel = s(r.access_display_name, s(r.access_name));
-                  const application = contextValue(r.business_context, "application", "manual") || contextValue(r.business_context, "application", "source") || keycloakApplicationText(r);
-                  const businessPermission = contextValue(r.business_context, "business_permission", "manual") || contextValue(r.business_context, "business_permission", "source") || "";
-                  const permissionLabel = businessPermission
-                    ? joinPermissions(splitPermissions(businessPermission))
-                    : technicalPermission === "role"
-                      ? `Role assignment · ${accessLabel}`
-                      : technicalPermission === "member"
-                        ? `Group membership · ${accessLabel}`
-                        : "Not provided";
+                  const application = contextValue(r.business_context, "application", "manual") || s(r.application) || contextValue(r.business_context, "application", "source") || keycloakApplicationText({ ...r, target: r.access_target });
                   const owner = contextValue(r.business_context, "owner", "manual") || contextValue(r.business_context, "owner", "source") || s(r.access_owner, "");
                   const ownerDisplay = owner ? ownerDisplayLabel(owner, arr(ownerOptions.data?.items), s(r.access_provider)) : "";
                   const applicationCell = editing
@@ -4972,23 +4991,21 @@ function Golden() {
                       /><small>Observed: {contextValue(r.business_context, "application", "source") || "—"}</small></div>
                     : <button className="link-button" title={splitPermissions(application).join(", ")} onClick={() => requestAccessEdit(r)}>{applicationSummary(application) || "—"}</button>;
                   const permissionCell = editing
-                    ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>Observed: {contextValue(r.business_context, "business_permission", "source") || "—"}</small></div>
-                    : <button className="link-button" onClick={() => requestAccessEdit(r)}>{permissionLabel}</button>;
+                    ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>{functionalRightsText(r)}</small></div>
+                    : <span>{functionalRightsText(r)}</span>;
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.access_display_name, s(r.access_name))}
                     </button>,
-                    <Sub>
-                      {describeAccess({
-                        description: r.access_description,
-                        permission: r.access_permission,
-                        target: r.access_target,
-                        access_display_name: r.access_display_name,
-                        access_name: r.access_name,
-                      })}
-                    </Sub>,
                     applicationCell,
                     permissionCell,
+                    s(r.access_provider),
+                    <button className="link-button" onClick={() => setHolders(r)}>
+                      {s(r.expected_identities, "0")} people
+                    </button>,
+                    <button className="link-button" onClick={() => { setAccessCommenting(r); setAccessComment(s(r.access_comment, "")); }}>
+                      {s(r.access_comment, "Add comment")}
+                    </button>,
                     editing ? (
                       <div className="inline-edit-stack"><select value={s(editingAccess?.owner, "")} onChange={(event) => setEditingAccess({ ...editingAccess, owner: event.target.value })} disabled={saveAccessRow.isPending}>
                         <option value="">Select owner</option>
@@ -4999,13 +5016,6 @@ function Golden() {
                         })}
                       </select><small>Observed: {contextValue(r.business_context, "owner", "source") || "—"}</small></div>
                     ) : <button className="link-button" onClick={() => requestAccessEdit(r)}>{ownerDisplay || "—"}</button>,
-                    s(r.access_provider),
-                    <button className="link-button" onClick={() => setHolders(r)}>
-                      {s(r.expected_identities, "0")} people
-                    </button>,
-                    <button className="link-button" onClick={() => { setAccessCommenting(r); setAccessComment(s(r.access_comment, "")); }}>
-                      {s(r.access_comment, "Add comment")}
-                    </button>,
                     <div className="row-actions golden-access-actions">
                       {editing ? <>
                         {accessEditIsDirty(editingAccess) ? <span className="unsaved-indicator">Unsaved changes</span> : null}

@@ -72,20 +72,30 @@ userPassword: grace-password
 dn: cn=Finance,ou=groups,dc=eare,dc=test
 objectClass: groupOfNames
 cn: Finance
+description: Finance business users
 member: uid=alice,ou=people,dc=eare,dc=test
 member: uid=bob,ou=people,dc=eare,dc=test
 
 dn: cn=Sales,ou=groups,dc=eare,dc=test
 objectClass: groupOfNames
 cn: Sales
+description: CRM sales users
 member: uid=charlie,ou=people,dc=eare,dc=test
 
 dn: cn=Support,ou=groups,dc=eare,dc=test
 objectClass: groupOfNames
 cn: Support
+description: CRM support users
 member: uid=diane,ou=people,dc=eare,dc=test
 
 dn: cn=IT,ou=groups,dc=eare,dc=test
 objectClass: groupOfNames
 cn: IT
+description: IT administrators
 member: uid=eric,ou=people,dc=eare,dc=test
+
+dn: cn=Auditors,ou=groups,dc=eare,dc=test
+objectClass: groupOfNames
+cn: Auditors
+description: Read-only audit users
+member: uid=frank,ou=people,dc=eare,dc=test

@@ -1,40 +1,59 @@
 """Read-only projections used by the WebUI."""
+
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import asdict
-from typing import Any, Iterable
+from typing import Any
 
 from access_review_engine.access_context import access_enrichment, business_context_view
 from access_review_engine.domain import GoldenSourceAssignment
+from access_review_engine.functional_context import functional_context
 from access_review_engine.golden_annotations import annotation_for_assignment
 from access_review_engine.services import calculate_effective_accesses
-from access_review_engine.storage import Repository, hydrate_golden_version, hydrate_snapshot
+from access_review_engine.storage import (
+    Repository,
+    hydrate_functional_model,
+    hydrate_golden_version,
+    hydrate_snapshot,
+)
 
 
 def _latest_decisions(rows: Iterable[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
-    for row in sorted(rows, key=lambda item: (str(item.get("created_at", "")), str(item.get("id", "")))):
+    for row in sorted(
+        rows, key=lambda item: (str(item.get("created_at", "")), str(item.get("id", "")))
+    ):
         review_id = str(row.get("review_item_id", ""))
         if review_id:
             latest[review_id] = row
     return latest
 
 
-def _display_names(repo: Repository) -> tuple[dict[tuple[str, str], str], dict[tuple[str, str], str]]:
+def _display_names(
+    repo: Repository,
+) -> tuple[dict[tuple[str, str], str], dict[tuple[str, str], str]]:
     """Map identities and accesses to the names people recognise.
 
     Collectors identify objects by a stable native id, so screens must not show that id.
     """
     identities = {
-        (str(row.get("provider")), str(row.get("identifier"))): str(row.get("display_name") or row.get("identifier") or "")
+        (str(row.get("provider")), str(row.get("identifier"))): str(
+            row.get("display_name") or row.get("identifier") or ""
+        )
         for row in repo.list_payloads("identities")
     }
     accesses = {
-        (str(row.get("provider")), str(row.get("name"))): str(row.get("display_name") or row.get("name") or "")
+        (str(row.get("provider")), str(row.get("name"))): str(
+            row.get("display_name") or row.get("name") or ""
+        )
         for row in repo.list_payloads("accesses")
     }
     identities_by_reference = {
-        (str(row.get("provider")), str(row.get("identifier") or row.get("native_id") or row.get("id"))): str(row.get("display_name") or row.get("identifier") or "")
+        (
+            str(row.get("provider")),
+            str(row.get("identifier") or row.get("native_id") or row.get("id")),
+        ): str(row.get("display_name") or row.get("identifier") or "")
         for row in repo.list_payloads("identities")
         if str(row.get("type") or "").casefold() == "group"
     }
@@ -46,16 +65,39 @@ def _display_names(repo: Repository) -> tuple[dict[tuple[str, str], str], dict[t
     return identities, accesses
 
 
-def review_item_view(repo: Repository, row: dict[str, Any], *, latest_decisions: dict[str, dict[str, Any]] | None = None, names: tuple[dict[tuple[str, str], str], dict[tuple[str, str], str]] | None = None) -> dict[str, Any]:
-    decision = (latest_decisions if latest_decisions is not None else _latest_decisions(repo.list_payloads("decisions"))).get(str(row.get("id")))
+def review_item_view(
+    repo: Repository,
+    row: dict[str, Any],
+    *,
+    latest_decisions: dict[str, dict[str, Any]] | None = None,
+    names: tuple[dict[tuple[str, str], str], dict[tuple[str, str], str]] | None = None,
+) -> dict[str, Any]:
+    decision = (
+        latest_decisions
+        if latest_decisions is not None
+        else _latest_decisions(repo.list_payloads("decisions"))
+    ).get(str(row.get("id")))
     identity_names, access_names = names if names is not None else _display_names(repo)
     result = dict(row)
     identity_key = (str(row.get("identity_provider")), str(row.get("identity_identifier")))
     access_key = (str(row.get("access_provider")), str(row.get("access_name")))
-    result["identity_display_name"] = identity_names.get(identity_key) or row.get("identity_identifier")
+    result["identity_display_name"] = identity_names.get(identity_key) or row.get(
+        "identity_identifier"
+    )
     result["access_display_name"] = access_names.get(access_key) or row.get("access_name")
-    result["identity"] = {"provider": row.get("identity_provider"), "identifier": row.get("identity_identifier"), "status": row.get("identity_status"), "display_name": result["identity_display_name"]}
-    result["access"] = {"provider": row.get("access_provider"), "name": row.get("access_name"), "display_name": result["access_display_name"], "permission": row.get("permission"), "target": row.get("target")}
+    result["identity"] = {
+        "provider": row.get("identity_provider"),
+        "identifier": row.get("identity_identifier"),
+        "status": row.get("identity_status"),
+        "display_name": result["identity_display_name"],
+    }
+    result["access"] = {
+        "provider": row.get("access_provider"),
+        "name": row.get("access_name"),
+        "display_name": result["access_display_name"],
+        "permission": row.get("permission"),
+        "target": row.get("target"),
+    }
     result["latest_decision"] = decision
     result["decision_state"] = "decided" if decision else "pending"
     result["decision"] = decision.get("value") if decision else None
@@ -78,17 +120,18 @@ def _latest_snapshot_for_provider(
     )
 
 
-def _add_review_provenance(
-    repo: Repository, rows: list[dict[str, Any]]
-) -> None:
+def _add_review_provenance(repo: Repository, rows: list[dict[str, Any]]) -> None:
     """Project immutable campaign-snapshot paths without changing ReviewItem persistence."""
     campaigns = {str(row.get("id")): row for row in repo.list_payloads("campaigns")}
     snapshots = {str(row.get("id")): row for row in repo.list_payloads("snapshots")}
     evaluations: dict[str, dict[tuple[str, str, str, str], dict[str, Any]]] = {}
     snapshot_accesses: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
     snapshot_identities: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    snapshot_contexts: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
     access_display_names = {
-        (str(item.get("provider")), str(item.get("name"))): str(item.get("display_name") or item.get("name") or "")
+        (str(item.get("provider")), str(item.get("name"))): str(
+            item.get("display_name") or item.get("name") or ""
+        )
         for item in repo.list_payloads("accesses")
     }
     golden_versions = {
@@ -98,10 +141,15 @@ def _add_review_provenance(
     campaign_access_contexts = repo.list_payloads("campaign_access_contexts")
     contexts_by_access_id = {
         (str(item.get("campaign_id")), str(item.get("access_id"))): item
-        for item in campaign_access_contexts if item.get("access_id")
+        for item in campaign_access_contexts
+        if item.get("access_id")
     }
     contexts_by_reference = {
-        (str(item.get("campaign_id")), str(item.get("access_provider")), str(item.get("access_name"))): item
+        (
+            str(item.get("campaign_id")),
+            str(item.get("access_provider")),
+            str(item.get("access_name")),
+        ): item
         for item in campaign_access_contexts
     }
     for row in rows:
@@ -110,7 +158,17 @@ def _add_review_provenance(
         payload = snapshots.get(snapshot_id)
         if not payload or snapshot_id in evaluations:
             continue
-        required = {"providers", "identities", "resources", "accesses", "access_assignments", "source_import_ids", "id", "created_at", "checksum"}
+        required = {
+            "providers",
+            "identities",
+            "resources",
+            "accesses",
+            "access_assignments",
+            "source_import_ids",
+            "id",
+            "created_at",
+            "checksum",
+        }
         if not required.issubset(payload):
             evaluations[snapshot_id] = {}
             continue
@@ -125,15 +183,22 @@ def _add_review_provenance(
             for identity in payload.get("identities", [])
             if isinstance(identity, dict)
         }
+        models = [
+            hydrate_functional_model(item)
+            for item in repo.load_snapshot_functional_models(snapshot_id)
+        ]
+        snapshot_contexts[snapshot_id] = {
+            (access.provider, access.name): functional_context(
+                access, snapshot.accesses, snapshot.access_relations, models
+            )
+            for access in snapshot.accesses
+        }
         effective = calculate_effective_accesses(
             snapshot.access_assignments,
             snapshot.access_relations,
             snapshot.accesses,
         ).effective_accesses
-        evaluations[snapshot_id] = {
-            item.key(): asdict(item)
-            for item in effective
-        }
+        evaluations[snapshot_id] = {item.key(): asdict(item) for item in effective}
     for row in rows:
         campaign = campaigns.get(str(row.get("campaign_id")), {})
         snapshot_id = str(campaign.get("snapshot_id") or "")
@@ -149,31 +214,50 @@ def _add_review_provenance(
         derived_accesses: list[dict[str, Any]] = []
         if effective:
             for effective_key, candidate in evaluations.get(snapshot_id, {}).items():
-                if (
-                    candidate.get("direct")
-                    or effective_key[:2] != key[:2]
-                    or effective_key == key
-                ):
+                if candidate.get("direct") or effective_key[:2] != key[:2] or effective_key == key:
                     continue
-                child = snapshot_accesses.get((effective_key[2], effective_key[3]), {})
-                derived_accesses.append({
-                    "provider": effective_key[2],
-                    "name": effective_key[3],
-                    "display_name": child.get("display_name") or access_display_names.get((effective_key[2], effective_key[3])) or effective_key[3],
-                    "permission": child.get("permission"),
-                    "target": child.get("target"),
-                })
-        row["derived_accesses"] = sorted(derived_accesses, key=lambda item: str(item["display_name"]).casefold())
+                child = snapshot_accesses.get(snapshot_id, {}).get(
+                    (effective_key[2], effective_key[3]), {}
+                )
+                derived_accesses.append(
+                    {
+                        "provider": effective_key[2],
+                        "name": effective_key[3],
+                        "display_name": child.get("display_name")
+                        or access_display_names.get((effective_key[2], effective_key[3]))
+                        or effective_key[3],
+                        "permission": child.get("permission"),
+                        "target": child.get("target"),
+                    }
+                )
+        row["derived_accesses"] = sorted(
+            derived_accesses, key=lambda item: str(item["display_name"]).casefold()
+        )
         observed_access = snapshot_accesses.get(snapshot_id, {}).get((key[2], key[3]), {})
+        row.update(snapshot_contexts.get(snapshot_id, {}).get((key[2], key[3]), {}))
+        paths = row.get("paths", [])
+        if paths:
+            chain = paths[0].get("access_chain", [])
+            if len(chain) > 1:
+                origin = chain[0]
+                origin_key = (str(origin.get("provider")), str(origin.get("name")))
+                row["via"] = (
+                    snapshot_accesses.get(snapshot_id, {}).get(origin_key, {}).get("display_name")
+                    or access_display_names.get(origin_key)
+                    or origin_key[1]
+                )
+        row.setdefault("via", "Direct assignment" if row.get("direct") else "")
         access_id = str(observed_access.get("id") or "")
         campaign_id = str(row.get("campaign_id") or "")
         frozen_context = contexts_by_access_id.get((campaign_id, access_id)) if access_id else None
         if frozen_context is None:
-            frozen_context = contexts_by_reference.get((
-                campaign_id,
-                str(row.get("access_provider") or ""),
-                str(row.get("access_name") or ""),
-            ))
+            frozen_context = contexts_by_reference.get(
+                (
+                    campaign_id,
+                    str(row.get("access_provider") or ""),
+                    str(row.get("access_name") or ""),
+                )
+            )
         row["business_context"] = business_context_view(
             observed_access,
             frozen_context.get("manual_context") if frozen_context else None,
@@ -186,7 +270,11 @@ def _add_review_provenance(
             else permission
         )
         row["technical_permission"] = technical_permission
-        row["technical_grant"] = "Group membership" if str(technical_permission or "").casefold() == "member" else "Direct assignment"
+        row["technical_grant"] = (
+            "Group membership"
+            if str(technical_permission or "").casefold() == "member"
+            else "Direct assignment"
+        )
         version = golden_versions.get(str(campaign.get("golden_source_version_id") or ""))
         if version is not None:
             observed_identity = snapshot_identities.get(snapshot_id, {}).get((key[0], key[1]), {})
@@ -205,7 +293,8 @@ def _add_review_provenance(
             )
             assignment = next(
                 (
-                    item for item in version.assignments
+                    item
+                    for item in version.assignments
                     if item.stable_key() is not None
                     and candidate.stable_key() is not None
                     and item.stable_key() == candidate.stable_key()
@@ -213,14 +302,17 @@ def _add_review_provenance(
                 None,
             ) or next(
                 (
-                    item for item in version.assignments
+                    item
+                    for item in version.assignments
                     if item.key() == candidate.key()
                     and item.stable_key() is None
                     and candidate.stable_key() is None
                 ),
                 None,
             )
-            annotation = annotation_for_assignment(repo, version.id, assignment) if assignment else None
+            annotation = (
+                annotation_for_assignment(repo, version.id, assignment) if assignment else None
+            )
             row["golden_comment"] = annotation.get("comment") if annotation else None
 
 
@@ -242,7 +334,9 @@ def cell_text(value: Any) -> str:
     return str(value)
 
 
-def apply_field_filters(rows: list[dict[str, Any]], filters: dict[str, str] | None) -> list[dict[str, Any]]:
+def apply_field_filters(
+    rows: list[dict[str, Any]], filters: dict[str, str] | None
+) -> list[dict[str, Any]]:
     """Keep the rows whose column contains what was typed under that column."""
     for field, value in (filters or {}).items():
         needle = str(value).strip().casefold()
@@ -263,10 +357,22 @@ def _sort_key(row: dict[str, Any], field: str) -> tuple[float, str]:
 def sorted_rows(rows: list[dict[str, Any]], field: str, order: str | None) -> list[dict[str, Any]]:
     """Sort on a column, always keeping rows without a value at the end."""
     if field == "source_group":
+
         def group_key(row: dict[str, Any]) -> tuple[str, str, str]:
             source = str(row.get("provider") or row.get("access_provider") or "").casefold()
-            group = str(row.get("access_display_name") or row.get("access_name") or row.get("service") or row.get("access") or "").casefold()
-            identity = str(row.get("identity_display_name") or row.get("identity_identifier") or row.get("identity") or "").casefold()
+            group = str(
+                row.get("access_display_name")
+                or row.get("access_name")
+                or row.get("service")
+                or row.get("access")
+                or ""
+            ).casefold()
+            identity = str(
+                row.get("identity_display_name")
+                or row.get("identity_identifier")
+                or row.get("identity")
+                or ""
+            ).casefold()
             return source, group, identity
 
         return sorted(rows, key=group_key, reverse=str(order).lower() == "desc")
@@ -302,7 +408,24 @@ def remediation_status(row: dict[str, Any]) -> str:
     return str(row.get("status") or "pending")
 
 
-def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search: str | None = None, status: str | None = None, provider: str | None = None, reviewer_username: str | None = None, allowed_providers: set[str] | None = None, allowed_campaign_ids: set[str] | None = None, campaign: str | None = None, sort: str | None = None, order: str | None = None, classification: str | None = None, filters: dict[str, str] | None = None) -> dict[str, object]:
+def projected_rows(
+    db_path: str,
+    table: str,
+    *,
+    limit: int,
+    offset: int,
+    search: str | None = None,
+    status: str | None = None,
+    provider: str | None = None,
+    reviewer_username: str | None = None,
+    allowed_providers: set[str] | None = None,
+    allowed_campaign_ids: set[str] | None = None,
+    campaign: str | None = None,
+    sort: str | None = None,
+    order: str | None = None,
+    classification: str | None = None,
+    filters: dict[str, str] | None = None,
+) -> dict[str, object]:
     with Repository(db_path) as repo:
         raw = repo.list_payloads(table)
         if allowed_campaign_ids is not None:
@@ -314,58 +437,102 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                     for item in repo.list_payloads("review_items")
                 }
                 raw = [
-                    item for item in raw
-                    if (str(item.get("campaign_id")) if table == "review_items" else campaign_by_review.get(str(item.get("review_item_id")), "")) in allowed_campaign_ids
+                    item
+                    for item in raw
+                    if (
+                        str(item.get("campaign_id"))
+                        if table == "review_items"
+                        else campaign_by_review.get(str(item.get("review_item_id")), "")
+                    )
+                    in allowed_campaign_ids
                 ]
             elif table == "decisions":
                 campaign_by_review = {
                     str(item.get("id")): str(item.get("campaign_id"))
                     for item in repo.list_payloads("review_items")
                 }
-                raw = [item for item in raw if campaign_by_review.get(str(item.get("review_item_id")), "") in allowed_campaign_ids]
+                raw = [
+                    item
+                    for item in raw
+                    if campaign_by_review.get(str(item.get("review_item_id")), "")
+                    in allowed_campaign_ids
+                ]
         if allowed_providers is not None:
             if table in {"providers", "identities", "accesses"}:
                 key = "name" if table == "providers" else "provider"
                 raw = [item for item in raw if str(item.get(key) or "") in allowed_providers]
             elif table == "assignments":
-                raw = [item for item in raw if str(item.get("provider") or "") in allowed_providers and str(item.get("identity_provider") or "") in allowed_providers]
+                raw = [
+                    item
+                    for item in raw
+                    if str(item.get("provider") or "") in allowed_providers
+                    and str(item.get("identity_provider") or "") in allowed_providers
+                ]
             elif table == "imports":
                 raw = [item for item in raw if str(item.get("provider") or "") in allowed_providers]
             elif table == "snapshots":
                 scoped = []
                 for item in raw:
-                    providers = [provider for provider in item.get("providers", []) if str(provider.get("name") or "") in allowed_providers]
+                    providers = [
+                        provider
+                        for provider in item.get("providers", [])
+                        if str(provider.get("name") or "") in allowed_providers
+                    ]
                     if not providers:
                         continue
-                    scoped.append({
-                        "id": item.get("id"),
-                        "created_at": item.get("created_at"),
-                        "immutable": item.get("immutable", True),
-                        "checksum": item.get("checksum"),
-                        "providers": providers,
-                        "provider_count": len(providers),
-                        "assignment_count": sum(
-                            1 for assignment in item.get("access_assignments", [])
-                            if str(assignment.get("provider") or "") in allowed_providers
-                            and str(assignment.get("identity_provider") or "") in allowed_providers
-                        ),
-                    })
+                    scoped.append(
+                        {
+                            "id": item.get("id"),
+                            "created_at": item.get("created_at"),
+                            "immutable": item.get("immutable", True),
+                            "checksum": item.get("checksum"),
+                            "providers": providers,
+                            "provider_count": len(providers),
+                            "assignment_count": sum(
+                                1
+                                for assignment in item.get("access_assignments", [])
+                                if str(assignment.get("provider") or "") in allowed_providers
+                                and str(assignment.get("identity_provider") or "")
+                                in allowed_providers
+                            ),
+                        }
+                    )
                 raw = scoped
             elif table == "golden_source_versions":
                 # The campaign setup screen only needs version metadata. Never project a
                 # partially scoped assignment list as if it were a complete Golden version.
                 raw = [
-                    {key: item.get(key) for key in ("id", "golden_source_id", "version", "source_type", "created_at", "source_snapshot_id", "source_campaign_id")}
+                    {
+                        key: item.get(key)
+                        for key in (
+                            "id",
+                            "golden_source_id",
+                            "version",
+                            "source_type",
+                            "created_at",
+                            "source_snapshot_id",
+                            "source_campaign_id",
+                        )
+                    }
                     for item in raw
                 ]
         latest_decisions = _latest_decisions(repo.list_payloads("decisions"))
         names = _display_names(repo) if table in {"review_items", "remediation_actions"} else None
-        rows = [review_item_view(repo, item, latest_decisions=latest_decisions, names=names) for item in raw] if table == "review_items" else [dict(item) for item in raw]
+        rows = (
+            [
+                review_item_view(repo, item, latest_decisions=latest_decisions, names=names)
+                for item in raw
+            ]
+            if table == "review_items"
+            else [dict(item) for item in raw]
+        )
         if table == "remediation_actions":
             for row in rows:
                 row["status"] = remediation_status(row)
         if table == "remediation_actions":
-            review_items = {str(item.get("id")): item for item in repo.list_payloads("review_items")}
+            review_items = {
+                str(item.get("id")): item for item in repo.list_payloads("review_items")
+            }
             campaign_names = {
                 str(item.get("id")): str(item.get("display_name") or item.get("name") or "")
                 for item in repo.list_payloads("campaigns")
@@ -373,12 +540,33 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             identity_names, access_names = names or ({}, {})
             for row in rows:
                 review_item = review_items.get(str(row.get("review_item_id")), {})
-                for key in ("campaign_id", "identity_identifier", "identity_provider", "access_name", "access_provider", "target", "permission", "description"):
+                for key in (
+                    "campaign_id",
+                    "identity_identifier",
+                    "identity_provider",
+                    "access_name",
+                    "access_provider",
+                    "target",
+                    "permission",
+                    "description",
+                ):
                     if key not in row and key in review_item:
                         row[key] = review_item[key]
-                row.setdefault("identity_display_name", identity_names.get((str(row.get("identity_provider")), str(row.get("identity_identifier")))) or row.get("identity_identifier"))
-                row.setdefault("access_display_name", access_names.get((str(row.get("access_provider")), str(row.get("access_name")))) or row.get("access_name"))
-                row["campaign_name"] = campaign_names.get(str(row.get("campaign_id"))) or row.get("campaign_id")
+                row.setdefault(
+                    "identity_display_name",
+                    identity_names.get(
+                        (str(row.get("identity_provider")), str(row.get("identity_identifier")))
+                    )
+                    or row.get("identity_identifier"),
+                )
+                row.setdefault(
+                    "access_display_name",
+                    access_names.get((str(row.get("access_provider")), str(row.get("access_name"))))
+                    or row.get("access_name"),
+                )
+                row["campaign_name"] = campaign_names.get(str(row.get("campaign_id"))) or row.get(
+                    "campaign_id"
+                )
                 decision = latest_decisions.get(str(row.get("review_item_id")))
                 if decision is not None:
                     row["decision"] = decision.get("value")
@@ -389,14 +577,22 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             # application/target context captured when the campaign was opened.
             _add_review_provenance(repo, rows)
         if table == "review_items" and reviewer_username is not None:
-            rows = [row for row in rows if (row.get("reviewer") or {}).get("identity") == reviewer_username]
+            rows = [
+                row
+                for row in rows
+                if (row.get("reviewer") or {}).get("identity") == reviewer_username
+            ]
         if campaign and table == "review_items":
             rows = [row for row in rows if row.get("campaign_id") == campaign]
         if table == "review_items":
             _add_review_provenance(repo, rows)
         if campaign and table == "remediation_actions":
             items = {str(item.get("id")): item for item in repo.list_payloads("review_items")}
-            rows = [row for row in rows if items.get(str(row.get("review_item_id")), {}).get("campaign_id") == campaign]
+            rows = [
+                row
+                for row in rows
+                if items.get(str(row.get("review_item_id")), {}).get("campaign_id") == campaign
+            ]
         if table == "remediation_actions" and allowed_providers is not None:
             rows = [row for row in rows if row.get("access_provider") in allowed_providers]
         if table == "providers":
@@ -405,26 +601,63 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             for row in rows:
                 name = str(row.get("name", ""))
                 snapshot = _latest_snapshot_for_provider(snapshots, name)
-                observed = snapshot and next((item for item in snapshot.get("providers", []) if item.get("name") == name), None)
+                observed = snapshot and next(
+                    (item for item in snapshot.get("providers", []) if item.get("name") == name),
+                    None,
+                )
                 if observed is None:
                     job = jobs.get(name)
                     health = "failed" if job and job.get("status") == "FAILED" else "never_synced"
-                    row.update({"health": health, "identity_count": 0, "group_count": 0, "access_count": 0, "last_sync": None, "latest_snapshot": None, "latest_job": job})
+                    row.update(
+                        {
+                            "health": health,
+                            "identity_count": 0,
+                            "group_count": 0,
+                            "access_count": 0,
+                            "last_sync": None,
+                            "latest_snapshot": None,
+                            "latest_job": job,
+                        }
+                    )
                     continue
-                identities = [item for item in snapshot.get("identities", []) if item.get("provider") == name]
-                groups = [item for item in identities if str(item.get("type", "")).lower() == "group"]
-                assignments = [item for item in snapshot.get("access_assignments", []) if item.get("provider") == name]
-                accesses = [item for item in snapshot.get("accesses", []) if item.get("provider") == name]
+                identities = [
+                    item for item in snapshot.get("identities", []) if item.get("provider") == name
+                ]
+                groups = [
+                    item for item in identities if str(item.get("type", "")).lower() == "group"
+                ]
+                assignments = [
+                    item
+                    for item in snapshot.get("access_assignments", [])
+                    if item.get("provider") == name
+                ]
+                accesses = [
+                    item for item in snapshot.get("accesses", []) if item.get("provider") == name
+                ]
                 job = jobs.get(name)
                 job_is_newer = bool(
                     job
                     and str(job.get("created_at") or "") >= str(snapshot.get("created_at") or "")
                 )
                 health = "failed" if job_is_newer and job.get("status") == "FAILED" else "healthy"
-                access_count = len(accesses) if "accesses" in snapshot else len({
-                    (item.get("provider"), item.get("access_name")) for item in assignments
-                })
-                row.update({"health": health, "identity_count": len(identities), "group_count": len(groups), "access_count": access_count, "last_sync": snapshot.get("created_at"), "latest_snapshot": snapshot.get("id"), "latest_job": job})
+                access_count = (
+                    len(accesses)
+                    if "accesses" in snapshot
+                    else len(
+                        {(item.get("provider"), item.get("access_name")) for item in assignments}
+                    )
+                )
+                row.update(
+                    {
+                        "health": health,
+                        "identity_count": len(identities),
+                        "group_count": len(groups),
+                        "access_count": access_count,
+                        "last_sync": snapshot.get("created_at"),
+                        "latest_snapshot": snapshot.get("id"),
+                        "latest_job": job,
+                    }
+                )
         if table == "snapshots":
             for row in rows:
                 if "assignment_count" not in row:
@@ -438,8 +671,15 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                 key = (row.get("provider"), row.get("identifier"))
                 snapshot = _latest_snapshot_for_provider(snapshots, str(row.get("provider") or ""))
                 current_states = snapshot.get("comparison_states", []) if snapshot else []
-                row["access_count"] = sum(a.get("identity_provider") == key[0] and a.get("identity_identifier") == key[1] for a in assignments)
-                row["finding_count"] = sum(len(finding.get("findings", [])) for finding in current_states if (finding.get("identity_provider"), finding.get("identity_identifier")) == key)
+                row["access_count"] = sum(
+                    a.get("identity_provider") == key[0] and a.get("identity_identifier") == key[1]
+                    for a in assignments
+                )
+                row["finding_count"] = sum(
+                    len(finding.get("findings", []))
+                    for finding in current_states
+                    if (finding.get("identity_provider"), finding.get("identity_identifier")) == key
+                )
         if table == "accesses":
             assignments = repo.list_payloads("access_assignments")
             snapshots = repo.list_payloads("snapshots")
@@ -448,16 +688,17 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                 snapshot = _latest_snapshot_for_provider(snapshots, str(row.get("provider") or ""))
                 current_states = snapshot.get("comparison_states", []) if snapshot else []
                 row["assignment_count"] = sum(
-                    assignment.get("provider") == key[0]
-                    and assignment.get("access_name") == key[1]
+                    assignment.get("provider") == key[0] and assignment.get("access_name") == key[1]
                     for assignment in assignments
                 )
-                row["holder_count"] = len({
-                    (assignment.get("identity_provider"), assignment.get("identity_identifier"))
-                    for assignment in assignments
-                    if assignment.get("provider") == key[0]
-                    and assignment.get("access_name") == key[1]
-                })
+                row["holder_count"] = len(
+                    {
+                        (assignment.get("identity_provider"), assignment.get("identity_identifier"))
+                        for assignment in assignments
+                        if assignment.get("provider") == key[0]
+                        and assignment.get("access_name") == key[1]
+                    }
+                )
                 row["finding_count"] = sum(
                     len(state.get("findings", []))
                     for state in current_states
@@ -474,7 +715,11 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                     else permission
                 )
                 row["technical_permission"] = technical_permission
-                row["technical_grant"] = "Group membership" if str(technical_permission or "").casefold() == "member" else "Direct assignment"
+                row["technical_grant"] = (
+                    "Group membership"
+                    if str(technical_permission or "").casefold() == "member"
+                    else "Direct assignment"
+                )
         if table == "campaigns":
             items = repo.list_payloads("review_items")
             actions = repo.list_payloads("remediation_actions")
@@ -485,13 +730,25 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
                 decided = sum(decision is not None for decision in decisions)
                 row["review_items"] = len(scoped)
                 row["pending"] = len(scoped) - decided
-                row["approved"] = sum(bool(decision and decision.get("value") == "approve") for decision in decisions)
-                row["revoked"] = sum(bool(decision and decision.get("value") == "revoke") for decision in decisions)
-                row["not_applicable"] = sum(bool(decision and decision.get("value") == "not_applicable") for decision in decisions)
+                row["approved"] = sum(
+                    bool(decision and decision.get("value") == "approve") for decision in decisions
+                )
+                row["revoked"] = sum(
+                    bool(decision and decision.get("value") == "revoke") for decision in decisions
+                )
+                row["not_applicable"] = sum(
+                    bool(decision and decision.get("value") == "not_applicable")
+                    for decision in decisions
+                )
                 row["progress"] = round(decided / len(scoped) * 100, 1) if scoped else 0
                 row["findings_count"] = sum(len(item.get("findings", [])) for item in scoped)
-                row["reviewer_resolution"] = {"resolved": sum(item.get("reviewer") is not None for item in scoped), "unresolved": sum(item.get("reviewer") is None for item in scoped)}
-                row["remediation_actions"] = sum(str(item.get("id")) in action_review_ids for item in scoped)
+                row["reviewer_resolution"] = {
+                    "resolved": sum(item.get("reviewer") is not None for item in scoped),
+                    "unresolved": sum(item.get("reviewer") is None for item in scoped),
+                }
+                row["remediation_actions"] = sum(
+                    str(item.get("id")) in action_review_ids for item in scoped
+                )
         if search:
             needle = search.casefold()
             rows = [row for row in rows if needle in _search_text(row).casefold()]
@@ -499,9 +756,20 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             if table == "review_items" and status == "pending":
                 rows = [row for row in rows if row.get("latest_decision") is None]
             else:
-                rows = [row for row in rows if row.get("status") == status or row.get("decision") == status or (table == "identities" and row.get("type") == status)]
+                rows = [
+                    row
+                    for row in rows
+                    if row.get("status") == status
+                    or row.get("decision") == status
+                    or (table == "identities" and row.get("type") == status)
+                ]
         if provider:
-            rows = [row for row in rows if provider in {row.get("provider"), row.get("identity_provider"), row.get("access_provider")}]
+            rows = [
+                row
+                for row in rows
+                if provider
+                in {row.get("provider"), row.get("identity_provider"), row.get("access_provider")}
+            ]
         if classification:
             rows = [row for row in rows if row.get("classification") == classification]
         rows = apply_field_filters(rows, filters)
@@ -524,13 +792,28 @@ def projected_rows(db_path: str, table: str, *, limit: int, offset: int, search:
             rows.sort(
                 key=lambda item: (
                     item.get("latest_decision") is not None,
-                    str(item.get("identity_display_name") or item.get("identity_identifier") or "").casefold(),
-                    str(item.get("access_display_name") or item.get("access_name") or "").casefold(),
+                    str(
+                        item.get("identity_display_name") or item.get("identity_identifier") or ""
+                    ).casefold(),
+                    str(
+                        item.get("access_display_name") or item.get("access_name") or ""
+                    ).casefold(),
                 )
             )
         else:
-            rows.sort(key=lambda item: str(item.get("identifier", item.get("name", item.get("id", "")))).casefold())
-        result: dict[str, object] = {"items": rows[offset:offset + limit], "total": len(rows), "limit": limit, "offset": offset, "sort": sort or "", "order": (order or "asc").lower()}
+            rows.sort(
+                key=lambda item: str(
+                    item.get("identifier", item.get("name", item.get("id", "")))
+                ).casefold()
+            )
+        result: dict[str, object] = {
+            "items": rows[offset : offset + limit],
+            "total": len(rows),
+            "limit": limit,
+            "offset": offset,
+            "sort": sort or "",
+            "order": (order or "asc").lower(),
+        }
         if summary is not None:
             result["summary"] = summary
         return result
@@ -574,7 +857,9 @@ def findings_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
         "total": len(rows),
         "unexpected": sum(row.get("classification") == "unexpected" for row in rows),
         "missing": sum(row.get("classification") == "missing" for row in rows),
-        "sources": len({str(row.get("access_provider")) for row in rows if row.get("access_provider")}),
+        "sources": len(
+            {str(row.get("access_provider")) for row in rows if row.get("access_provider")}
+        ),
     }
 
 
@@ -589,6 +874,7 @@ def _search_text(value: Any) -> str:
 def _latest_provider_jobs(db_path: str) -> dict[str, dict[str, Any]]:
     """Return the latest web job for each provider without creating job rows."""
     import sqlite3
+
     try:
         with sqlite3.connect(db_path, timeout=30) as conn:
             rows = conn.execute(
@@ -606,5 +892,10 @@ def _latest_provider_jobs(db_path: str) -> dict[str, dict[str, Any]]:
             except (TypeError, ValueError, AttributeError):
                 provider = None
         if provider:
-            latest[str(provider)] = {"id": job_id, "status": status, "progress": progress, "created_at": created_at}
+            latest[str(provider)] = {
+                "id": job_id,
+                "status": status,
+                "progress": progress,
+                "created_at": created_at,
+            }
     return latest

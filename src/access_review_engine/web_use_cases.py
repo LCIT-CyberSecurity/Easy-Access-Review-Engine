@@ -6,20 +6,27 @@ reconciliation remain in ``application`` and ``services``.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from copy import deepcopy
 import json
-from pathlib import Path
 import shutil
 import sqlite3
 import tempfile
+from copy import deepcopy
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from access_review_engine.application import import_file_to_repository, load_classification_rules
 from access_review_engine.campaign_authorization import normalize_campaign_scope
 from access_review_engine.domain import Campaign, Finding, GoldenSourceVersion, Snapshot
-from access_review_engine.services import compare_snapshot, open_campaign, reviewable_comparison_states
-from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY, connector_business_mapping
+from access_review_engine.services import (
+    compare_snapshot,
+    open_campaign,
+    reviewable_comparison_states,
+)
+from access_review_engine.source_mapping import (
+    BUSINESS_CONTEXT_METADATA_KEY,
+    connector_business_mapping,
+)
 from access_review_engine.storage import Repository
 
 
@@ -35,6 +42,7 @@ class PreviewSyncResult:
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
+
 
 @dataclass(frozen=True)
 class CampaignPreparation:
@@ -114,10 +122,26 @@ def prepare_campaign_review(
         unknown = selected - known
         if unknown:
             provider, name = sorted(unknown)[0]
-            raise ValueError(f"Selected Access was not found in the Snapshot or Golden Source: {provider}/{name}")
-        rows = [row for row in rows if (str(row.get("access_provider")), str(row.get("access_name"))) in selected]
+            raise ValueError(
+                f"Selected Access was not found in the Snapshot or Golden Source: {provider}/{name}"
+            )
+        rows = [
+            row
+            for row in rows
+            if (str(row.get("access_provider")), str(row.get("access_name"))) in selected
+        ]
     prepared = deepcopy(snapshot)
     prepared.comparison_states = rows
+    if golden_version is not None:
+        golden_owners = {
+            (access.provider, access.name): access.access_owner
+            for access in golden_version.expected_access_definitions
+            if access.access_owner is not None
+        }
+        for access in prepared.accesses:
+            owner = golden_owners.get((access.provider, access.name))
+            if owner is not None:
+                access.access_owner = owner
     rows = reviewable_comparison_states(prepared)
     prepared.comparison_states = rows
     return CampaignPreparation(prepared, golden_version, rows)
@@ -132,7 +156,9 @@ def preview_campaign_review(
     preparation: CampaignPreparation | None = None,
 ) -> dict[str, object]:
     """Resolve reviewers through the same service path as the real open operation."""
-    preparation = preparation or prepare_campaign_review(campaign, snapshot, golden_version, import_scope)
+    preparation = preparation or prepare_campaign_review(
+        campaign, snapshot, golden_version, import_scope
+    )
     preview_campaign = deepcopy(campaign)
     preview_campaign.allow_unresolved_reviewers = True
     _, items = open_campaign(preview_campaign, preparation.snapshot, fallback_reviewer)  # type: ignore[arg-type]
@@ -140,10 +166,7 @@ def preview_campaign_review(
         (identity.provider, identity.identifier): identity
         for identity in preparation.snapshot.identities
     }
-    accesses = {
-        (access.provider, access.name): access
-        for access in preparation.snapshot.accesses
-    }
+    accesses = {(access.provider, access.name): access for access in preparation.snapshot.accesses}
     unresolved = []
     for item in items:
         if item.reviewer is not None:
@@ -151,31 +174,47 @@ def preview_campaign_review(
         identity = identities.get((item.identity_provider, item.identity_identifier))
         access = accesses.get((item.access_provider, item.access_name))
         business_context = access.metadata.get(BUSINESS_CONTEXT_METADATA_KEY, {}) if access else {}
-        application = business_context.get("application", {}).get("value") if isinstance(business_context, dict) else None
+        application = (
+            business_context.get("application", {}).get("value")
+            if isinstance(business_context, dict)
+            else None
+        )
         what_it_allows = access.description if access else None
         if not what_it_allows and access and access.control_object:
             what_it_allows = access.control_object.description
         if not what_it_allows and access:
             what_it_allows = access.display_name
-        unresolved.append({
-            "identity": item.identity_identifier,
-            "identity_display_name": identity.display_name if identity else item.identity_identifier,
-            "identity_type": identity.type if identity else "unknown",
-            "identity_provider": item.identity_provider,
-            "access": item.access_name,
-            "access_provider": item.access_provider,
-            "application": application,
-            "what_it_allows": what_it_allows,
-            "missing_owner": "access owner or identity owner",
-        })
+        unresolved.append(
+            {
+                "identity": item.identity_identifier,
+                "identity_display_name": identity.display_name
+                if identity
+                else item.identity_identifier,
+                "identity_type": identity.type if identity else "unknown",
+                "identity_provider": item.identity_provider,
+                "access": item.access_name,
+                "access_provider": item.access_provider,
+                "application": application,
+                "what_it_allows": what_it_allows,
+                "missing_owner": "access owner or identity owner",
+            }
+        )
     reviewer_keys = {
         (item.reviewer.provider, item.reviewer.identity)
         if item.reviewer is not None
         else ("unresolved", item.identity_provider + ":" + item.identity_identifier)
         for item in items
     }
-    resolved_keys = {(item.reviewer.provider, item.reviewer.identity) for item in items if item.reviewer is not None}
-    unresolved_keys = {("unresolved", item.identity_provider + ":" + item.identity_identifier) for item in items if item.reviewer is None}
+    resolved_keys = {
+        (item.reviewer.provider, item.reviewer.identity)
+        for item in items
+        if item.reviewer is not None
+    }
+    unresolved_keys = {
+        ("unresolved", item.identity_provider + ":" + item.identity_identifier)
+        for item in items
+        if item.reviewer is None
+    }
     return {
         "total_review_items": len(items),
         "reviewer_count": len(reviewer_keys),
@@ -199,14 +238,23 @@ def list_payloads(
     with Repository(db_path) as repo:
         rows = repo.list_payloads(table)
     filtered = [
-        row for row in rows
+        row
+        for row in rows
         if (not search or search.lower() in json.dumps(row, sort_keys=True).lower())
         and (not status or row.get("status") == status)
-        and (not provider or row.get("provider") == provider
-             or row.get("identity_provider") == provider
-             or row.get("access_provider") == provider)
+        and (
+            not provider
+            or row.get("provider") == provider
+            or row.get("identity_provider") == provider
+            or row.get("access_provider") == provider
+        )
     ]
-    return {"items": filtered[offset : offset + limit], "total": len(filtered), "limit": limit, "offset": offset}
+    return {
+        "items": filtered[offset : offset + limit],
+        "total": len(filtered),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 def latest_snapshot(db_path: str | Path) -> dict[str, Any] | None:
@@ -264,20 +312,29 @@ def preview_import(
                 if isinstance(value, dict) and value.get("attribute")
             }
             permission = access.permission.identifier if access.permission else None
-            access_preview.append({
-                "provider": access.provider,
-                "access_name": access.name,
-                "display_name": access.display_name,
-                "raw_source": raw_source,
-                "technical": {
-                    "permission": permission,
-                    "entitlement": "Member" if str(permission or "").casefold() == "member" else permission,
-                    "grant_mechanism": "Group membership" if str(permission or "").casefold() == "member" else "Direct assignment",
-                },
-                "business_context": context,
-            })
+            access_preview.append(
+                {
+                    "provider": access.provider,
+                    "access_name": access.name,
+                    "display_name": access.display_name,
+                    "raw_source": raw_source,
+                    "technical": {
+                        "permission": permission,
+                        "entitlement": "Member"
+                        if str(permission or "").casefold() == "member"
+                        else permission,
+                        "grant_mechanism": "Group membership"
+                        if str(permission or "").casefold() == "member"
+                        else "Direct assignment",
+                    },
+                    "business_context": context,
+                }
+            )
         mapping_report: dict[str, object] = {"warning": False, "diagnostics": []}
-        if source_config is not None and str(source_config.get("type")) in {"active_directory", "openldap"}:
+        if source_config is not None and str(source_config.get("type")) in {
+            "active_directory",
+            "openldap",
+        }:
             kind = str(source_config["type"])
             configured = connector_business_mapping(source_config, kind)
             diagnostics = []
@@ -288,11 +345,13 @@ def preview_import(
                     field in access.metadata.get(BUSINESS_CONTEXT_METADATA_KEY, {})
                     for access in snapshot.accesses
                 )
-                diagnostics.append({
-                    "field": field,
-                    "attribute": entry.get("attribute"),
-                    "status": "available" if available else "unavailable_in_artifact",
-                })
+                diagnostics.append(
+                    {
+                        "field": field,
+                        "attribute": entry.get("attribute"),
+                        "status": "available" if available else "unavailable_in_artifact",
+                    }
+                )
             mapping_report = {
                 "warning": any(row["status"] == "unavailable_in_artifact" for row in diagnostics),
                 "diagnostics": diagnostics,
@@ -354,7 +413,14 @@ def object_deltas(before_path: str | Path, after_path: str | Path) -> dict[str, 
         before = records(before_path, table)
         after = records(after_path, table)
         common = set(before) & set(after)
-        counts = {"added": len(set(after) - set(before)), "removed": len(set(before) - set(after)), "updated": 0, "renamed": 0, "disabled": 0, "deleted": 0}
+        counts = {
+            "added": len(set(after) - set(before)),
+            "removed": len(set(before) - set(after)),
+            "updated": 0,
+            "renamed": 0,
+            "disabled": 0,
+            "deleted": 0,
+        }
         for object_id in common:
             old, new = before[object_id], after[object_id]
             if old == new:
