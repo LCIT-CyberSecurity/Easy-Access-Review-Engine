@@ -11,7 +11,22 @@ def compare_authentication_posture(
     observed: AuthenticationPosture | None,
 ) -> list[dict[str, Any]]:
     if expected is None:
-        return []
+        if observed is None:
+            return []
+        rows: list[dict[str, Any]] = []
+        for control_name, observed_control in observed.controls.items():
+            fields = _expected_fields(observed_control)
+            if not fields:
+                fields = [(control_name, observed_control.get("observed", observed_control.get("value")), observed_control)]
+            status = str(observed_control.get("status", AuthenticationStatus.NOT_COLLECTED))
+            for field_name, observed_value, _ in fields:
+                rows.append({
+                    "control": field_name if field_name != control_name else control_name,
+                    "expected": "Not defined",
+                    "observed": observed_value if status == str(AuthenticationStatus.COLLECTED) else status,
+                    "assessment": "not_collected" if status != str(AuthenticationStatus.COLLECTED) else "unknown",
+                })
+        return rows
     rows: list[dict[str, Any]] = []
     for control_name, expected_control in expected.controls.items():
         observed_control = (observed.controls.get(control_name) if observed else None) or {}

@@ -22,6 +22,7 @@ from access_review_engine.domain import (
     AccessRelation,
     AccessRelationType,
     AssignmentType,
+    AuthenticationPosture,
     Capability,
     Completeness,
     ControlObject,
@@ -43,6 +44,7 @@ from access_review_engine.domain import (
     stable_checksum,
 )
 from access_review_engine.importers.ad import ImportResult
+AUTHENTICATION_FILE = "authentication-posture.json"
 
 FILES = {
     "users.jsonl",
@@ -61,6 +63,7 @@ FILES = {
     "authorization-policies.jsonl",
     "authorization-permissions.jsonl",
     "collection-errors.json",
+    AUTHENTICATION_FILE,
 }
 
 _SURFACE_FILES = {
@@ -220,6 +223,12 @@ def _read_artifact(path: str | Path) -> tuple[dict[str, Any], dict[str, list[dic
                     ):
                         raise ValueError("collection-errors.json must contain an array of objects")
                     records[filename] = value
+                    continue
+                if filename == AUTHENTICATION_FILE:
+                    value = json.loads(archive.read(filename).decode("utf-8"))
+                    if not isinstance(value, dict):
+                        raise ValueError("authentication-posture.json must contain an object")
+                    records[filename] = [value]
                     continue
                 rows: list[dict[str, Any]] = []
                 for line in archive.read(filename).splitlines():
@@ -464,6 +473,19 @@ def _authorization_models(
 
     permission_entries: list[tuple[dict[str, Any], str, list[str], list[str], list[str]]] = []
     overlapping_complex: set[tuple[str, str]] = set()
+    complex_permission_indexes: set[int] = set()
+    permissions_by_resource_scope: dict[tuple[str, str, str], list[int]] = {}
+    known_decision_strategies = {"AFFIRMATIVE", "UNANIMOUS", "CONSENSUS"}
+
+    def resource_server_semantics(client_uuid: str) -> tuple[bool, str, str]:
+        """Return presence, enforcement mode and decision strategy with defaults."""
+        resource_server = resource_servers.get(client_uuid)
+        if resource_server is None:
+            return False, "UNKNOWN", "UNKNOWN"
+        enforcement = _text(resource_server, "policyEnforcementMode").upper() or "ENFORCING"
+        strategy = _text(resource_server, "decisionStrategy", "decision_strategy").upper()
+        return True, enforcement, strategy or "UNANIMOUS"
+
     for permission in records["authorization-permissions.jsonl"]:
         client_uuid = _text(permission, "client_uuid", "clientId")
         policy_refs = _authorization_refs(permission.get("policies", permission.get("policyIds")))
@@ -475,26 +497,59 @@ def _authorization_models(
             policies.get((client_uuid, policy_refs[0])) if len(policy_refs) == 1 else None
         )
         strict_role = _role_policy_role(strict_policy or {}) if strict_policy else None
+        has_server, enforcement_mode, server_strategy = resource_server_semantics(client_uuid)
+        permission_strategy = (
+            _text(permission, "decisionStrategy", "decision_strategy").upper() or "UNANIMOUS"
+        )
+        policy_strategy = _text(
+            strict_policy or {}, "decisionStrategy", "decision_strategy"
+        ).upper()
         complex_permission = (
             strict_role is None
             or not resource_refs
             or not scope_refs
-            or _text(resource_servers.get(client_uuid, {}), "policyEnforcementMode").upper()
-            not in {"", "ENFORCING"}
+            or not has_server
+            or enforcement_mode != "ENFORCING"
+            or server_strategy not in known_decision_strategies
+            or permission_strategy not in known_decision_strategies
+            or bool(policy_strategy) and policy_strategy not in known_decision_strategies
+            or len(policy_refs) != 1
         )
         if complex_permission:
+            complex_permission_indexes.add(len(permission_entries))
             for resource_ref in resource_refs:
                 for scope_ref in scope_refs:
                     overlapping_complex.add((client_uuid, resource_ref + "\0" + scope_ref))
+        entry_index = len(permission_entries)
         permission_entries.append((permission, client_uuid, policy_refs, resource_refs, scope_refs))
+        for resource_ref in resource_refs:
+            for scope_ref in scope_refs:
+                permissions_by_resource_scope.setdefault(
+                    (client_uuid, resource_ref, scope_ref), []
+                ).append(entry_index)
 
-    for (
+    overlapping_permissions: set[int] = set()
+    for entry_indexes in permissions_by_resource_scope.values():
+        if len(entry_indexes) < 2:
+            continue
+        client_uuid = permission_entries[entry_indexes[0]][1]
+        _, _, server_strategy = resource_server_semantics(client_uuid)
+        if server_strategy != "AFFIRMATIVE":
+            overlapping_permissions.update(entry_indexes)
+            continue
+        # AFFIRMATIVE can be resolved locally only when every competing
+        # permission is a positive, single-role RBAC permission.  A dynamic
+        # competitor can still be the permission that grants the request.
+        if any(entry_index in complex_permission_indexes for entry_index in entry_indexes):
+            overlapping_permissions.update(entry_indexes)
+
+    for entry_index, (
         permission,
         client_uuid,
         policies_for_permission,
         resource_refs,
         scope_refs,
-    ) in permission_entries:
+    ) in enumerate(permission_entries):
         client = clients_by_id.get(client_uuid, {})
         policy = (
             policies.get((client_uuid, policies_for_permission[0]))
@@ -502,6 +557,7 @@ def _authorization_models(
             else None
         )
         role_ref = _role_policy_role(policy or {}) if policy else None
+        has_server, enforcement_mode, server_strategy = resource_server_semantics(client_uuid)
         if role_ref is None:
             referenced = set().union(
                 *(referenced_roles(client_uuid, policy_id) for policy_id in policies_for_permission)
@@ -532,13 +588,24 @@ def _authorization_models(
         access_name = role_access[role_key]
         state = state_by_access.setdefault(access_name, {"complex": False, "seen": False})
         state["seen"] = True
+        if enforcement_mode == "DISABLED":
+            state["complex"] = True
+            continue
         if not resource_refs or not scope_refs:
             state["complex"] = True
             continue
-        if _text(resource_servers.get(client_uuid, {}), "policyEnforcementMode").upper() not in {
-            "",
-            "ENFORCING",
-        }:
+        permission_strategy = (
+            _text(permission, "decisionStrategy", "decision_strategy").upper() or "UNANIMOUS"
+        )
+        policy_strategy = _text(policy or {}, "decisionStrategy", "decision_strategy").upper()
+        if (
+            not has_server
+            or enforcement_mode != "ENFORCING"
+            or server_strategy not in known_decision_strategies
+            or permission_strategy not in known_decision_strategies
+            or (policy_strategy and policy_strategy not in known_decision_strategies)
+            or len(policies_for_permission) != 1
+        ):
             state["complex"] = True
         for resource_ref in resource_refs:
             resource = resources.get((client_uuid, resource_ref))
@@ -552,6 +619,7 @@ def _authorization_models(
                     scope is None
                     or capability_mapping is None
                     or (client_uuid, resource_ref + "\0" + scope_ref) in overlapping_complex
+                    or entry_index in overlapping_permissions
                 ):
                     state["complex"] = True
                     if scope is None or capability_mapping is None:
@@ -572,6 +640,8 @@ def _authorization_models(
                     "permission_decision_strategy": _text(
                         permission, "decisionStrategy", "decision_strategy"
                     ),
+                    "resource_server_policy_enforcement_mode": enforcement_mode,
+                    "resource_server_decision_strategy": server_strategy,
                     "policy_id": policy_id,
                     "policy_name": _text(policy or {}, "name"),
                     "policy_type": _text(policy or {}, "type", "policyType"),
@@ -673,6 +743,7 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
     provider_name = str(manifest["provider"])
     realm = str(manifest["realm"])
     errors = records["collection-errors.json"]
+    posture_rows = records.get(AUTHENTICATION_FILE, [])
     provider = Provider(provider_name, "keycloak", provider_name)
 
     users = _unique_rows(records["users.jsonl"], "users.jsonl")
@@ -1036,4 +1107,7 @@ def import_keycloak_zip(path: str | Path) -> ImportResult:
         functional_access_models=functional_models,
         capabilities=capabilities,
         permission_capability_mappings=permission_capability_mappings,
+        authentication_posture=(
+            AuthenticationPosture(**posture_rows[0]) if posture_rows else None
+        ),
     )

@@ -29,3 +29,10 @@ Golden Source and campaign, injects the Charlie/Bob drift, records decisions,
 checks reporting, and verifies restoration to FULL. It also verifies that the
 existing 4173 stack is unchanged. The collector is additionally covered by the
 offline fake-Admin-API tests in `tests/test_keycloak_collector.py`.
+
+The seed also includes arbitrary resource/scope names, a resource permission
+without scopes, a multi-policy permission, and explicit `ENFORCING`/
+`UNANIMOUS` Resource Server settings. Duplicate resource names across two
+clients remain covered by the offline importer contract because the live CRM
+client is intentionally kept Authorization-Services-disabled to verify its
+`not_enabled` state.

@@ -79,6 +79,7 @@ def functional_context(
     applications: set[str] = set()
     completeness_states: set[str] = set()
     model_seen = False
+    direct_rights: dict[tuple[str, str, str], dict[str, Any]] = {}
     while queue:
         key, depth, path = queue.popleft()
         current = by_key.get(key)
@@ -136,6 +137,8 @@ def functional_context(
                         ),
                     },
                 )
+                if key == root:
+                    direct_rights.setdefault(identity, rights[identity])
         if depth < max_depth:
             for child in adjacency.get(key, []):
                 if child not in seen:
@@ -167,8 +170,12 @@ def functional_context(
     return {
         "application": ", ".join(sorted(business_apps or applications)),
         "functional_rights": list(rights.values()),
+        "direct_functional_rights": list(direct_rights.values()),
+        "effective_functional_rights": list(rights.values()),
         "functional_completeness": completeness,
         "functional_explanation": explanation,
+        "source_functional_explanation": explanation,
+        "functional_model_defined": model_seen,
         "grants": grants,
         "system_access": system_access(access),
         "access_type": access.control_object.type if access.control_object else "access",

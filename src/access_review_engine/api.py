@@ -2199,8 +2199,19 @@ def create_app(db_path: str | None = None):
                         or item.identity_identifier,
                     }
                 )
+            linked_group_parents = {
+                (relation.parent_provider, relation.parent_access_name)
+                for relation in active.expected_access_relations
+                if relation.parent_access_name.startswith("group:")
+                and relation.child_access_name.startswith("client:")
+            }
             rows = sorted(
-                grouped.values(), key=lambda row: str(row["access_display_name"]).casefold()
+                (
+                    row
+                    for row in grouped.values()
+                    if (row["access_provider"], row["access_name"]) not in linked_group_parents
+                ),
+                key=lambda row: str(row["access_display_name"]).casefold(),
             )
             for row in rows:
                 row["identities"].sort(
@@ -2410,6 +2421,8 @@ def create_app(db_path: str | None = None):
                 context = observed_contexts.get(key, {})
                 row["observed_functional_rights"] = context.get("functional_rights", [])
                 row["observed_completeness"] = context.get("functional_completeness", "not_defined")
+                row["source_functional_explanation"] = context.get("functional_explanation", "")
+                row["system_access"] = context.get("system_access", row.get("system_access", False))
                 row["application"] = context.get("application", "")
                 row["functional_authorization_changed"] = key in changed
             return {

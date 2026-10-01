@@ -88,12 +88,26 @@ The reviewer-facing model has three possible completeness states:
 
 Collection completeness and semantic completeness are separate. A `full`
 collection can legitimately produce a `partial` or `not_defined` functional
-model. During resolution EARE also considers the Resource Server enforcement
-mode and decision strategies. `ENFORCING` is required for a complete claim;
-`PERMISSIVE` and `DISABLED` configurations downgrade the model because the
-collected permissions may not describe every effective decision. Permissions
-overlapping the same Resource + Scope are analysed together, so an unresolved
-policy on that pair prevents an unjustified `complete` result.
+model. During resolution EARE considers the Resource Server enforcement mode
+and decision strategies. A present Resource Server with an omitted
+`policyEnforcementMode` uses Keycloak's documented `ENFORCING` default; an
+absent Resource Server record is treated as unknown. `ENFORCING` is required
+for a complete claim. `PERMISSIVE` downgrades the model because the collected
+permissions may not describe every effective decision, while `DISABLED`
+produces evidence-only authorization semantics and no effective static rights.
+Permissions overlapping the same Resource + Scope are analysed together.
+`UNANIMOUS` and `CONSENSUS`, unknown strategies, and any unresolved competitor
+prevent an unjustified `complete` result. With `AFFIRMATIVE`, an overlap can
+remain complete only when every competing permission is a positive,
+single-role RBAC permission with no unresolved policy combination.
+
+Keycloak's default decision strategy is `UNANIMOUS` for permissions and
+policies. Multi-policy, multi-role and aggregate policies remain evidence and
+are not flattened into a role right merely because one referenced role is
+known. EARE does not reproduce the Keycloak PDP: it does not evaluate runtime
+identity or resource context, JavaScript, dynamic attributes, external/custom
+policy providers, or other runtime conditions. Unknown future strategy values
+fail closed to `partial`/`not_defined`.
 
 A resource-based permission with no scope is retained as native evidence but
 does not invent a `read` (or any other) Capability. Multi-policy, multi-role

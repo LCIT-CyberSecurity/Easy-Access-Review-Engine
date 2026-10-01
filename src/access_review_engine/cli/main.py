@@ -1,6 +1,7 @@
 from __future__ import annotations
 import argparse
 import csv
+import getpass
 import json
 import shutil
 import sqlite3
@@ -20,6 +21,7 @@ from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif, import_openldap_zip
 from access_review_engine.reporting import access_names_from_snapshot, identity_names_from_snapshot, write_reports
 from access_review_engine.services import calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, open_campaign, promote_snapshot, remediation_from_decisions
+from access_review_engine.system_admin import init_system, reset_password
 from access_review_engine.storage import (
     Repository, hydrate_access, hydrate_access_relation, hydrate_assignment,
     hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version,
@@ -168,6 +170,11 @@ def parser() -> argparse.ArgumentParser:
     x = es.add_parser("revocations")
     x.add_argument("--campaign")
     x.add_argument("--output")
+
+    system = sub.add_parser("system", help="manage local system accounts")
+    system_sub = system.add_subparsers(dest="system_command", required=True)
+    x = system_sub.add_parser("reset-password", help="reset a local account password")
+    x.add_argument("username")
     return p
 
 def main(argv: list[str] | None = None) -> int:
@@ -197,7 +204,22 @@ def dispatch(a: argparse.Namespace) -> int:
     if a.command == "golden": return golden_command(a)
     if a.command == "campaign": return campaign_command(a)
     if a.command == "export": return export_command(a)
+    if a.command == "system": return system_command(a)
     return 1
+
+def system_command(a: argparse.Namespace) -> int:
+    if a.system_command != "reset-password":
+        return 1
+    password = getpass.getpass("New password: ")
+    confirmation = getpass.getpass("Confirm new password: ")
+    if password != confirmation:
+        raise ValueError("passwords do not match")
+    with sqlite3.connect(a.db) as conn:
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        result = reset_password(conn, a.username, password)
+    print(f"Password reset for {result['username']}; change it at next sign-in.")
+    return 0
 
 def config_command(a: argparse.Namespace) -> int:
     directory = Path("config/connectors"); directory.mkdir(parents=True, exist_ok=True)

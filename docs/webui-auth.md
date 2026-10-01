@@ -12,6 +12,15 @@ EARE_SESSION_SECRET=<random-secret>
 
 The bootstrap variables are used only when the application user table is empty. If `EARE_ADMIN_PASSWORD` is omitted, the initial password is `SecretPassword`; the administrator must change it at first login. Passwords are stored as PBKDF2-SHA256 hashes and are never returned by the API. Set `EARE_COOKIE_SECURE=1` when serving over HTTPS.
 
+If the database already exists and the current local password is unknown, reset it from the API container. The command prompts without displaying the password and requires confirmation:
+
+```bash
+docker compose -f web/compose.yaml exec eare-api \
+  eare --db /data/access-review.db system reset-password admin
+```
+
+Replace `admin` with the local username when necessary. Changing `EARE_ADMIN_PASSWORD` alone does not modify an existing account.
+
 ## Local accounts and directory accounts
 
 Every EARE user signs in either with a local account or with an account taken from an LDAP directory. This is about signing in to EARE; the directories EARE audits are configured in **Sources & IdPs** and are unrelated, even when they point at the same server.

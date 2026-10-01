@@ -1478,9 +1478,12 @@ details summary { cursor: pointer; }
   box-shadow: var(--shadow-lg);
 }
 .application-picker-menu li { padding: 8px 10px; border-radius: var(--radius-xs); color: var(--text-primary); font-size: 14.5px; cursor: pointer; }
+.application-picker-menu li[role="option"] { display: flex; align-items: center; gap: 8px; }
+.application-picker-menu li[role="option"] input[type="checkbox"] { margin: 0; accent-color: var(--primary); pointer-events: none; }
 .application-picker-menu li.active { background: var(--primary-soft); color: var(--primary); }
 .application-picker-menu .application-picker-more { color: var(--text-faint); font-size: 13.5px; cursor: default; }
 .application-picker-menu .application-picker-create { margin-top: 2px; border-top: 1px solid var(--hairline); color: var(--primary); font-weight: 600; }
+.application-create-link { align-self: flex-start; }
 .permission-chip {
   display: inline-flex;
   align-items: center;
@@ -1612,6 +1615,7 @@ html:has(.login-page), body:has(.login-page) { background: #081a30; }
 .campaign-close-prompt h2 { margin: 3px 0 4px; }
 .campaign-close-prompt p { margin: 0; color: var(--text-secondary); }
 .drawer-functional-rights { font-size: 16px; line-height: 1.65; white-space: pre-line; }
+.functional-rights-text { white-space: pre-line; }
 .functional-evidence { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
 .functional-evidence summary { color: var(--text-secondary); cursor: pointer; font-weight: 600; }
 .functional-evidence dl { display: grid; grid-template-columns: minmax(120px, 0.7fr) minmax(0, 1.3fr); gap: 6px 12px; margin: 12px 0 0; }
@@ -1698,6 +1702,12 @@ p + .button-row { margin-top: 14px; }
 .golden-access-table td:first-child, .golden-access-table td:nth-child(6) { white-space: nowrap; }
 .golden-access-table select { width: 100%; min-width: 145px; }
 .golden-access-table textarea { min-width: 180px; min-height: 90px; }
+.functional-rights-summary { display: grid; gap: 5px; min-width: 180px; }
+.functional-rights-groups { display: grid; gap: 3px; }
+.functional-rights-group { display: grid; gap: 1px; }
+.functional-rights-group span { color: var(--text-primary); }
+.functional-rights-summary > small { color: var(--text-faint); }
+.functional-status { width: fit-content; color: var(--text-muted); font-size: 12px; font-weight: 650; }
 /* The action column stays reachable while the grid scrolls sideways. */
 .golden-access-table th:last-child, .golden-access-table td:last-child {
   position: sticky;

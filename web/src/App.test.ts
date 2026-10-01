@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, functionalRightsText, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
+import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, FunctionalRightsSummary, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, functionalRightsText, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {
@@ -37,7 +37,14 @@ describe("Campaign review labels", () => {
         { resource: "Invoices", capability: "approve", capability_label: "Approve" },
         { resource: "Suppliers", capability: "read", capability_label: "Read" },
       ],
-    })).toBe("Invoices · Read, Approve; Suppliers · Read");
+    })).toBe("Invoices · Read, Approve\nSuppliers · Read");
+    expect(functionalRightsText({
+      functional_rights: [
+        { application: "CRM", resource: "Customers", capability: "read", capability_label: "Read" },
+        { application: "CRM", resource: "Customers", capability: "write", capability_label: "Write" },
+        { application: "ERP", resource: "Invoices", capability: "read", capability_label: "Read" },
+      ],
+    })).toBe("CRM\n  Customers · Read, Write\nERP\n  Invoices · Read");
     expect(functionalRightsText({ application: "CRM", access_display_name: "CRM-Sales", functional_rights: [] }))
       .toBe("Functional permissions not exposed by the source.");
     expect(functionalRightsText({
@@ -62,6 +69,17 @@ describe("Campaign review labels", () => {
     expect(role.technical).toContain("role-id");
     expect(reviewPermissionText({ identifier: "member" })).toBe("Group membership");
     expect(reviewDerivedAccessText({ derived_accesses: [{ display_name: "view-profile" }, { display_name: "offline_access" }] })).toBe("view-profile, offline_access");
+  });
+
+  it("renders the undocumented CRM entry with an accessible Golden CTA", () => {
+    const html = renderToStaticMarkup(createElement(FunctionalRightsSummary, {
+      row: { application: "CRM", functional_rights: [] },
+      onAction: () => undefined,
+    }));
+    expect(html).toContain("Not documented");
+    expect(html).toContain("Source does not expose functional permissions.");
+    expect(html).toContain("Define functional rights");
+    expect(html).toContain("type=\"button\"");
   });
 });
 

@@ -409,7 +409,7 @@ def test_keycloak_v2_authz_derives_only_safe_functional_rights(tmp_path: Path) -
         for item in result.functional_access_models
         if item.access_name == "client:c-crm:role:cr-crm-admin"
     )
-    assert crm_model.completeness == "complete"
+    assert crm_model.completeness == "partial"
     assert crm_model.rights[0].target.resource["display_name"] == "Invoices"
     assert crm_model.rights[0].target.resource["identifier"] == "resource-contacts"
     assert crm_model.rights[0].target.component["identifier"] == "c-crm"
@@ -559,6 +559,336 @@ def test_keycloak_v3_resource_server_permissive_downgrades_without_discarding_sa
     )
     assert model.completeness == "partial"
     assert model.rights
+
+
+def _overlap_artifact(tmp_path: Path, strategy: str) -> Path:
+    artifact = _v2_artifact(tmp_path)
+    policies = _rows_from_zip(artifact, "authorization-policies.jsonl") + [
+        {
+            "id": "policy-a",
+            "client_uuid": "c-erp",
+            "clientId": "erp",
+            "name": "Role A",
+            "type": "role",
+            "logic": "POSITIVE",
+            "config": {"roles": [{"id": "cr-erp-read"}]},
+        },
+        {
+            "id": "policy-b",
+            "client_uuid": "c-erp",
+            "clientId": "erp",
+            "name": "Role B",
+            "type": "role",
+            "logic": "POSITIVE",
+            "config": {"roles": [{"id": "cr-erp-admin"}]},
+        },
+    ]
+    permissions = [
+        {
+            "id": "permission-a",
+            "client_uuid": "c-erp",
+            "clientId": "erp",
+            "name": "Invoices A",
+            "resourceIds": ["resource-invoices"],
+            "scopes": ["scope-read"],
+            "policies": ["policy-a"],
+        },
+        {
+            "id": "permission-b",
+            "client_uuid": "c-erp",
+            "clientId": "erp",
+            "name": "Invoices B",
+            "resourceIds": ["resource-invoices"],
+            "scopes": ["scope-read"],
+            "policies": ["policy-b"],
+        },
+    ]
+    servers = [{
+        "id": "c-erp",
+        "client_uuid": "c-erp",
+        "clientId": "erp",
+        "policyEnforcementMode": "ENFORCING",
+        "decisionStrategy": strategy,
+    }]
+    return _replace_zip_rows(
+        tmp_path,
+        artifact,
+        {
+            "authorization-resource-servers.jsonl": servers,
+            "authorization-policies.jsonl": policies,
+            "authorization-permissions.jsonl": permissions,
+        },
+        f"overlap-{strategy.lower()}",
+    )
+
+
+def test_keycloak_v3_unanimous_overlapping_simple_permissions_is_partial(tmp_path: Path) -> None:
+    result = import_keycloak_zip(_overlap_artifact(tmp_path, "UNANIMOUS"))
+
+    for access_name in ("client:c-erp:role:cr-erp-read", "client:c-erp:role:cr-erp-admin"):
+        model = next(
+            item for item in result.functional_access_models if item.access_name == access_name
+        )
+        assert model.rights
+        assert model.completeness == "partial"
+
+
+def test_keycloak_v3_affirmative_overlapping_simple_permissions_can_be_complete(
+    tmp_path: Path,
+) -> None:
+    result = import_keycloak_zip(_overlap_artifact(tmp_path, "AFFIRMATIVE"))
+
+    for access_name in ("client:c-erp:role:cr-erp-read", "client:c-erp:role:cr-erp-admin"):
+        model = next(
+            item for item in result.functional_access_models if item.access_name == access_name
+        )
+        assert model.completeness == "complete"
+        assert model.rights
+
+
+def test_keycloak_v3_disabled_resource_server_is_evidence_only(tmp_path: Path) -> None:
+    artifact = _v2_artifact(tmp_path)
+    servers = [
+        {**row, "policyEnforcementMode": "DISABLED"}
+        for row in _rows_from_zip(artifact, "authorization-resource-servers.jsonl")
+    ]
+    result = import_keycloak_zip(
+        _replace_zip_rows(
+            tmp_path, artifact, {"authorization-resource-servers.jsonl": servers}, "disabled"
+        )
+    )
+    model = next(
+        item for item in result.functional_access_models
+        if item.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert model.completeness == "not_defined"
+    assert not model.rights
+
+
+def test_keycloak_v3_absent_resource_server_is_unknown_and_partial(tmp_path: Path) -> None:
+    artifact = _v2_artifact(tmp_path)
+    result = import_keycloak_zip(
+        _replace_zip_rows(
+            tmp_path, artifact, {"authorization-resource-servers.jsonl": []}, "no-server"
+        )
+    )
+    model = next(
+        item for item in result.functional_access_models
+        if item.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert model.completeness == "partial"
+    assert model.rights
+    evidence = model.rights[0].target.resource["metadata"]["keycloak_authorization"]
+    assert evidence["resource_server_decision_strategy"] == "UNKNOWN"
+
+
+def test_keycloak_v3_multi_policy_is_not_flattened_to_role_right(tmp_path: Path) -> None:
+    artifact = _v2_artifact(tmp_path)
+    policies = _rows_from_zip(artifact, "authorization-policies.jsonl") + [
+        {
+            "id": "policy-time",
+            "client_uuid": "c-erp",
+            "clientId": "erp",
+            "name": "Business hours",
+            "type": "time",
+        }
+    ]
+    permissions = [{
+        "id": "permission-multi-policy",
+        "client_uuid": "c-erp",
+        "clientId": "erp",
+        "name": "Invoices conditional",
+        "resourceIds": ["resource-invoices"],
+        "scopes": ["scope-read"],
+        "policies": ["policy-erp-read", "policy-time"],
+    }]
+    result = import_keycloak_zip(
+        _replace_zip_rows(
+            tmp_path,
+            artifact,
+            {
+                "authorization-policies.jsonl": policies,
+                "authorization-permissions.jsonl": permissions,
+            },
+            "multi-policy",
+        )
+    )
+    model = next(
+        item for item in result.functional_access_models
+        if item.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert model.completeness == "not_defined"
+    assert not model.rights
+    assert any(
+        item["permission_id"] == "permission-multi-policy"
+        for item in result.batch.scope["authorization_complex_permissions"]
+    )
+
+
+def test_keycloak_v3_multi_role_policy_marks_each_native_role_complex(tmp_path: Path) -> None:
+    artifact = _v2_artifact(tmp_path)
+    policies = [{
+        "id": "policy-multi-role",
+        "client_uuid": "c-erp",
+        "clientId": "erp",
+        "name": "Two roles",
+        "type": "role",
+        "logic": "POSITIVE",
+        "config": {"roles": [{"id": "cr-erp-read"}, {"id": "cr-erp-admin"}]},
+    }]
+    permissions = [{
+        "id": "permission-multi-role",
+        "client_uuid": "c-erp",
+        "clientId": "erp",
+        "name": "Invoices for two roles",
+        "resourceIds": ["resource-invoices"],
+        "scopes": ["scope-read"],
+        "policies": ["policy-multi-role"],
+    }]
+    result = import_keycloak_zip(
+        _replace_zip_rows(
+            tmp_path,
+            artifact,
+            {
+                "authorization-policies.jsonl": policies,
+                "authorization-permissions.jsonl": permissions,
+            },
+            "multi-role",
+        )
+    )
+    models = {
+        item.access_name: item
+        for item in result.functional_access_models
+        if item.access_name in {"client:c-erp:role:cr-erp-read", "client:c-erp:role:cr-erp-admin"}
+    }
+    assert {item.completeness for item in models.values()} == {"not_defined"}
+    assert all(not item.rights for item in models.values())
+
+
+def test_keycloak_v3_aggregate_role_and_dynamic_policy_is_not_static(tmp_path: Path) -> None:
+    artifact = _v2_artifact(tmp_path)
+    policies = _rows_from_zip(artifact, "authorization-policies.jsonl") + [
+        {
+            "id": "policy-dynamic",
+            "client_uuid": "c-erp",
+            "clientId": "erp",
+            "name": "Dynamic",
+            "type": "time",
+        },
+        {
+            "id": "policy-aggregate",
+            "client_uuid": "c-erp",
+            "clientId": "erp",
+            "name": "Role and dynamic",
+            "type": "aggregate",
+            "decisionStrategy": "UNANIMOUS",
+            "config": {"policies": ["policy-erp-read", "policy-dynamic"]},
+        },
+    ]
+    permissions = [{
+        "id": "permission-aggregate",
+        "client_uuid": "c-erp",
+        "clientId": "erp",
+        "name": "Invoices aggregate",
+        "resourceIds": ["resource-invoices"],
+        "scopes": ["scope-read"],
+        "policies": ["policy-aggregate"],
+    }]
+    result = import_keycloak_zip(
+        _replace_zip_rows(
+            tmp_path,
+            artifact,
+            {
+                "authorization-policies.jsonl": policies,
+                "authorization-permissions.jsonl": permissions,
+            },
+            "aggregate-dynamic",
+        )
+    )
+    matching = [
+        item for item in result.functional_access_models
+        if item.access_name == "client:c-erp:role:cr-erp-read"
+    ]
+    assert matching
+    assert matching[0].completeness == "not_defined"
+    assert not matching[0].rights
+
+
+def test_keycloak_v3_unknown_decision_strategy_fails_closed(tmp_path: Path) -> None:
+    artifact = _v2_artifact(tmp_path)
+    servers = [
+        {**row, "decisionStrategy": "FUTURE_STRATEGY"}
+        for row in _rows_from_zip(artifact, "authorization-resource-servers.jsonl")
+    ]
+    result = import_keycloak_zip(
+        _replace_zip_rows(
+            tmp_path,
+            artifact,
+            {"authorization-resource-servers.jsonl": servers},
+            "unknown-strategy",
+        )
+    )
+    model = next(
+        item for item in result.functional_access_models
+        if item.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert model.completeness == "partial"
+    assert model.rights
+
+
+def test_keycloak_v3_simple_and_complex_overlap_downgrades_simple_right(tmp_path: Path) -> None:
+    artifact = _v2_artifact(tmp_path)
+    policies = _rows_from_zip(artifact, "authorization-policies.jsonl") + [{
+        "id": "policy-dynamic-read",
+        "client_uuid": "c-erp",
+        "clientId": "erp",
+        "name": "Dynamic read condition",
+        "type": "time",
+    }]
+    permissions = _rows_from_zip(artifact, "authorization-permissions.jsonl") + [{
+        "id": "permission-dynamic-read",
+        "client_uuid": "c-erp",
+        "clientId": "erp",
+        "name": "Invoices dynamic read",
+        "resourceIds": ["resource-invoices"],
+        "scopes": ["scope-read"],
+        "policies": ["policy-dynamic-read"],
+    }]
+    result = import_keycloak_zip(
+        _replace_zip_rows(
+            tmp_path,
+            artifact,
+            {
+                "authorization-policies.jsonl": policies,
+                "authorization-permissions.jsonl": permissions,
+            },
+            "simple-complex-overlap",
+        )
+    )
+    model = next(
+        item for item in result.functional_access_models
+        if item.access_name == "client:c-erp:role:cr-erp-read"
+    )
+    assert model.completeness == "partial"
+    assert model.rights
+
+
+def test_keycloak_v3_duplicate_resource_names_remain_client_isolated(tmp_path: Path) -> None:
+    result = import_keycloak_zip(_v2_artifact(tmp_path))
+    erp = next(
+        item for item in result.functional_access_models if item.access_name.endswith("cr-erp-read")
+    )
+    crm = next(
+        item
+        for item in result.functional_access_models
+        if item.access_name.endswith("cr-crm-admin")
+    )
+    assert erp.rights[0].target.component["identifier"] == "c-erp"
+    assert crm.rights[0].target.component["identifier"] == "c-crm"
+    assert (
+        erp.rights[0].target.resource["identifier"]
+        != crm.rights[0].target.resource["identifier"]
+    )
 
 
 def test_keycloak_v3_resource_permission_without_scope_has_no_invented_capability(

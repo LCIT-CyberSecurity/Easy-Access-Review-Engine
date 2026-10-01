@@ -1119,16 +1119,28 @@ def open_campaign(
 
 
 def reviewable_comparison_states(snapshot: Snapshot) -> list[dict[str, object]]:
-    """Exclude composite role containers from review rows while retaining their children."""
+    """Return one review row for a linked group-to-role access path.
+
+    The raw group membership remains in the snapshot as evidence, but the campaign
+    reviews the resulting application role once when Keycloak explicitly maps the
+    group to that role.
+    """
     composite_parents = {
         (relation.parent_provider, relation.parent_access_name)
         for relation in snapshot.access_relations
         if relation.origin.raw.get("composite") is True
     }
+    linked_group_parents = {
+        (relation.parent_provider, relation.parent_access_name)
+        for relation in snapshot.access_relations
+        if relation.parent_access_name.startswith("group:")
+        and relation.child_access_name.startswith("client:")
+    }
     return [
         row
         for row in snapshot.comparison_states
-        if (str(row["access_provider"]), str(row["access_name"])) not in composite_parents
+        if (str(row["access_provider"]), str(row["access_name"]))
+        not in composite_parents | linked_group_parents
     ]
 
 

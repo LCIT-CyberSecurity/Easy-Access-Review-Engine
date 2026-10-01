@@ -105,6 +105,28 @@ def test_functional_context_aggregates_complete_and_not_defined_as_partial() -> 
     assert context["functional_completeness"] == "partial"
 
 
+def test_functional_context_aggregates_partial_and_not_defined_as_partial() -> None:
+    root = Access("root", "keycloak")
+    partial = Access("partial", "keycloak")
+    unknown = Access("unknown", "keycloak")
+    relations = [
+        AccessRelation(
+            "keycloak", "root", "keycloak", "partial", "grants", Origin("test", True, False)
+        ),
+        AccessRelation(
+            "keycloak", "root", "keycloak", "unknown", "grants", Origin("test", True, False)
+        ),
+    ]
+    models = [
+        ExpectedAccessModel("keycloak", "partial", "partial", ()),
+        ExpectedAccessModel("keycloak", "unknown", "not_defined", ()),
+    ]
+
+    context = functional_context(root, [root, partial, unknown], relations, models)
+
+    assert context["functional_completeness"] == "partial"
+
+
 def test_functional_context_only_not_defined_explains_existing_unknown_configuration() -> None:
     root = Access("root", "keycloak")
     child = Access("child", "keycloak")

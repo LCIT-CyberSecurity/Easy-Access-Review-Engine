@@ -136,11 +136,14 @@ echo "Seed stage: AuthZ resources"
 invoices=$(authz_resource "$erp" Invoices)
 suppliers=$(authz_resource "$erp" Suppliers)
 payments=$(authz_resource "$erp" Payments)
+arbitrary_resource=$(authz_resource "$erp" object-441)
 echo "Seed stage: AuthZ scopes"
 read_scope=$(authz_scope "$erp" read)
 write_scope=$(authz_scope "$erp" write)
 approve_scope=$(authz_scope "$erp" approve)
 delete_scope=$(authz_scope "$erp" delete)
+validate_scope=$(authz_scope "$erp" invoice.validate)
+arbitrary_scope=$(authz_scope "$erp" perform_operation_xyz)
 echo "Seed stage: AuthZ policies"
 reader_policy=$(authz_policy "$erp" ERP-Reader-policy "$erp_reader")
 accountant_policy=$(authz_policy "$erp" ERP-Accountant-policy "$erp_accountant")
@@ -160,6 +163,8 @@ authz_permission ERP-Accountant-Invoices "$invoices" "[\"$read_scope\",\"$approv
 authz_permission ERP-Accountant-Suppliers "$suppliers" "[\"$read_scope\"]" "$accountant_policy"
 authz_permission ERP-Admin-Invoices "$invoices" "[\"$read_scope\",\"$write_scope\",\"$approve_scope\",\"$delete_scope\"]" "$admin_policy"
 authz_permission ERP-Admin-Suppliers "$suppliers" "[\"$read_scope\",\"$write_scope\",\"$delete_scope\"]" "$admin_policy"
+authz_permission ERP-Reader-Arbitrary "$arbitrary_resource" "[\"$arbitrary_scope\"]" "$reader_policy"
+authz_permission ERP-Reader-Resource-Only "$arbitrary_resource" "[]" "$reader_policy"
 complex_policy=$(kc get "clients/$erp/authz/resource-server/policy" -r "$realm" \
   -q name=ERP-complex-policy --fields id --format csv --noquotes | tail -1)
 if [[ -z "$complex_policy" ]]; then
@@ -172,6 +177,19 @@ if [[ -z "$complex_policy" ]]; then
     -q name=ERP-complex-policy --fields id --format csv --noquotes | tail -1)
 fi
 authz_permission ERP-Payments-complex "$payments" "[\"$approve_scope\"]" "$complex_policy"
+dynamic_policy=$(kc get "clients/$erp/authz/resource-server/policy" -r "$realm" \
+  -q name='Default Policy' --fields id --format csv --noquotes | tail -1)
+[[ -n "$dynamic_policy" ]] || { echo "missing Keycloak default dynamic policy" >&2; exit 1; }
+if ! kc get "clients/$erp/authz/resource-server/permission" -r "$realm" \
+  -q name=ERP-Reader-Multi-Policy --fields id --format csv --noquotes | grep -q .; then
+  kc create "clients/$erp/authz/resource-server/permission/resource" -r "$realm" \
+    -s name=ERP-Reader-Multi-Policy -s "resources=[\"$arbitrary_resource\"]" \
+    -s "scopes=[\"$validate_scope\"]" \
+    -s "policies=[\"$reader_policy\",\"$dynamic_policy\"]" \
+    -s decisionStrategy=UNANIMOUS >/dev/null
+fi
+kc update "clients/$erp/authz/resource-server" -r "$realm" \
+  -s policyEnforcementMode=ENFORCING -s decisionStrategy=UNANIMOUS >/dev/null
 echo "Seed stage: group-role mappings"
 kc get "clients/$backup/roles/Backup-Operator" -r "$realm" >/dev/null 2>&1 || kc create "clients/$backup/roles" -r "$realm" -s name=Backup-Operator >/dev/null
 

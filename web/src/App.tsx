@@ -75,6 +75,7 @@ import {
   validProviderScope,
 } from "./projections";
 import { goldenFunctionalRightsAreValid } from "./goldenFunctionalValidation";
+import { goldenFunctionalPresentation, type FunctionalRightsGroup } from "./goldenFunctionalPresentation";
 const s = (v: unknown, f = "—") =>
     v instanceof Error
       ? v.message
@@ -143,13 +144,14 @@ export function ApplicationPicker({ value, options, disabled, onChange, onCreate
     inputRef = useRef<HTMLInputElement>(null),
     listId = useRef(`application-picker-${Math.random().toString(36).slice(2)}`).current,
     needle = query.trim().toLocaleLowerCase(),
-    available = options.filter((option) => !selected.includes(option) && option.toLocaleLowerCase().includes(needle)),
+    available = options.filter((option) => option.toLocaleLowerCase().includes(needle)),
     matches = available.slice(0, APPLICATION_PICKER_LIMIT),
     known = [...options, ...selected].some((option) => option.toLocaleLowerCase() === needle),
     canCreate = Boolean(needle && !known && onCreate),
-    choices = matches.length + (canCreate ? 1 : 0),
-    add = (option: string) => {
-      onChange(joinPermissions([...selected, option]));
+    createOption = Boolean(onCreate),
+    choices = matches.length + (createOption ? 1 : 0),
+    toggle = (option: string) => {
+      onChange(joinPermissions(selected.includes(option) ? selected.filter((item) => item !== option) : [...selected, option]));
       setQuery("");
       setActive(0);
       inputRef.current?.focus();
@@ -190,8 +192,8 @@ export function ApplicationPicker({ value, options, disabled, onChange, onCreate
             else if (event.key === "ArrowUp") { event.preventDefault(); setActive((index) => Math.max(index - 1, 0)); }
             else if (event.key === "Enter") {
               event.preventDefault();
-              if (active < matches.length && matches[active]) add(matches[active]);
-              else if (canCreate) create();
+              if (active < matches.length && matches[active]) toggle(matches[active]);
+              else if (createOption) create();
             } else if (event.key === "Backspace" && !query && selected.length) remove(selected[selected.length - 1]);
             else if (event.key === "Escape") setOpen(false);
           }}
@@ -206,9 +208,10 @@ export function ApplicationPicker({ value, options, disabled, onChange, onCreate
               aria-selected={index === active}
               className={index === active ? "active" : undefined}
               onMouseEnter={() => setActive(index)}
-              onMouseDown={(event) => { event.preventDefault(); add(option); }}
+              onMouseDown={(event) => { event.preventDefault(); toggle(option); }}
             >
-              {option}
+              <input type="checkbox" tabIndex={-1} checked={selected.includes(option)} readOnly aria-label={`Select ${option}`} />
+              <span>{option}</span>
             </li>
           ))}
           {available.length > matches.length ? (
@@ -216,7 +219,7 @@ export function ApplicationPicker({ value, options, disabled, onChange, onCreate
               {available.length - matches.length} more — keep typing to narrow the list
             </li>
           ) : null}
-          {canCreate ? (
+          {createOption ? (
             <li
               role="option"
               aria-selected={active === matches.length}
@@ -224,7 +227,7 @@ export function ApplicationPicker({ value, options, disabled, onChange, onCreate
               onMouseEnter={() => setActive(matches.length)}
               onMouseDown={(event) => { event.preventDefault(); create(); }}
             >
-              + Create “{query.trim()}”
+              {query.trim() ? `+ Create “${query.trim()}”` : "+ Create application"}
             </li>
           ) : null}
         </ul>
@@ -342,14 +345,22 @@ export const functionalRightsText = (row: Row): string => {
       ? "Functional model partial — dynamic/complex policy not statically resolved"
       : "Functional permissions not exposed by the source.");
   }
-  const grouped = new Map<string, Set<string>>();
+  const grouped = new Map<string, Map<string, Set<string>>>();
   for (const right of rights) {
     const resource = s(right.resource, "Resource not named");
-    const actions = grouped.get(resource) ?? new Set<string>();
+    const target = (right.target ?? {}) as Row;
+    const service = (target.service ?? {}) as Row;
+    const application = s(right.application, s(service.display_name, s(service.identifier, "")));
+    const resources = grouped.get(application) ?? new Map<string, Set<string>>();
+    const actions = resources.get(resource) ?? new Set<string>();
     actions.add(s(right.capability_label, s(right.capability)));
-    grouped.set(resource, actions);
+    resources.set(resource, actions);
+    grouped.set(application, resources);
   }
-  const result = [...grouped].map(([resource, actions]) => `${resource} · ${[...actions].join(", ")}`).join("; ");
+  const result = [...grouped].flatMap(([application, resources]) => {
+    const lines = [...resources].map(([resource, actions]) => `${resource} · ${[...actions].join(", ")}`);
+    return application ? [`${application}`, ...lines.map((line) => `  ${line}`)] : lines;
+  }).join("\n");
   return s(row.functional_completeness) === "partial"
     ? `${result}; functional model partial — some permissions are conditional or dynamic`
     : result;
@@ -3005,8 +3016,9 @@ function ReviewDrawer({
         {evidenceGroups.length ? evidenceGroups.map((group) => {
           const groupEvidence = group.evidence;
           const groupScopes = group.rights.map((right) => s((right.source_evidence as Row | undefined)?.scope_name)).filter(Boolean).filter((value, index, values) => values.indexOf(value) === index);
+          const evidenceKey = `${s(groupEvidence.client_id, "client")}\0${s(groupEvidence.permission_id, "permission")}`;
           return (
-          <details className="functional-evidence">
+          <details className="functional-evidence" key={evidenceKey}>
             <summary>{s(group.rights[0].resource, "Resource")} — technical authorization evidence</summary>
             <dl>
               {groupEvidence.client_id ? <><dt>Application client</dt><dd>{s(groupEvidence.client_id)}</dd></> : null}
@@ -3015,6 +3027,8 @@ function ReviewDrawer({
               {groupEvidence.resource_name ? <><dt>Resource</dt><dd>{s(groupEvidence.resource_name)}</dd></> : null}
               {groupScopes.length ? <><dt>Scopes</dt><dd>{groupScopes.join(", ")}</dd></> : null}
               {groupEvidence.permission_decision_strategy ? <><dt>Decision strategy</dt><dd>{s(groupEvidence.permission_decision_strategy)}</dd></> : null}
+              {groupEvidence.resource_server_policy_enforcement_mode ? <><dt>Resource server enforcement</dt><dd>{s(groupEvidence.resource_server_policy_enforcement_mode)}</dd></> : null}
+              {groupEvidence.resource_server_decision_strategy ? <><dt>Resource server decision strategy</dt><dd>{s(groupEvidence.resource_server_decision_strategy)}</dd></> : null}
             </dl>
             {arr(groupEvidence.complex_permissions).length ? (
               <p className="muted">Complex or dynamic permissions preserved: {arr(groupEvidence.complex_permissions).map((permission) => s(permission.name, s(permission.permission_id))).join(", ")}</p>
@@ -4206,9 +4220,9 @@ function CampaignDetail() {
               {s(r.identity_display_name, s(r.identity_identifier))}
               <Sub>{s(r.identity_provider)}</Sub>
             </button>,
-            <span>{s(r.application, "Keycloak")}</span>,
+            <span>{s(r.application)}</span>,
             <div><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>{reviewPermissionText(r.permission)}</Sub>{arr(r.grants).length ? <Sub>Grants: {arr(r.grants).map((grant) => s(grant.display_name)).join(", ")}</Sub> : null}</div>,
-            <span>{functionalRightsText(r)}</span>,
+            <span className="functional-rights-text">{functionalRightsText(r)}</span>,
             <span>{s(r.via, r.direct ? "Direct assignment" : "Inherited")}</span>,
             <div>{ownerText(r.reviewer)}<Sub>{r.reviewer ? "Responsible reviewer" : "No reviewer assigned"}</Sub></div>,
             <Status v={r.decision ?? "pending"} />,
@@ -4381,6 +4395,26 @@ function GoldenFunctionalSuggestions({ rows, onEdit }: { rows: Row[]; onEdit: (r
           </article>
         );
       })}
+    </div>
+  );
+}
+
+export function FunctionalRightsSummary({ row, onAction }: { row: Row; onAction?: (action: string) => void }) {
+  const presentation = goldenFunctionalPresentation(row);
+  const groups = (items: FunctionalRightsGroup[], label?: string) => items.length ? (
+    <div className="functional-rights-groups">
+      {label ? <small className="muted">{label}</small> : null}
+      {items.map((group) => <div className="functional-rights-group" key={`${label ?? "direct"}:${group.resource}`}><strong>{group.resource}</strong><span>{group.capabilities.join(" · ")}</span></div>)}
+    </div>
+  ) : null;
+  return (
+    <div className="functional-rights-summary">
+      {groups(presentation.groups)}
+      {groups(presentation.inheritedGroups, "Inherited / effective rights")}
+      <span className="functional-status" role="status">{presentation.status}</span>
+      {presentation.description ? <small>{presentation.description}</small> : null}
+      {presentation.origin ? <small>{presentation.origin}</small> : null}
+      {onAction ? <button type="button" className={presentation.status === "System access" ? "link-button" : "button subtle"} onClick={() => onAction(presentation.action)}>{presentation.action}</button> : null}
     </div>
   );
 }
@@ -4744,6 +4778,44 @@ function Golden() {
     saveEditedAccess = (continuation: { row?: Row; tab?: string } = {}) => {
       if (!editingAccess || saveAccessRow.isPending) return;
       saveAccessRow.mutate({ body: goldenAccessEditPayload(editingAccess), continuation });
+    },
+    openFunctionalEditor = (row: Row, mode = "define") => {
+      const application = contextValue(row.business_context, "application", "manual")
+        || s(row.application, "")
+        || contextValue(row.business_context, "application", "source")
+        || keycloakApplicationText({ ...row, target: row.access_target });
+      const directRights = arr(row.direct_functional_rights);
+      const observedRights = arr(row.observed_functional_rights);
+      const sourceRights = mode === "suggestion" ? observedRights : [];
+      const rights = directRights.length ? directRights : sourceRights;
+      const editorRights = rights.length ? rights.map((right) => {
+        const target = (right.target ?? {}) as Row;
+        const service = (target.service ?? {}) as Row;
+        const component = (target.component ?? {}) as Row;
+        const resource = (target.resource ?? {}) as Row;
+        const observedResource = s(right.resource_id, s(right.resource, ""));
+        const observedApplication = s(right.application, application);
+        return {
+          capability_id: s(right.capability_id, s(right.capability, "")),
+          target: {
+            service: service.identifier || observedApplication ? { identifier: s(service.identifier, observedApplication), display_name: s(service.display_name, observedApplication), type: "application" } : undefined,
+            component: component.identifier ? { identifier: component.identifier, display_name: s(component.display_name, s(component.identifier)), type: "component" } : undefined,
+            resource: resource.identifier || observedResource ? { identifier: s(resource.identifier, observedResource), display_name: s(resource.display_name, observedResource), type: "business_object" } : undefined,
+          },
+        };
+      }) : [{ capability_id: "", target: application ? { service: { identifier: application, display_name: application, type: "application" } } : {} }];
+      const completeness = mode === "suggestion" ? s(row.observed_completeness, "partial") : s(row.completeness, "not_defined");
+      const accessName = s(row.access_display_name, s(row.access_name));
+      setFunctionalEditing({
+        access_provider: row.access_provider,
+        access_name: row.access_name,
+        access_display_name: row.access_display_name,
+        application,
+        completeness,
+        version_comment: mode === "suggestion" ? `Validate source-informed functional model for ${accessName}` : `${directRights.length ? "Update" : "Define"} expected functional rights for ${accessName}`,
+        rights: editorRights,
+        grants: arr(row.expected_grants),
+      });
     };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -5052,7 +5124,7 @@ function Golden() {
                     : <button className="link-button" title={splitPermissions(application).join(", ")} onClick={() => requestAccessEdit(r)}>{applicationSummary(application) || "—"}</button>;
                   const permissionCell = editing
                     ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>{functionalRightsText(r)}</small></div>
-                    : <span>{functionalRightsText(r)}</span>;
+                    : <FunctionalRightsSummary row={r} onAction={() => openFunctionalEditor(r, goldenFunctionalPresentation(r).status === "Source suggestion available" ? "suggestion" : "define")} />;
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.access_display_name, s(r.access_name))}
@@ -5243,27 +5315,7 @@ function Golden() {
               {functionalModelQuery.isError ? <p className="form-error">{s(functionalModelQuery.error)}</p> : null}
               <GoldenFunctionalSuggestions
                 rows={arr(functionalModelQuery.data?.items)}
-                onEdit={(row) => {
-                  const suggestion = (row.canonical_suggestions ?? {}) as Row;
-                  const target = (suggestion.target ?? {}) as Row;
-                  const service = (target.service ?? {}) as Row;
-                  const resource = (target.resource ?? {}) as Row;
-                  const mapped = vals(suggestion.mapped_capability_ids);
-                  const existingRights = arr(row.direct_functional_rights).map((right) => ({
-                    ...right,
-                    capability_id: s(right.capability_id, ""),
-                    target: right.target,
-                  }));
-                  setFunctionalEditing({
-                    access_provider: row.access_provider,
-                    access_name: row.access_name,
-                    access_display_name: row.access_display_name,
-                    completeness: row.completeness ?? "not_defined",
-                    version_comment: "Validate source-informed functional model",
-                    rights: existingRights.length ? existingRights : [{ capability_id: mapped[0] ?? "", target: { service: service.identifier ? { identifier: service.identifier, display_name: service.display_name } : undefined, resource: resource.identifier ? { identifier: resource.identifier, display_name: resource.display_name } : undefined } }],
-                    grants: arr(row.expected_grants),
-                  });
-                }}
+                onEdit={(row) => openFunctionalEditor(row, "suggestion")}
               />
             </section>
           )}
@@ -5451,8 +5503,23 @@ function Golden() {
               <label className="drawer-field">Resource<input value={s(resource.identifier, "")} onChange={(event) => updateRight({ target: { ...target, resource: event.target.value ? { identifier: event.target.value, display_name: event.target.value, type: "business_object" } : undefined } })} /></label>
             </div>;
           })}
-          <button type="button" className="button subtle" onClick={() => setFunctionalEditing({ ...functionalEditing, rights: [...arr(functionalEditing.rights), { capability_id: "", target: {} }] })}>+ Add right</button>
           </div>
+          <button type="button" className="button subtle" onClick={() => {
+            const previous = arr(functionalEditing.rights).at(-1) as Row | undefined;
+            const previousTarget = (previous?.target ?? {}) as Row;
+            const service = (previousTarget.service ?? {}) as Row;
+            const component = (previousTarget.component ?? {}) as Row;
+            setFunctionalEditing({
+              ...functionalEditing,
+              rights: [...arr(functionalEditing.rights), {
+                capability_id: "",
+                target: {
+                  service: service.identifier ? service : undefined,
+                  component: component.identifier ? component : undefined,
+                },
+              }],
+            });
+          }}>+ Add right</button>
           <div className="drawer-section"><h4>EXPECTED RELATIONS</h4><p className="muted">{arr(functionalEditing.grants).length ? `${arr(functionalEditing.grants).length} existing relation(s) will be preserved.` : "No existing relations."}</p>{arr(functionalEditing.grants).map((grant, index) => <p key={`${s(grant.access_provider)}:${s(grant.access_name)}:${index}`} className="muted">{s(functionalEditing.access_display_name, s(functionalEditing.access_name))} → {s(grant.access_name)}</p>)}</div>
           <label className="drawer-field">Version comment<textarea className="drawer-comment" value={s(functionalEditing.version_comment, "")} onChange={(event) => setFunctionalEditing({ ...functionalEditing, version_comment: event.target.value })} /></label>
           <div className="drawer-actions"><button

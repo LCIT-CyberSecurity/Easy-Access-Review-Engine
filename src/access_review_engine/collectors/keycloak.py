@@ -48,6 +48,7 @@ AUTHZ_SURFACES = tuple(surface for surface in SURFACE_FILES if surface.startswit
 AUTHZ_PAGINATED_SURFACES = tuple(
     surface for surface in AUTHZ_SURFACES if surface != "authorization_resource_servers"
 )
+AUTHENTICATION_FILE = "authentication-posture.json"
 MAX_PAGES = 10_000
 
 
@@ -68,6 +69,8 @@ class KeycloakClient(Protocol):
     ) -> list[dict[str, Any]]: ...
 
     def check_realm(self) -> None: ...
+
+    def authentication_posture(self) -> dict[str, Any]: ...
 
 
 def _retry(
@@ -111,6 +114,13 @@ def _stable(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _realm_authentication_posture(client: KeycloakClient, provider: str) -> dict[str, Any]:
+    authentication_posture = getattr(client, "authentication_posture", None)
+    if authentication_posture is None:
+        raise KeycloakError("Keycloak client does not support authentication posture collection")
+    return {"provider": provider, "controls": authentication_posture(), "source": "keycloak-admin-api", "completeness": "full"}
+
+
 def _role_row(
     role: dict[str, Any], kind: str, client: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -150,6 +160,14 @@ def collect(
                 {"surface": "authentication", "status": "error", "error": type(exc).__name__}
             )
             raise RuntimeError("Keycloak authentication or realm check failed") from exc
+        if getattr(client, "authentication_posture", None) is not None:
+            try:
+                client.authentication_posture()
+                diagnostics.append({"surface": "authentication_policy", "status": "success"})
+            except Exception as exc:
+                diagnostics.append({"surface": "authentication_policy", "status": "error", "error": type(exc).__name__})
+                if not collection.get("allow_partial", False):
+                    raise RuntimeError("Keycloak authentication policy check failed") from exc
         probes = ("users", "groups", "clients", "realm_roles")
         for surface in (surface for surface in requested if surface in probes):
             try:
@@ -205,6 +223,7 @@ def collect(
     pages: dict[str, int] = {}
     errors: list[dict[str, str]] = []
     failed_surfaces: set[str] = set()
+    authentication_posture: dict[str, Any] | None = None
 
     def run(surface: str, fn: Callable[[], tuple[list[dict[str, Any]], int]]) -> None:
         try:
@@ -215,6 +234,14 @@ def collect(
             data[surface] = []
             if not collection.get("allow_partial", False):
                 raise RuntimeError(f"Keycloak collection failed for {surface}") from exc
+
+    if getattr(client, "authentication_posture", None) is not None:
+        try:
+            authentication_posture = _realm_authentication_posture(client, config["provider"])
+        except Exception as exc:
+            errors.append({"surface": "authentication_policy", "error": type(exc).__name__})
+            if not collection.get("allow_partial", False):
+                raise RuntimeError("Keycloak collection failed for authentication policy") from exc
 
     if "users" in requested:
         run("users", lambda: _pages(client, "users", page_size))
@@ -519,6 +546,8 @@ def collect(
         archive.writestr("manifest.yaml", yaml.safe_dump(manifest, sort_keys=False))
         for surface, filename in SURFACE_FILES.items():
             write_jsonl(archive, filename, iter(data.get(surface, [])))
+        if authentication_posture is not None:
+            archive.writestr(AUTHENTICATION_FILE, json.dumps(authentication_posture, sort_keys=True))
         archive.writestr("collection-errors.json", json.dumps(errors, sort_keys=True))
     return manifest
 
@@ -603,6 +632,59 @@ class _HTTPClient:
 
     def check_realm(self) -> None:
         self._get("", {})
+
+    def authentication_posture(self) -> dict[str, Any]:
+        realm = (self._get("", {}) or [{}])[0]
+        required_actions = self._get("authentication/required-actions", {})
+        flows = self._get("authentication/flows", {})
+        executions: list[dict[str, Any]] = []
+        for flow in flows:
+            alias = _stable(flow.get("alias"))
+            if alias:
+                executions.extend(
+                    {**row, "flow_alias": alias}
+                    for row in self._get(
+                        f"authentication/flows/{urllib.parse.quote(alias, safe='')}/executions", {}
+                    )
+                )
+        identity_providers = self._get("identity-provider/instances", {})
+        execution_providers = sorted(
+            {
+                _stable(row.get("providerId") or row.get("provider_id"))
+                for row in executions
+                if _stable(row.get("providerId") or row.get("provider_id"))
+            }
+        )
+        mfa_methods = sorted(
+            {
+                provider
+                for provider in execution_providers
+                if any(token in provider.lower() for token in ("otp", "webauthn", "authenticator"))
+            }
+        )
+        return {
+            "password_policy": {"status": "collected", "policy": _stable(realm.get("passwordPolicy")) or "not configured"},
+            "mfa": {"status": "collected", "required": bool(mfa_methods), "methods": mfa_methods or ["not configured"]},
+            "brute_force": {
+                "status": "collected",
+                "enabled": bool(realm.get("bruteForceProtected")),
+                "failure_factor": realm.get("failureFactor"),
+                "wait_increment_seconds": realm.get("waitIncrementSeconds"),
+                "max_failure_wait_seconds": realm.get("maxFailureWaitSeconds"),
+            },
+            "required_actions": {
+                "status": "collected",
+                "enabled": sorted(_stable(row.get("alias")) for row in required_actions if _stable(row.get("alias")) and row.get("enabled", True)),
+            },
+            "federation": {
+                "status": "collected",
+                "providers": sorted(_stable(row.get("alias")) for row in identity_providers if _stable(row.get("alias"))),
+            },
+            "authentication_flows": {
+                "status": "collected",
+                "flows": sorted(_stable(row.get("alias")) for row in flows if _stable(row.get("alias"))),
+            },
+        }
 
     def list(self, surface: str, page: int, page_size: int, **kwargs: Any) -> list[dict[str, Any]]:
         first = page * page_size

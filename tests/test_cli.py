@@ -21,6 +21,26 @@ def test_connector_validation_and_secret_indirection() -> None:
         assert secret_environment(data)["password"] == "never-print"
 
 
+def test_system_password_reset_uses_hidden_confirmation_and_updates_database(tmp_path: Path) -> None:
+    db = tmp_path / "access-review.db"
+    from access_review_engine.system_admin import init_system, upsert_user
+    import sqlite3
+
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        upsert_user(conn, {"username": "admin", "role": "ADMIN", "password": "old-secure-password"})
+
+    with patch("access_review_engine.cli.main.getpass.getpass", side_effect=["new-secure-password", "new-secure-password"]):
+        assert main(["--db", str(db), "system", "reset-password", "admin"]) == 0
+
+    from access_review_engine.system_admin import authenticate_user
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        assert authenticate_user(conn, "admin", "new-secure-password") is not None
+        assert authenticate_user(conn, "admin", "old-secure-password") is None
+
+
 def test_invalid_connector_is_rejected() -> None:
     try:
         validate_connector({"provider": "x", "type": "unknown", "connection": {}})
