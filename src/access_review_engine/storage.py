@@ -63,6 +63,9 @@ TABLES = {
     "capabilities",
     "permission_capability_mappings",
     "golden_applications",
+    "chatbot_conversations",
+    "chatbot_messages",
+    "chatbot_traces",
 }
 
 

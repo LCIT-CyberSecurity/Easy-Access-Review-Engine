@@ -82,6 +82,8 @@ from access_review_engine.golden_annotations import (
     set_assignment_annotation,
 )
 from access_review_engine.guidance import GuidanceContext, build_guidance
+from access_review_engine.chatbot.context import UIHints
+from access_review_engine.chatbot.service import AssistantService
 from access_review_engine.mcp_server import build_mcp_asgi
 from access_review_engine.reporting import (
     access_names_from_snapshot,
@@ -535,6 +537,45 @@ def create_app(db_path: str | None = None):
     @app.get("/api/health")
     def health():
         return {"status": "ok"}
+
+    @app.post("/api/chatbot/message")
+    def chatbot_message(request: Request, payload: dict[str, Any] = Body(...)):
+        """Bounded EARE assistant endpoint; all identity and scope data comes from the session."""
+        principal = _require(current_user(request))
+        question = payload.get("message")
+        if not isinstance(question, str):
+            raise HTTPException(status_code=400, detail="Message must be text")
+        route = payload.get("route", "/")
+        object_id = payload.get("object_id")
+        if not isinstance(route, str) or not route.startswith("/") or len(route) > 300:
+            route = "/"
+        if not isinstance(object_id, str) or len(object_id) > 200:
+            object_id = None
+        try:
+            result = AssistantService(lambda: Repository(db_path)).handle(
+                principal,
+                question,
+                payload.get("conversation_id") if isinstance(payload.get("conversation_id"), str) else None,
+                UIHints(route, object_id),
+                principal_resolver=lambda: current_user(request),
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=404, detail="Conversation is not available in your scope") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return result
+
+    @app.get("/api/chatbot/actions")
+    def chatbot_actions(request: Request):
+        _require(current_user(request))
+        return {"actions": [
+            {"action_id": "OPEN_GOLDEN", "label": "Ouvrir la Golden Source"},
+            {"action_id": "OPEN_CAMPAIGN", "label": "Ouvrir les campagnes"},
+            {"action_id": "OPEN_PENDING_REVIEWS", "label": "Ouvrir les revues en attente"},
+            {"action_id": "OPEN_ACTIONS", "label": "Ouvrir les remédiations"},
+            {"action_id": "OPEN_SOURCES", "label": "Ouvrir les sources"},
+            {"action_id": "OPEN_REPORTS", "label": "Ouvrir les rapports"},
+        ]}
 
     def column_filters(request: Request) -> dict[str, str]:
         """Per-column filters travel as f.<column>=<text>, next to search and sort."""

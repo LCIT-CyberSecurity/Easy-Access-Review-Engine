@@ -76,6 +76,7 @@ import {
 } from "./projections";
 import { goldenFunctionalRightsAreValid } from "./goldenFunctionalValidation";
 import { goldenFunctionalPresentation, type FunctionalRightsGroup } from "./goldenFunctionalPresentation";
+import { AssistantDrawer } from "./chatbot/AssistantDrawer";
 const s = (v: unknown, f = "—") =>
     v instanceof Error
       ? v.message
@@ -890,6 +891,7 @@ function CommandPalette({ role, close }: { role: string; close: () => void }) {
 }
 function Shell({ principal }: { principal: Principal }) {
   const [c, setC] = useState(false),
+    [assistantOpen, setAssistantOpen] = useState(false),
     [guideOpen, setGuideOpen] = useState(false),
     [paletteOpen, setPaletteOpen] = useState(false),
     [guideEnabled, setGuideEnabled] = useState(() => readGuidePreference(principal, "enabled", true)),
@@ -1018,6 +1020,9 @@ function Shell({ principal }: { principal: Principal }) {
               <HelpCircle size={16} /> <span>{ui("guide.title")}</span>
               {guidePending ? <span className="guide-badge" aria-hidden="true">{guidePending}</span> : null}
             </button>
+            <button className="guide-trigger" type="button" onClick={() => setAssistantOpen(true)} aria-label="Assistant EARE">
+              <HelpCircle size={16} /> <span>Assistant</span>
+            </button>
             <UserMenu
               principal={principal}
               onSignOut={async () => {
@@ -1062,6 +1067,7 @@ function Shell({ principal }: { principal: Principal }) {
       {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} focus={(id) => setGuideFocus(GUIDE_FOCUS[id] ?? [])} /> : null}
       {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
       {paletteOpen ? <CommandPalette role={principal.role} close={() => setPaletteOpen(false)} /> : null}
+      {assistantOpen ? <AssistantDrawer route={location.pathname} close={() => setAssistantOpen(false)} /> : null}
     </div>
   );
 }
