@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from collections.abc import Callable
@@ -230,7 +231,11 @@ class AssistantService:
                     }
                 )
                 messages.append(
-                    {"type": "function_call_output", "call_id": call.call_id, "output": projected}
+                    {
+                        "type": "function_call_output",
+                        "call_id": call.call_id,
+                        "output": json.dumps(projected, ensure_ascii=False, separators=(",", ":")),
+                    }
                 )
         raise ValueError("Tool round limit exceeded")
 
