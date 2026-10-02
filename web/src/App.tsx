@@ -77,6 +77,7 @@ import {
 } from "./projections";
 import { goldenFunctionalRightsAreValid } from "./goldenFunctionalValidation";
 import { goldenFunctionalPresentation, type FunctionalRightsGroup } from "./goldenFunctionalPresentation";
+import { BUSINESS_CONTEXT_FIELDS, conflictFields, provenanceLabel } from "./businessContextPresentation";
 import { AssistantDrawer } from "./chatbot/AssistantDrawer";
 const s = (v: unknown, f = "—") =>
     v instanceof Error
@@ -377,7 +378,11 @@ const contextValue = (context: unknown, field: string, origin: "source" | "manua
   const value = contextField(context, field)[origin] as Row | undefined;
   return value ? s(value.value, "") : "";
 };
-function BusinessContext({ context, manualStatus, includeOwner = true }: { context: unknown; manualStatus?: string; includeOwner?: boolean }) {
+export function BusinessContextWarning({ context }: { context: unknown }) {
+  const fields = conflictFields(context);
+  return fields.length ? <div className="business-context-warning" role="status"><AlertTriangle size={18} /><span>Reference information does not match for {fields.join(", ")}. Check the context before deciding.</span></div> : null;
+}
+export function BusinessContext({ context, manualStatus, includeOwner = true }: { context: unknown; manualStatus?: string; includeOwner?: boolean }) {
   const rows = [
     [ui("labels.application"), "application"],
     [ui("labels.businessPermission"), "business_permission"],
@@ -398,8 +403,8 @@ function BusinessContext({ context, manualStatus, includeOwner = true }: { conte
           return (
             <div key={field}>
               <strong>{label}</strong>
-              {manual ? <span>{manual}<small>Manual reference</small></span> : null}
-              {source ? <span>{source}<small>{sourceEntry?.provenance === "static" ? "Configured static" : sourceEntry?.provenance === "native_semantic" ? "Native semantic" : `Source attribute${sourceEntry?.attribute ? `: ${s(sourceEntry.attribute)}` : ""}${sourceEntry?.mapping_mode === "default" ? " · connector default" : sourceEntry?.mapping_mode === "configured" ? " · configured mapping" : ""}`}</small></span> : null}
+              {manual ? <span>{manual}<small>Reference entered in EARE</small></span> : null}
+              {source ? <span>{source}<small>{provenanceLabel(sourceEntry ?? {})}</small>{sourceEntry?.attribute ? <details><summary>Technical details</summary><small>Attribute: {s(sourceEntry.attribute)} · Mapping: {s(sourceEntry.mapping_mode)}</small></details> : null}</span> : null}
               {conflict ? <Status v="warning" /> : null}
             </div>
           );
@@ -1058,14 +1063,14 @@ function Shell({ principal }: { principal: Principal }) {
                 roleHome(principal.role) === "/" ? <Home /> : <Navigate to={roleHome(principal.role)} replace />
               }
             />
-            <Route path="/reviews" element={<Reviews />} />
+            <Route path="/reviews" element={<Reviews principal={principal} />} />
             <Route path="/identities" element={<Identities />} />
             <Route path="/accesses" element={<Accesses />} />
-            <Route path="/golden" element={<Golden />} />
+            <Route path="/golden" element={<Golden principal={principal} />} />
             <Route path="/campaigns" element={<Campaigns principal={principal} />} />
             <Route path="/campaigns/new" element={<CampaignNew principal={principal} />} />
             <Route path="/campaigns/:id/edit" element={<CampaignNew principal={principal} />} />
-            <Route path="/campaigns/:id" element={<CampaignDetail />} />
+            <Route path="/campaigns/:id" element={<CampaignDetail principal={principal} />} />
             <Route path="/findings" element={<List path="findings" title="Findings" principal={principal} />} />
             <Route path="/actions" element={<List path="remediation-actions" title="Actions" principal={principal} />} />
             <Route path="/reports" element={<Reports />} />
@@ -2860,7 +2865,7 @@ function RowDecision({ item, done }: { item: Row; done?: () => void }) {
     </>
   );
 }
-function Reviews() {
+function Reviews({ principal }: { principal: Principal }) {
   const campaigns = useQuery({
       queryKey: ["review-campaigns"],
       queryFn: () => getPage("campaigns", { limit: 100 }),
@@ -2967,6 +2972,7 @@ function Reviews() {
         <ReviewDrawer
           item={selected}
           items={x.q.data?.items ?? []}
+          principal={principal}
           close={() => setSelected(null)}
           next={setSelected}
         />
@@ -2974,21 +2980,38 @@ function Reviews() {
     </>
   );
 }
-function ReviewDrawer({
+export function ReviewDrawer({
   item,
   items,
+  principal,
   close,
   next,
 }: {
   item: Row;
   items: Row[];
+  principal: Principal;
   close: () => void;
   next: (x: Row | null) => void;
 }) {
   const c = useQueryClient(),
     toast = useToast(),
     [reason, setReason] = useState(""),
-    [pending, setPending] = useState<string | null>(null);
+    [pending, setPending] = useState<string | null>(null),
+    [feedbackOpen, setFeedbackOpen] = useState(false),
+    [feedbackFields, setFeedbackFields] = useState<string[]>([]),
+    [feedbackComment, setFeedbackComment] = useState(""),
+    [feedbackSent, setFeedbackSent] = useState(false);
+  const feedbackMutation = useMutation({
+    mutationFn: () => postJson(`review-items/${encodeURIComponent(s(item.id))}/business-context-feedback`, { fields: feedbackFields, comment: feedbackComment }),
+    onSuccess: () => { setFeedbackSent(true); setFeedbackOpen(false); setFeedbackFields([]); setFeedbackComment(""); },
+  });
+  useEffect(() => {
+    setFeedbackOpen(false);
+    setFeedbackFields([]);
+    setFeedbackComment("");
+    setFeedbackSent(false);
+    feedbackMutation.reset();
+  }, [item.id]);
   const m = useMutation({
     mutationFn: (v: string) => postDecision(s(item.id), v, reason.trim() || undefined),
     onSuccess: async () => {
@@ -3067,7 +3090,17 @@ function ReviewDrawer({
       </section>
       <section className="drawer-section">
         <h4>BUSINESS CONTEXT</h4>
+        <BusinessContextWarning context={item.business_context} />
         <BusinessContext context={item.business_context} manualStatus={s(item.manual_context_capture_status)} />
+        <p className="muted">This information comes from the source or EARE reference. It helps review, but does not independently verify permissions in the target application.</p>
+        {feedbackSent ? <p role="status">Context feedback submitted. This does not change your review decision.</p> : null}
+        {(principal.role === "ADMIN" || principal.role === "OPERATOR" || (principal.role === "GROUP_OWNER" && s((item.reviewer as Row | undefined)?.identity, "") === principal.username)) && (!feedbackOpen ? <button className="button subtle" onClick={() => { setFeedbackOpen(true); setFeedbackSent(false); }}>Report incorrect or incomplete context</button> : <div className="drawer-form business-context-feedback">
+          <strong>What needs review?</strong>
+          {BUSINESS_CONTEXT_FIELDS.map(([field, label]) => <label key={field}><input type="checkbox" checked={feedbackFields.includes(field)} onChange={() => setFeedbackFields((current) => current.includes(field) ? current.filter((value) => value !== field) : [...current, field])} /> {label}</label>)}
+          <label>Comment<textarea maxLength={2000} value={feedbackComment} onChange={(event) => setFeedbackComment(event.target.value)} /></label>
+          {feedbackMutation.isError ? <p className="form-error" role="alert">{s(feedbackMutation.error, "Feedback could not be submitted")}</p> : null}
+          <div className="drawer-actions"><button className="button subtle" onClick={() => setFeedbackOpen(false)}>Cancel</button><button className="button primary" disabled={feedbackMutation.isPending || (!feedbackFields.length && !feedbackComment.trim())} onClick={() => feedbackMutation.mutate()}>Submit feedback</button></div>
+        </div>)}
       </section>
       {item.golden_comment ? (
         <section className="drawer-section">
@@ -3835,7 +3868,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
     </>
   );
 }
-function CampaignDetail() {
+function CampaignDetail({ principal }: { principal: Principal }) {
   const { id = "" } = useParams(),
     [searchParams] = useSearchParams(),
     q = useQuery({ queryKey: ["campaign", id], queryFn: () => getJson("campaigns/" + id) }),
@@ -4328,7 +4361,7 @@ function CampaignDetail() {
         </>
       )}{" "}
       {selected && (
-        <ReviewDrawer item={selected} items={reviews} close={() => setSelected(null)} next={setSelected} />
+        <ReviewDrawer item={selected} items={reviews} principal={principal} close={() => setSelected(null)} next={setSelected} />
       )}{" "}
       {selectedFinding && <FindingDrawer row={selectedFinding} close={() => setSelectedFinding(null)} />}
       {confirmAction ? (
@@ -4441,9 +4474,27 @@ export function FunctionalRightsSummary({ row, onAction }: { row: Row; onAction?
     </div>
   );
 }
-function Golden() {
+export function BusinessFeedbackRow({ feedback, onReview, onResolve, pending = false }: { feedback: Row; onReview: () => void; onResolve: (status: "resolved" | "dismissed") => void; pending?: boolean }) {
+  return <div className="business-feedback-row">
+    <strong>{s(feedback.access_name)}</strong> · {s(feedback.access_provider)} · Campaign {s(feedback.campaign_id)}
+    <small>Reported by {s(feedback.reporter_username)} · {when(feedback.created_at)} · {vals(feedback.fields).join(", ") || "General context"}</small>
+    {feedback.comment ? <p>{s(feedback.comment)}</p> : null}
+    <div className="button-row">
+      <button className="button subtle" onClick={onReview}>Review access context</button>
+      <button className="button subtle" disabled={pending} onClick={() => onResolve("resolved")}>Mark resolved</button>
+      <button className="button subtle" disabled={pending} onClick={() => onResolve("dismissed")}>Dismiss</button>
+    </div>
+  </div>;
+}
+export function Golden({ principal }: { principal: Principal }) {
+  const [feedbackOffset, setFeedbackOffset] = useState(0);
   const c = useQueryClient(),
     q = useQuery({ queryKey: ["golden"], queryFn: () => getPage("golden-sources", { limit: 100 }) }),
+    feedbackQuery = useQuery({ queryKey: ["business-context-feedback", "open", feedbackOffset], queryFn: () => getJson("business-context-feedback", { status: "open", limit: 20, offset: feedbackOffset }), enabled: principal.role === "ADMIN" || principal.role === "OPERATOR", retry: false }),
+    resolveFeedback = useMutation({
+      mutationFn: ({ id, status }: { id: string; status: "resolved" | "dismissed" }) => postJson(`business-context-feedback/${encodeURIComponent(id)}/resolve`, { status, resolution_comment: "" }),
+      onSuccess: () => c.invalidateQueries({ queryKey: ["business-context-feedback"] }),
+    }),
     snap = useQuery({ queryKey: ["snap"], queryFn: () => getPage("snapshots", { limit: 100 }) }),
     goldens = arr(q.data?.items),
     [chosen, setChosen] = useState(""),
@@ -4881,6 +4932,14 @@ function Golden() {
         contain beyond this list is reported as unexpected, and everything missing from the systems is
         reported as missing.
       </p>
+      {(principal.role === "ADMIN" || principal.role === "OPERATOR") && <section className="panel" aria-label="Business context issues">
+        <h2>Business context issues <span className="muted">{s(feedbackQuery.data?.total, "0")} open</span></h2>
+        <p className="muted">Reviewer reports request verification; they do not change the Golden Source or a past decision. Source and EARE reference values are not independently verified target ACLs.</p>
+        {feedbackQuery.isError ? <p role="alert">Unable to load context feedback.</p> : null}
+        {arr(feedbackQuery.data?.items).map((feedback) => <BusinessFeedbackRow key={s(feedback.id)} feedback={feedback} pending={resolveFeedback.isPending} onReview={() => { setTab("accesses"); setSearch(s(feedback.access_name, "")); }} onResolve={(status) => resolveFeedback.mutate({ id: s(feedback.id), status })} />)}
+        {Number(feedbackQuery.data?.total) > 20 ? <div className="button-row" aria-label="Feedback pages"><button className="button subtle" disabled={feedbackOffset === 0} onClick={() => setFeedbackOffset(Math.max(0, feedbackOffset - 20))}>Previous</button><span>{feedbackOffset + 1}–{Math.min(feedbackOffset + 20, Number(feedbackQuery.data?.total))} of {s(feedbackQuery.data?.total)}</span><button className="button subtle" disabled={feedbackOffset + 20 >= Number(feedbackQuery.data?.total)} onClick={() => setFeedbackOffset(feedbackOffset + 20)}>Next</button></div> : null}
+        {resolveFeedback.isError ? <p role="alert">Unable to update feedback.</p> : null}
+      </section>}
       {goldens.length > 1 && (
         <div className="filterbar">
           <select

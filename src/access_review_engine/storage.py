@@ -60,6 +60,7 @@ TABLES = {
     "access_enrichments",
     "campaign_access_contexts",
     "golden_assignment_annotations",
+    "business_context_feedback",
     "capabilities",
     "permission_capability_mappings",
     "golden_applications",

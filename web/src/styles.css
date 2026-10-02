@@ -1900,6 +1900,14 @@ p + .button-row { margin-top: 14px; }
 .mapping-diagnostics { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-secondary); }
 .mapping-diagnostics p { margin: 5px 0; }
 .business-context { display: grid; gap: 8px; margin: 10px 0 16px; }
+.business-context-warning { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; margin: 10px 0; border: 1px solid #d5a54d; border-radius: 8px; background: #fff7e7; color: #674716; }
+.business-context-warning svg { flex: none; }
+.business-context-feedback { display: grid; gap: 8px; margin-top: 12px; }
+.business-context-feedback label { display: block; }
+.business-context-feedback input { margin-right: 6px; }
+.business-context-feedback textarea { display: block; width: 100%; min-height: 72px; }
+.business-feedback-row { padding: 12px 0; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; }
+.business-feedback-row small { display: block; color: var(--text-faint); margin-top: 3px; }
 .business-context > div {
   display: grid;
   grid-template-columns: minmax(110px, 0.35fr) repeat(2, minmax(120px, 1fr)) auto;

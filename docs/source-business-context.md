@@ -51,6 +51,27 @@ extensionAttribute7 = Invoices
 EARE observes group membership / member and stores Sage / ReadWrite / Invoices as context. This does
 not claim that the Sage ACL actually grants ReadWrite over Invoices.
 
+## Reviewer feedback on business context
+
+Source facts, manual EARE references and reviewer feedback are three separate concepts:
+
+- A source fact is an observation or mapped value; it is **not** an independently verified target-application ACL.
+- A manual reference is entered and maintained by an ADMIN/OPERATOR; it is not a source fact.
+- Reviewer feedback requests verification or correction; it is **not** expected truth and does not modify the Golden Source, Access enrichment or Functional Rights.
+
+The Review drawer highlights source/manual conflicts, presents provenance in business language and keeps attribute names under technical details. A reviewer assigned to the ReviewItem may report an issue with selected fields and an optional comment. This is independent of approve/revoke and its decision comment. ADMIN and scoped OPERATOR can list, resolve or dismiss reports in their campaign perimeter. GROUP_OWNER cannot manage the global feedback queue or edit Golden. Reports are audited without copying comments into audit events.
+
+```text
+Source / manual context -> frozen campaign context -> reviewer
+                                               |-> approve/revoke decision
+                                               |-> optional context feedback
+                                                    -> ADMIN/OPERATOR review
+                                                    -> optional explicit reference correction
+                                                    -> resolve/dismiss feedback
+```
+
+Feedback is stored in the separate `business_context_feedback` payload table with its own ID, ReviewItem and campaign references, reporter, selected fields, comment, status (`open`, `resolved`, `dismissed`), creation/resolution timestamps and resolver. Resolution status is mutable; audit events retain its transitions. Corrections to the current reference do not rewrite the historical campaign context, past decision or original feedback. The queue is bounded to 100 records per response and filtered by campaign authorization before pagination.
+
 ## Per-source mapping
 
 Mapping belongs to each source instance. Connector defaults apply unless that instance overrides

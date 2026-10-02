@@ -1,10 +1,53 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import { assistantSuggestions, safeAssistantActionRoute } from "./chatbot/AssistantDrawer";
 import { isAssistantAvailable } from "./App";
 
-import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, FunctionalRightsSummary, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, functionalRightsText, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
+import { ActionMenu, ApplicationPicker, BusinessContext, BusinessContextWarning, BusinessFeedbackRow, ExternalApiDocumentation, FunctionalRightsSummary, Golden, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, functionalRightsText, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, ReviewDrawer, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
+
+describe("review business context", () => {
+  const context = { fields: { application: { source: { value: "CRM", provenance: "source_attribute", mapping_mode: "configured", attribute: "extensionAttribute6" }, manual: { value: "ERP" }, conflict: true } } };
+  it("shows a prominent warning only for conflicts", () => {
+    expect(renderToStaticMarkup(createElement(BusinessContextWarning, { context: {} }))).toBe("");
+    expect(renderToStaticMarkup(createElement(BusinessContextWarning, { context }))).toContain("Reference information does not match for Application");
+  });
+  it("keeps technical provenance behind details and escapes imported values", () => {
+    const html = renderToStaticMarkup(createElement(BusinessContext, { context }));
+    expect(html).toContain("Directory value · mapping configured by IT");
+    expect(html).toContain("<summary>Technical details</summary>");
+    expect(html).toContain("extensionAttribute6");
+    const hostile = renderToStaticMarkup(createElement(BusinessContext, { context: { fields: { application: { source: { value: "<script>alert(1)</script>" } } } } }));
+    expect(hostile).toContain("&lt;script&gt;");
+    expect(hostile).not.toContain("<script>");
+  });
+  it("shows disclaimer and independent feedback action only to an assigned reviewer", () => {
+    const item = { id: "review-1", reviewer: { identity: "owner" }, business_context: context, identity_identifier: "alice", access_name: "CRM" };
+    const render = (username: string) => renderToStaticMarkup(createElement(QueryClientProvider, { client: new QueryClient() },
+      createElement(ReviewDrawer, { item, items: [item], principal: { subject: username, username, display_name: username, role: "GROUP_OWNER", scopes: [], must_change_password: false }, close: () => undefined, next: () => undefined })));
+    const allowed = render("owner");
+    expect(allowed).toContain("Report incorrect or incomplete context");
+    expect(allowed).toContain("does not independently verify permissions");
+    expect(allowed).toContain("Reference information does not match");
+    expect(render("other")).not.toContain("Report incorrect or incomplete context");
+  });
+  it("renders feedback comments as text in the Golden queue", () => {
+    const html = renderToStaticMarkup(createElement(BusinessFeedbackRow, { feedback: { id: "f-1", access_name: "CRM", access_provider: "ad", campaign_id: "c-1", reporter_username: "owner", fields: ["application"], comment: "<script>alert(1)</script>" }, onReview: () => undefined, onResolve: () => undefined }));
+    expect(html).toContain("Review access context");
+    expect(html).toContain("Mark resolved");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).not.toContain("<script>");
+  });
+  it("does not show the global feedback queue to a GROUP_OWNER", () => {
+    const render = (role: string) => renderToStaticMarkup(createElement(MemoryRouter, null,
+      createElement(QueryClientProvider, { client: new QueryClient() },
+        createElement(Golden, { principal: { subject: "u", username: "u", display_name: "u", role, scopes: [], must_change_password: false } }))));
+    expect(render("ADMIN")).toContain("Business context issues");
+    expect(render("GROUP_OWNER")).not.toContain("Business context issues");
+  });
+});
 
 describe("ActionMenu", () => {
   it("keeps secondary row actions in one labelled accessible menu", () => {

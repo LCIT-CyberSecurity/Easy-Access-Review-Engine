@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import yaml
 
@@ -5378,6 +5379,177 @@ def create_app(db_path: str | None = None):
             for event in get_events(db_path, job_id)
         )
         return StreamingResponse(iter([body]), media_type="text/event-stream")
+
+    feedback_fields = frozenset(
+        {
+            "application",
+            "business_permission",
+            "resource",
+            "description",
+            "owner",
+            "functional_rights",
+            "other",
+        }
+    )
+
+    def _feedback_review_item(
+        repo: Repository, principal: WebPrincipal, review_item_id: str
+    ) -> dict[str, Any]:
+        """Resolve and authorize a review item before exposing any feedback or object detail."""
+        unavailable = HTTPException(status_code=404, detail="Review item not available")
+        raw = repo.get_payload("review_items", review_item_id)
+        if raw is None:
+            raise unavailable
+        campaign_raw = repo.get_payload("campaigns", str(raw.get("campaign_id", "")))
+        if campaign_raw is None:
+            raise unavailable
+        if principal.role == "GROUP_OWNER":
+            reviewer = raw.get("reviewer")
+            if not isinstance(reviewer, dict) or reviewer.get("identity") != principal.username:
+                raise unavailable
+        elif principal.role in {"ADMIN", "OPERATOR"}:
+            try:
+                _require_campaign_access(principal, hydrate_campaign(campaign_raw), repo)
+            except (HTTPException, KeyError, TypeError, ValueError) as exc:
+                raise unavailable from exc
+        else:
+            raise unavailable
+        return raw
+
+    def _feedback_text(value: Any, name: str, maximum: int) -> str:
+        if not isinstance(value, str) or len(value) > maximum:
+            raise HTTPException(status_code=400, detail=f"Invalid {name}")
+        return value.strip()
+
+    @app.post("/api/review-items/{review_item_id}/business-context-feedback", status_code=201)
+    def create_business_context_feedback(
+        review_item_id: str, request: Request, body: dict[str, Any]
+    ):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR", "GROUP_OWNER"))
+        if set(body) != {"fields", "comment"}:
+            raise HTTPException(status_code=400, detail="Expected fields and comment")
+        fields = body["fields"]
+        if (
+            not isinstance(fields, list)
+            or len(fields) > len(feedback_fields)
+            or any(not isinstance(field, str) or field not in feedback_fields for field in fields)
+            or len(set(fields)) != len(fields)
+        ):
+            raise HTTPException(status_code=400, detail="Invalid feedback fields")
+        comment = _feedback_text(body["comment"], "comment", 2000)
+        if not fields and not comment:
+            raise HTTPException(status_code=400, detail="Select a field or provide a comment")
+        with Repository(db_path) as repo:
+            item = _feedback_review_item(repo, principal, review_item_id)
+            feedback = {
+                "id": str(uuid4()),
+                "review_item_id": review_item_id,
+                "campaign_id": str(item["campaign_id"]),
+                "access_provider": str(item.get("access_provider") or ""),
+                "access_name": str(item.get("access_name") or ""),
+                "reporter_user_id": principal.subject,
+                "reporter_username": principal.username,
+                "fields": fields,
+                "comment": comment,
+                "status": "open",
+                "created_at": now_utc(),
+                "resolved_at": None,
+                "resolved_by": None,
+                "resolution_comment": None,
+            }
+            with repo.transaction():
+                repo.insert_append_only("business_context_feedback", feedback)
+                record_audit(
+                    repo,
+                    request,
+                    "business_context.feedback_created",
+                    "business_context_feedback",
+                    feedback["id"],
+                    {
+                        "review_item_id": review_item_id,
+                        "campaign_id": feedback["campaign_id"],
+                        "access_provider": feedback["access_provider"],
+                        "fields": fields,
+                        "status": "open",
+                    },
+                )
+        return feedback
+
+    @app.get("/api/business-context-feedback")
+    def list_business_context_feedback(
+        request: Request,
+        status: str = "open",
+        provider: str | None = None,
+        campaign: str | None = None,
+        access: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if status not in {"open", "resolved", "dismissed", "all"}:
+            raise HTTPException(status_code=400, detail="Invalid status")
+        with Repository(db_path) as repo:
+            allowed = _authorized_campaign_ids(principal, repo)
+            rows = [
+                row
+                for row in repo.list_payloads("business_context_feedback")
+                if row.get("campaign_id") in allowed
+                and (status == "all" or row.get("status") == status)
+                and (provider is None or row.get("access_provider") == provider)
+                and (campaign is None or row.get("campaign_id") == campaign)
+                and (access is None or row.get("access_name") == access)
+            ]
+        rows.sort(key=lambda row: (str(row.get("created_at")), str(row.get("id"))), reverse=True)
+        return {
+            "items": rows[max(0, offset) : max(0, offset) + max(1, min(limit, 100))],
+            "total": len(rows),
+        }
+
+    @app.post("/api/business-context-feedback/{feedback_id}/resolve")
+    def resolve_business_context_feedback(
+        feedback_id: str, request: Request, body: dict[str, Any]
+    ):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if (
+            set(body) != {"status", "resolution_comment"}
+            or not isinstance(body["status"], str)
+            or body["status"] not in {"resolved", "dismissed"}
+        ):
+            raise HTTPException(status_code=400, detail="Invalid resolution")
+        resolution_comment = _feedback_text(body["resolution_comment"], "resolution comment", 2000)
+        with Repository(db_path) as repo:
+            feedback = repo.get_payload("business_context_feedback", feedback_id)
+            if feedback is None:
+                raise HTTPException(status_code=404, detail="Feedback not available")
+            try:
+                _feedback_review_item(repo, principal, str(feedback["review_item_id"]))
+            except (HTTPException, KeyError, TypeError) as exc:
+                raise HTTPException(status_code=404, detail="Feedback not available") from exc
+            if feedback["status"] != "open":
+                raise HTTPException(status_code=409, detail="Feedback is already closed")
+            feedback.update(
+                status=body["status"],
+                resolved_at=now_utc(),
+                resolved_by=principal.subject,
+                resolution_comment=resolution_comment,
+            )
+            with repo.transaction():
+                repo.upsert("business_context_feedback", feedback)
+                record_audit(
+                    repo,
+                    request,
+                    f"business_context.feedback_{body['status']}",
+                    "business_context_feedback",
+                    feedback_id,
+                    {
+                        "review_item_id": feedback["review_item_id"],
+                        "campaign_id": feedback["campaign_id"],
+                        "access_provider": feedback["access_provider"],
+                        "fields": feedback["fields"],
+                        "status": body["status"],
+                    },
+                )
+        return feedback
 
     @app.post("/api/review-items/{review_item_id}/decision")
     def decision(review_item_id: str, request: Request, body: dict[str, Any] = Body(...)):
