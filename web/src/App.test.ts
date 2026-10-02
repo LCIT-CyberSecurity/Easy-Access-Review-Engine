@@ -34,6 +34,8 @@ describe("EARE Assistant launcher contracts", () => {
     expect(assistantSuggestions("/campaigns/c-1")).toContain("Que reste-t-il à faire ?");
     expect(assistantSuggestions("/golden")).toContain("Qu'est-ce que je dois compléter ?");
     expect(assistantSuggestions("/reviews")).toContain("Que dois-je traiter ?");
+    expect(assistantSuggestions("/golden", "GROUP_OWNER")).toEqual(["Que dois-je faire maintenant ?"]);
+    expect(assistantSuggestions("/reviews", "GROUP_OWNER")).toContain("Explique cet accès");
   });
 
   it("accepts only internal action routes", () => {

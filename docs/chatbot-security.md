@@ -97,3 +97,8 @@ Imported provider strings and user text remain untrusted data at every stage. Se
 events contain metadata and safe references only. Conversation content can be disabled with
 `EARE_CHATBOT_STORE_MESSAGE_CONTENT=false`; in that mode raw message and trace content is
 not persisted, while security metadata remains available for audit.
+
+Product evaluation does not treat provider wording as an authorization or correctness
+decision. Structured DTOs are tested directly for scope filtering, inaccessible-object
+indistinguishability, Golden gaps, campaign blockers, finding explanations and source
+visibility. The live provider path is optional and never required by CI.

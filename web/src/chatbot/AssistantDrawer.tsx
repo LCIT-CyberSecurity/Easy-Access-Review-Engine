@@ -4,11 +4,36 @@ import { postJson } from "../api/client";
 
 type Message = { role: "user" | "assistant"; content: string; action?: { label: string; route: string } };
 
-export function assistantSuggestions(route: string): string[] {
-  const suggestions = ["Que dois-je faire maintenant ?"];
-  if (route.startsWith("/campaigns")) suggestions.push("Que reste-t-il à faire ?");
-  if (route.startsWith("/golden")) suggestions.push("Qu'est-ce que je dois compléter ?");
-  if (route.startsWith("/reviews")) suggestions.push("Que dois-je traiter ?");
+export function assistantSuggestions(route: string, role = "ADMIN"): string[] {
+  const canReadOperationalData = role === "ADMIN" || role === "OPERATOR";
+  const suggestions: string[] = [];
+  if (route === "/" || route === "/dashboard") {
+    suggestions.push("Résumer mon dashboard", "Que dois-je traiter en priorité ?");
+  } else if (route.startsWith("/campaigns") && canReadOperationalData) {
+    suggestions.push(
+      "Résumer cette campagne",
+      "Que reste-t-il à traiter ?",
+      "Que reste-t-il à faire ?",
+      "Quels sont les principaux findings ?",
+      "Pourquoi cette campagne n'est-elle pas terminée ?",
+    );
+  } else if (route.startsWith("/golden") && canReadOperationalData) {
+    suggestions.push(
+      "Évaluer la qualité de ma Golden",
+      "Quels accès sont incomplets ?",
+      "Quels owners manquent ?",
+      "Qu'est-ce que je dois compléter ?",
+      "Puis-je lancer une campagne ?",
+    );
+  } else if (route.startsWith("/reviews")) {
+    suggestions.push("Que dois-je traiter ?", "Explique cet accès", "Pourquoi est-il unexpected ?");
+  } else if (route.startsWith("/sources") && canReadOperationalData) {
+    suggestions.push("Quel est l'état de cette source ?", "Le snapshot est-il exploitable ?");
+  } else if (route.startsWith("/actions") && (canReadOperationalData || role === "BUSINESS_ADMIN" || role === "REMEDIATION_MANAGER")) {
+    suggestions.push("Que dois-je faire maintenant ?", "Quelles remédiations restent ouvertes ?");
+  } else {
+    suggestions.push("Que dois-je faire maintenant ?");
+  }
   return suggestions;
 }
 
@@ -19,7 +44,7 @@ export function safeAssistantActionRoute(route: unknown): string | null {
     : null;
 }
 
-export function AssistantDrawer({ route, close }: { route: string; close: () => void }) {
+export function AssistantDrawer({ route, role = "ADMIN", close }: { route: string; role?: string; close: () => void }) {
   const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
   const [value, setValue] = useState("");
@@ -65,7 +90,7 @@ export function AssistantDrawer({ route, close }: { route: string; close: () => 
         {loading ? <div className="chatbot-message assistant">Analyse en cours…</div> : null}
       </div>
       <div className="chatbot-suggestions">
-        {assistantSuggestions(route).map((suggestion) => <button key={suggestion} onClick={() => void send(suggestion)}>{suggestion}</button>)}
+        {assistantSuggestions(route, role).map((suggestion) => <button key={suggestion} onClick={() => void send(suggestion)}>{suggestion}</button>)}
       </div>
       <form className="chatbot-form" onSubmit={(event) => { event.preventDefault(); void send(); }}>
         <input value={value} maxLength={8000} onChange={(event) => setValue(event.target.value)} placeholder="Posez une question sur EARE…" aria-label="Question à l'assistant" />

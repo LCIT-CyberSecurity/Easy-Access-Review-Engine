@@ -86,6 +86,24 @@ The assistant is business read-only. It can explain, summarize, guide and prepar
 controlled Markdown/JSON-style brief, but it cannot approve, revoke, edit Golden Source,
 change campaigns, launch remediation, import data or modify providers.
 
+## Deterministic diagnostics and evaluations
+
+The chatbot exposes bounded projections for campaign readiness, campaign finding summaries,
+Golden quality and source/snapshot status. These calculations remain in EARE; the LLM only
+explains their results. Finding explanations are defined for the EARE comparison categories
+(`expected_and_observed`, `unexpected`, `missing`, `unknown_due_to_scope` and `no_reference`).
+Unknown categories remain explicit and are never guessed.
+
+Reproducible product evaluations live in `tests/chatbot/evals/`. They cover scope
+classification, authorized campaign facts, inaccessible campaigns, readiness blockers,
+Golden quality gaps, finding explanations, source filtering and prompt-injection/out-of-scope
+classification. Assertions target structured facts and authorization outcomes rather than
+provider wording.
+
+Contextual UI suggestions are role-aware: operational campaign, Golden and source suggestions
+are shown to ADMIN/OPERATOR users, review suggestions are available to review users, and
+remediation suggestions are limited to roles that can view remediation.
+
 The raw Responses REST body is parsed through `output[]` message items and only
 `message.content[].type == "output_text"` fragments become the user answer. Reasoning,
 function-call arguments and other output items are never treated as answer text. Usage
