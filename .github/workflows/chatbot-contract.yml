@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[app,dev]"
-      - run: python -m pytest -q tests/test_chatbot.py tests/test_chatbot_api.py tests/test_chatbot_security_v1.py tests/test_campaign_scopes.py tests/test_guidance.py tests/test_golden_functional_api.py
+      - run: pytest -q tests/test_chatbot.py tests/test_chatbot_api.py tests/test_chatbot_security_v1.py tests/test_campaign_scopes.py tests/test_guidance.py tests/test_golden_functional_api.py
       - run: ruff check src/access_review_engine/chatbot tests/test_chatbot.py tests/test_chatbot_api.py tests/test_chatbot_security_v1.py
 
   frontend:

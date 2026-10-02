@@ -61,3 +61,33 @@ def test_chatbot_brief_and_markdown_report_are_controlled(tmp_path: Path, monkey
     assert report.status_code == 200
     assert report.headers["content-type"].startswith("text/markdown")
     assert "# Synthèse EARE" in report.text
+
+
+def test_chatbot_actions_follow_the_shared_role_contract(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("EARE_CHATBOT_ENABLED", "false")
+    client = _client(tmp_path)
+    conn = sqlite3.connect(tmp_path / "api.db")
+    init_system(conn)
+    for role in ("OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"):
+        upsert_user(conn, {
+            "username": f"{role.lower()}-user", "role": role, "password": "role-password",
+            "scopes": ["A"],
+        })
+    conn.close()
+    expected = {
+        "OPERATOR": {
+            "OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_PENDING_REVIEWS",
+            "OPEN_ACTIONS", "OPEN_SOURCES", "OPEN_REPORTS",
+        },
+        "GROUP_OWNER": {"OPEN_PENDING_REVIEWS"},
+        "BUSINESS_ADMIN": {"OPEN_ACTIONS"},
+        "REMEDIATION_MANAGER": {"OPEN_ACTIONS"},
+    }
+    for role, action_ids in expected.items():
+        login = client.post(
+            "/api/auth/login",
+            json={"username": f"{role.lower()}-user", "password": "role-password"},
+        )
+        assert login.status_code == 200
+        response = client.get("/api/chatbot/actions")
+        assert {item["action_id"] for item in response.json()["actions"]} == action_ids

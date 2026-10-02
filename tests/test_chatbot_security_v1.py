@@ -4,16 +4,20 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from access_review_engine.chatbot.config import ChatbotConfig
-from access_review_engine.chatbot.context import AuthorizationContext, UIHints
+from access_review_engine.chatbot.context import AuthorizationContext, UIHints, resolve_ui_context
 from access_review_engine.chatbot.providers.base import ProviderResult, ToolCall
 from access_review_engine.chatbot.providers.registry import build_provider
 from access_review_engine.chatbot.scope import classify
 from access_review_engine.chatbot.service import AssistantService, FakeLLMProvider
 from access_review_engine.chatbot.tools.registry import (
     TOOL_SCHEMAS,
+    allowed_actions,
     bound_tool_output,
     campaign_summary,
+    dashboard,
+    golden_gaps,
 )
+from access_review_engine.golden_authorization import can_access_golden
 from access_review_engine.storage import Repository
 
 
@@ -57,6 +61,157 @@ def test_group_owner_campaign_summary_filters_review_metrics(tmp_path) -> None:
     assert result["total_reviews"] == 1
     assert result["findings"] == 0
     assert result["reviewer_coverage"] == 1
+
+
+def test_campaign_authorization_fail_closed_and_access_scope() -> None:
+    from access_review_engine.campaign_authorization import (
+        campaign_required_providers,
+        can_access_campaign,
+    )
+
+    assert not can_access_campaign("OPERATOR", {"*"}, set())
+    required = campaign_required_providers({
+        "type": "accesses", "values": [{"provider": "A", "name": "role-x"}]
+    })
+    assert required == {"A"}
+    assert can_access_campaign("OPERATOR", {"A"}, required)
+    assert not can_access_campaign("OPERATOR", {"B"}, required)
+
+
+def test_shared_golden_authorization_includes_identity_provider() -> None:
+    version = {"assignments": [{"access_provider": "A", "identity_provider": "B"}]}
+    assert not can_access_golden("OPERATOR", {"A"}, [version])
+    assert can_access_golden("OPERATOR", {"A", "B"}, [version])
+    assert can_access_golden("ADMIN", set(), [version])
+
+
+def test_allowed_actions_match_role_contract() -> None:
+    assert allowed_actions(_context("ADMIN", frozenset())) == {
+        "OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_PENDING_REVIEWS", "OPEN_ACTIONS",
+        "OPEN_SOURCES", "OPEN_REPORTS",
+    }
+    assert allowed_actions(_context("OPERATOR", frozenset({"A"}))) == {
+        "OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_PENDING_REVIEWS", "OPEN_ACTIONS",
+        "OPEN_SOURCES", "OPEN_REPORTS",
+    }
+    assert allowed_actions(_context("GROUP_OWNER", frozenset())) == {"OPEN_PENDING_REVIEWS"}
+    assert allowed_actions(_context("BUSINESS_ADMIN", frozenset())) == {"OPEN_ACTIONS"}
+    assert allowed_actions(_context("REMEDIATION_MANAGER", frozenset())) == {"OPEN_ACTIONS"}
+
+
+def test_contextual_route_derives_object_and_unauthorized_campaign_is_hidden(tmp_path) -> None:
+    hints = resolve_ui_context("/campaigns/campaign-a")
+    assert hints.object_id == "campaign-a"
+    assert resolve_ui_context("/campaigns", "../secret").object_id is None
+    with Repository(tmp_path / "eare.db") as repo:
+        repo.upsert("campaigns", {
+            "id": "secret", "scope": {"type": "providers", "values": ["A"]},
+            "status": "open",
+        })
+        result = campaign_summary(
+            repo, {"campaign_id": None}, _context("OPERATOR", frozenset({"B"})),
+            resolve_ui_context("/campaigns/secret"),
+        )
+    assert result["available"] is False
+
+
+def test_golden_gap_aggregates_are_not_limited_to_tool_detail_limit(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import access_review_engine.chatbot.tools.registry as registry
+
+    rows = [
+        {
+            "access_owner": "owner" if index >= 10 else None,
+            "business_context_fields": {"application": {"value": "CRM"}},
+            "business_context_conflicts": False,
+            "completeness": "complete",
+            "functional_rights": [{"capability_id": "read"}],
+            "access_provider": "A",
+        }
+        for index in range(40)
+    ]
+    version = SimpleNamespace(
+        assignments=[SimpleNamespace(access_provider="A", identity_provider="B")]
+    )
+    monkeypatch.setattr(registry, "hydrate_golden_version", lambda _: version)
+    monkeypatch.setattr(registry, "functional_access_rows", lambda repo, active: rows)
+    with Repository(tmp_path / "eare.db") as repo:
+        repo.upsert("golden_sources", {"id": "g", "active_version_id": "v"})
+        repo.upsert("golden_source_versions", {"id": "v", "assignments": []})
+        result = golden_gaps(repo, {}, _context("ADMIN", frozenset()), UIHints())
+    assert result["rows_considered"] == 40
+    assert result["gaps"]["without_owner"] == 10
+
+
+def test_multiple_tool_calls_replay_response_items_once(tmp_path) -> None:
+    class MultiToolProvider(FakeLLMProvider):
+        def generate(self, messages, tools):
+            self.calls.append(messages)
+            if len(self.calls) == 1:
+                return ProviderResult(
+                    tool_calls=(
+                        ToolCall("call-a", "get_dashboard_summary", {}),
+                        ToolCall("call-b", "get_guidance", {}),
+                    ),
+                    output_items=(
+                        {"type": "reasoning", "encrypted_content": "opaque"},
+                        {
+                            "type": "function_call", "call_id": "call-a",
+                            "name": "get_dashboard_summary", "arguments": "{}",
+                        },
+                        {
+                            "type": "function_call", "call_id": "call-b",
+                            "name": "get_guidance", "arguments": "{}",
+                        },
+                    ),
+                )
+            return ProviderResult(text="ok")
+
+    provider = MultiToolProvider()
+    assistant = AssistantService(
+        lambda: Repository(tmp_path / "eare.db"),
+        ChatbotConfig(enabled=True, provider="fake", model="test"), provider,
+    )
+    assert assistant.handle(
+        _context("ADMIN", frozenset({"*"})), "Résumé du dashboard"
+    )["answer"] == "ok"
+    continuation = provider.calls[1]
+    assert [item.get("type") for item in continuation[1:]] == [
+        "reasoning", "function_call", "function_call",
+        "function_call_output", "function_call_output",
+    ]
+    assert [item.get("call_id") for item in continuation[-2:]] == ["call-a", "call-b"]
+
+
+def test_dashboard_role_metrics_are_explicitly_bounded(tmp_path) -> None:
+    with Repository(tmp_path / "eare.db") as repo:
+        repo.upsert("providers", {"id": "p", "name": "A"})
+        repo.upsert("snapshots", {"id": "s", "providers": [{"name": "A"}]})
+        repo.upsert("golden_sources", {"id": "g", "active_version_id": "v"})
+        repo.upsert("golden_source_versions", {
+            "id": "v", "assignments": [{"access_provider": "A", "identity_provider": "B"}],
+        })
+        repo.upsert("campaigns", {
+            "id": "c", "status": "open", "scope": {"type": "providers", "values": ["A"]},
+        })
+        repo.upsert("review_items", {
+            "id": "r", "campaign_id": "c", "access_provider": "A",
+            "identity_provider": "A", "reviewer": {"identity": "alice"},
+        })
+        repo.upsert("remediation_actions", {"id": "a", "access_provider": "A", "status": "pending"})
+        admin = dashboard(repo, {}, _context("ADMIN", frozenset()), UIHints())
+        operator = dashboard(repo, {}, _context("OPERATOR", frozenset({"A"})), UIHints())
+        owner = dashboard(repo, {}, _context("GROUP_OWNER", frozenset()), UIHints())
+        business = dashboard(repo, {}, _context("BUSINESS_ADMIN", frozenset({"A"})), UIHints())
+        manager = dashboard(repo, {}, _context("REMEDIATION_MANAGER", frozenset({"A"})), UIHints())
+    assert admin["golden_sources"] == 1
+    assert operator["golden_sources"] == 0
+    assert owner["sources"] == owner["snapshots"] == owner["golden_sources"] == 0
+    assert business["campaigns"] == business["pending_reviews"] == 0
+    assert business["sources"] == business["snapshots"] == business["golden_sources"] == 0
+    assert manager["campaigns"] == manager["pending_reviews"] == 0
+    assert manager["sources"] == manager["snapshots"] == manager["golden_sources"] == 0
 
 
 def test_unsupported_provider_does_not_fallback_to_openai() -> None:

@@ -13,6 +13,8 @@ visibility reuses `campaign_required_providers()` and `can_access_campaign()`, i
 `all`, `providers`, and `accesses` scopes. An unresolved provider set fails closed for operators.
 GROUP_OWNER metrics are calculated only from assigned ReviewItems; unavailable objects are
 reported as unavailable without confirming their existence. Other roles retain WebUI/API bounds.
+Golden authorization is shared with the API: required domains include both assignment access and
+identity providers. Operators fail closed when a Golden has no resolvable provider.
 
 The model never receives a database connection, raw model, MCP credential, or generic
 query tool. MCP remains a separate report-only interface. Guidance remains deterministic
@@ -36,6 +38,9 @@ not enabled. Each function has a strict schema and server-side argument validati
 storage as conversation state but is not a claim of Zero Data Retention. EARE owns its
 bounded history and sanitized traces. Stateless tool continuation replays required opaque output
 items in memory, including reasoning items; reasoning content is never persisted.
+Multiple tool calls replay the provider reasoning/function items once, then append outputs in the
+same call order. The server derives bounded object context from routes such as
+`/campaigns/<id>`; the derived ID remains only a hint until object authorization succeeds.
 
 The controlled endpoints `/api/chatbot/brief` and `/api/chatbot/report` expose a deterministic
 `AssistantBrief` with dashboard, review progress and Golden-quality projections. The Markdown

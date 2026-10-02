@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from access_review_engine.chatbot.config import ChatbotConfig
-from access_review_engine.chatbot.context import AuthorizationContext, UIHints
+from access_review_engine.chatbot.context import AuthorizationContext, UIHints, resolve_ui_context
 from access_review_engine.chatbot.conversation import (
     ConversationStore,
     cleanup_expired_chatbot_data_periodically,
@@ -21,7 +21,7 @@ from access_review_engine.chatbot.prompts import (
     SECURITY_POLICY_VERSION,
     TOOL_POLICY_VERSION,
 )
-from access_review_engine.chatbot.providers.base import LLMProvider, ProviderResult
+from access_review_engine.chatbot.providers.base import LLMProvider, ProviderResult, ToolCall
 from access_review_engine.chatbot.providers.openai import ProviderError
 from access_review_engine.chatbot.providers.registry import build_provider
 from access_review_engine.chatbot.safety.builtin import BuiltInSafetyProvider
@@ -91,7 +91,7 @@ class AssistantService:
     ) -> dict[str, Any]:
         started = time.monotonic()
         self._tool_events = []
-        hints = hints or UIHints()
+        hints = resolve_ui_context((hints or UIHints()).route, (hints or UIHints()).object_id)
         safe_question, intent, secret_redacted = self.safety.check_input(question, hints.route)
         context = self._context(principal)
         with self.repo_factory() as repo:
@@ -335,7 +335,12 @@ class AssistantService:
             result = self.provider.generate(messages, TOOL_SCHEMAS)
             if not result.tool_calls:
                 return result
+            pending_outputs: list[tuple[ToolCall, dict[str, Any]]] = []
+            call_ids: set[str] = set()
             for call in result.tool_calls:
+                if not call.call_id or call.call_id in call_ids:
+                    raise ProviderError("Assistant returned invalid tool call id")
+                call_ids.add(call.call_id)
                 if principal_resolver is not None:
                     refreshed = principal_resolver()
                     if refreshed is None:
@@ -382,9 +387,12 @@ class AssistantService:
                         "reason": "authorized", "result_count": len(projected),
                     },
                 )
-                for item in result.output_items:
-                    if item.get("type") in {"reasoning", "function_call"}:
-                        messages.append(item)
+                pending_outputs.append((call, projected))
+            messages.extend(
+                item for item in result.output_items
+                if item.get("type") in {"reasoning", "function_call"}
+            )
+            for call, projected in pending_outputs:
                 messages.append(
                     {
                         "type": "function_call_output",

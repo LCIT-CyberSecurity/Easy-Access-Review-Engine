@@ -107,8 +107,10 @@ def can_access_campaign(role: str, scopes: Iterable[str], providers: Iterable[st
         return True
     if role != "OPERATOR":
         return False
+    required = set(providers)
+    if not required:
+        return False
     allowed = {str(scope).strip() for scope in scopes if str(scope).strip()}
     if "*" in allowed:
         return True
-    required = set(providers)
-    return bool(required) and required <= allowed
+    return required <= allowed

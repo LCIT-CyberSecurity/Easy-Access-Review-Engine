@@ -16,6 +16,11 @@ Every tool revalidates its arguments and receives a fresh authorization context 
 Client route/object hints are never authority. An unauthorized object returns an unavailable DTO
 without confirming whether it exists.
 
+Dashboard aggregates are role-bounded before counting: group owners receive assigned review work,
+while BUSINESS_ADMIN and REMEDIATION_MANAGER receive no campaign/review/source/snapshot/Golden
+metrics. Golden required domains are resolved by the shared API/chatbot helper from both access and
+identity providers; empty operator domains fail closed.
+
 ## Untrusted content and secrets
 
 Imported names, groups, comments, roles, descriptions and connector data are treated as DATA.

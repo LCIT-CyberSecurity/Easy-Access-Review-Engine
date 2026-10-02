@@ -13,6 +13,7 @@ from access_review_engine.chatbot.security.tool_policy import (
     MAX_RESULT_COUNT,
     MAX_STRING_CHARS,
 )
+from access_review_engine.golden_authorization import can_access_golden
 from access_review_engine.golden_functional import functional_access_rows
 from access_review_engine.guidance import GuidanceContext, build_guidance
 from access_review_engine.storage import Repository, hydrate_golden_version
@@ -67,29 +68,35 @@ def dashboard(
         reviews = [row for row in reviews if _is_assigned_to(row, context.username)]
     decisions = {str(row.get("review_item_id")) for row in repo.list_payloads("decisions")}
     actions = repo.list_payloads("remediation_actions")
-    if context.role != "ADMIN":
+    if context.role not in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
+        actions = []
+    elif context.role != "ADMIN":
         actions = [
             row
             for row in actions
             if context.can_access_provider(str(row.get("access_provider") or ""))
         ]
-    snapshots = [
-        x
-        for x in repo.list_payloads("snapshots")
-        if context.role == "ADMIN"
-        or all(
-            context.can_access_provider(str(provider.get("name") or ""))
-            for provider in x.get("providers", [])
-        )
-    ]
-    golden_sources = [
-        row
-        for row in repo.list_payloads("golden_sources")
-        if context.role in {"ADMIN", "OPERATOR"}
-        and (context.role == "ADMIN"
-        or context.can_access_provider(str(row.get("name") or ""))
-        )
-    ]
+    snapshots = []
+    if context.role in {"ADMIN", "OPERATOR"}:
+        snapshots = [
+            x for x in repo.list_payloads("snapshots")
+            if context.role == "ADMIN"
+            or (
+                x.get("providers")
+                and all(
+                    context.can_access_provider(str(provider.get("name") or ""))
+                    for provider in x.get("providers", [])
+                )
+            )
+        ]
+    versions = {str(x.get("id")): x for x in repo.list_payloads("golden_source_versions")}
+    golden_sources = []
+    if context.role in {"ADMIN", "OPERATOR"}:
+        golden_sources = [
+            row for row in repo.list_payloads("golden_sources")
+            if (version := versions.get(str(row.get("active_version_id") or "")))
+            and can_access_golden(context.role, context.scopes, [version])
+        ]
     return {
         "campaigns": len([x for x in campaigns if x.get("status") == "open"]),
         "pending_reviews": sum(1 for x in reviews if str(x.get("id")) not in decisions),
@@ -160,15 +167,11 @@ def golden_gaps(
         if not version:
             continue
         hydrated = hydrate_golden_version(version)
-        domains = {row.get("access_provider") for row in functional_access_rows(repo, hydrated)}
-        domains.discard(None)
-        if context.role != "ADMIN" and (
-            context.role != "OPERATOR" or not domains or not domains <= context.scopes
-        ):
+        if not can_access_golden(context.role, context.scopes, [hydrated]):
             continue
         visible_sources += 1
         rows.extend(functional_access_rows(repo, hydrated))
-    for row in rows[:MAX_RESULT_COUNT]:
+    for row in rows:
         if not row.get("access_owner"):
             gaps["without_owner"] += 1
         fields = row.get("business_context_fields") or {}
@@ -185,7 +188,7 @@ def golden_gaps(
             gaps["functional_rights_undocumented"] += 1
     return {
         "golden_sources": visible_sources,
-        "rows_considered": min(len(rows), MAX_RESULT_COUNT),
+        "rows_considered": len(rows),
         "gaps": gaps,
     }
 
@@ -363,7 +366,9 @@ def bound_tool_output(value: dict[str, Any]) -> dict[str, Any]:
 
 
 def allowed_actions(context: AuthorizationContext) -> set[str]:
-    actions = {"OPEN_PENDING_REVIEWS"}
+    actions: set[str] = set()
+    if context.role in {"ADMIN", "OPERATOR", "GROUP_OWNER"}:
+        actions.add("OPEN_PENDING_REVIEWS")
     if context.role in {"ADMIN", "OPERATOR"}:
         actions |= {"OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_SOURCES", "OPEN_REPORTS"}
     if context.role in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:

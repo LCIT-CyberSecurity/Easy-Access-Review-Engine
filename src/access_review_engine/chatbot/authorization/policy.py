@@ -13,6 +13,6 @@ def visible_campaign(context: AuthorizationContext, campaign_providers: set[str]
         return True
     if context.role != "OPERATOR":
         return False
-    if "*" in context.scopes:
-        return True
+    if not campaign_providers:
+        return False
     return can_access_campaign(context.role, context.scopes, campaign_providers)

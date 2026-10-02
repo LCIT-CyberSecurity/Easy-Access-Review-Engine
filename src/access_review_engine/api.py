@@ -46,8 +46,9 @@ from access_review_engine.campaign_authorization import (
     can_access_campaign,
     normalize_campaign_scope,
 )
-from access_review_engine.chatbot.context import UIHints
+from access_review_engine.chatbot.context import AuthorizationContext, UIHints, resolve_ui_context
 from access_review_engine.chatbot.service import AssistantService
+from access_review_engine.chatbot.tools.registry import allowed_actions
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import (
     connector_path,
@@ -83,6 +84,7 @@ from access_review_engine.golden_annotations import (
     normalize_assignment_comment,
     set_assignment_annotation,
 )
+from access_review_engine.golden_authorization import can_access_golden, golden_required_providers
 from access_review_engine.guidance import GuidanceContext, build_guidance
 from access_review_engine.mcp_server import build_mcp_asgi
 from access_review_engine.reporting import (
@@ -191,31 +193,7 @@ ROLES = ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANA
 
 
 def _golden_version_provider_domains(version: dict[str, Any]) -> set[str]:
-    """Resolve current Golden scope from expected content, not version history."""
-    domains: set[str] = set()
-    for assignment in version.get("assignments", []):
-        for field in ("access_provider", "identity_provider"):
-            value = str(assignment.get(field) or "").strip()
-            if value:
-                domains.add(value)
-    for definition in version.get("expected_access_definitions", []):
-        value = str(definition.get("provider") or "").strip()
-        if value:
-            domains.add(value)
-    for relation in version.get("expected_access_relations", []):
-        for field in ("parent_provider", "child_provider"):
-            value = str(relation.get(field) or "").strip()
-            if value:
-                domains.add(value)
-    for model in version.get("functional_access_models", []):
-        value = str(model.get("access_provider") or "").strip()
-        if value:
-            domains.add(value)
-    for comment in version.get("access_comments", []):
-        value = str(comment.get("access_provider") or "").strip()
-        if value:
-            domains.add(value)
-    return domains
+    return golden_required_providers([version])
 
 
 @dataclass(frozen=True)
@@ -576,17 +554,20 @@ def create_app(db_path: str | None = None):
             "OPEN_SOURCES": "Ouvrir les sources",
             "OPEN_REPORTS": "Ouvrir les rapports",
         }
-        allowed = {"OPEN_PENDING_REVIEWS"} if principal.role in {"ADMIN", "OPERATOR", "GROUP_OWNER"} else set()
-        if principal.role in {"ADMIN", "OPERATOR"}:
-            allowed |= {"OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_SOURCES", "OPEN_REPORTS"}
-        if principal.role in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
-            allowed.add("OPEN_ACTIONS")
-        return {"actions": [{"action_id": key, "label": all_actions[key]} for key in all_actions if key in allowed]}
+        context = AuthorizationContext(
+            str(principal.subject), str(principal.username), str(principal.role), principal.scopes
+        )
+        allowed = allowed_actions(context)
+        return {
+            "actions": [
+                {"action_id": key, "label": all_actions[key]}
+                for key in all_actions
+                if key in allowed
+            ]
+        }
 
     def _chatbot_hints(route: str, object_id: str | None) -> UIHints:
-        safe_route = route if isinstance(route, str) and route.startswith("/") and len(route) <= 300 else "/"
-        safe_object = object_id if isinstance(object_id, str) and len(object_id) <= 200 else None
-        return UIHints(safe_route, safe_object)
+        return resolve_ui_context(route, object_id)
 
     @app.get("/api/chatbot/brief")
     def chatbot_brief(request: Request, route: str = "/", object_id: str | None = None):
@@ -3496,11 +3477,7 @@ def create_app(db_path: str | None = None):
                 in {
                     str(version.get("id"))
                     for version in versions
-                    if allowed_domains is None
-                    or (
-                        (domains := _golden_version_provider_domains(version))
-                        and domains <= allowed_domains
-                    )
+                    if can_access_golden(principal.role, principal.scopes, [version])
                 }
                 for source in sources
             )
@@ -5409,16 +5386,7 @@ def create_app(db_path: str | None = None):
     def _api_require_golden_access(principal: WebPrincipal, versions) -> None:
         if principal.role not in {"ADMIN", "OPERATOR"}:
             raise HTTPException(status_code=403, detail="This role cannot access Golden Sources")
-        providers = {
-            provider
-            for version in versions
-            for assignment in version.assignments
-            for provider in (assignment.access_provider, assignment.identity_provider)
-            if provider
-        }
-        if principal.role != "ADMIN" and not can_access_campaign(
-            principal.role, principal.scopes, providers
-        ):
+        if not can_access_golden(principal.role, principal.scopes, versions):
             raise HTTPException(
                 status_code=403,
                 detail="Golden Source includes providers outside your authorized domains",
