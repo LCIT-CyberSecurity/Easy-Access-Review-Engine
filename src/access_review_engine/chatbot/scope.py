@@ -5,9 +5,10 @@ import re
 from access_review_engine.chatbot.schemas import INTENTS
 
 _SUSPICIOUS = re.compile(
-    r"ignore\s+(?:all\s+)?(?:previous|prior|your|tes|vos|mes)\s+instructions?|"
+    r"ignore\s+(?:all\s+|toutes?\s+)?(?:previous|prior|your|tes|vos|mes)?\s*instructions?|"
     r"ignore\s+(?:all\s+)?(?:previous|prior|your|tes|vos|mes)\s+(?:r[eè]gles?|consignes?)|"
     r"list\s+(?:all|every)\s+(?:users?|campaigns?|passwords?)|"
+    r"liste\s+tous?\s+les\s+(?:utilisateurs?|campagnes?|mots?\s+de\s+passe)|"
     r"show\s+all\s+(?:secrets?|tokens?)",
     re.IGNORECASE,
 )
@@ -34,7 +35,7 @@ def classify(question: str, route: str = "/") -> str:
         return "EARE_DASHBOARD"
     if any(word in text for word in ("campaign", "campagne", "review campaign")):
         return "EARE_CAMPAIGN"
-    if any(word in text for word in ("golden", "owner", "expected", "functional model")):
+    if re.search(r"\bgolden\b|\bowner\b|\bexpected\b|functional model", text):
         return "EARE_GOLDEN"
     if any(word in text for word in ("review", "accès", "access", "unexpected", "décision")):
         return "EARE_REVIEW"

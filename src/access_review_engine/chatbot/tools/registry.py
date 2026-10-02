@@ -7,6 +7,14 @@ from typing import Any
 from access_review_engine.campaign_authorization import campaign_required_providers
 from access_review_engine.chatbot.authorization.policy import visible_campaign
 from access_review_engine.chatbot.context import AuthorizationContext, UIHints
+from access_review_engine.chatbot.diagnostics import (
+    campaign_readiness as build_campaign_readiness,
+)
+from access_review_engine.chatbot.diagnostics import (
+    explain_finding,
+    golden_quality_summary,
+    summarize_findings,
+)
 from access_review_engine.chatbot.security.redaction import redact_secrets
 from access_review_engine.chatbot.security.tool_policy import (
     MAX_JSON_CHARS,
@@ -131,6 +139,7 @@ def campaign_summary(
     if context.role == "GROUP_OWNER":
         items = [x for x in items if _is_assigned_to(x, context.username)]
     decisions = {str(x.get("review_item_id")): x for x in repo.list_payloads("decisions")}
+    classifications = summarize_findings(items)
     return {
         "available": True,
         "id": identifier,
@@ -142,8 +151,56 @@ def campaign_summary(
         "reviewer_coverage": len(
             {str(x.get("reviewer") or "") for x in items if x.get("reviewer")}
         ),
+        "missing_reviewers": sum(1 for x in items if not x.get("reviewer")),
         "findings": sum(1 for x in items if x.get("classification")),
+        "finding_summary": classifications,
+        "finding_explanations": [
+            explain_finding(item.get("classification"))
+            for item in items
+            if item.get("classification")
+        ][:MAX_RESULT_COUNT],
         "due_at": _safe_text(row.get("due_at")) if row.get("due_at") else None,
+    }
+
+
+def campaign_readiness(
+    repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
+) -> dict[str, Any]:
+    identifier = str(args.get("campaign_id") or hints.object_id or "")
+    campaign = next(
+        (row for row in _visible_campaigns(repo, context) if str(row.get("id")) == identifier),
+        None,
+    )
+    return build_campaign_readiness(repo, campaign, context)
+
+
+def campaign_findings(
+    repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
+) -> dict[str, Any]:
+    identifier = str(args.get("campaign_id") or hints.object_id or "")
+    summary = campaign_summary(repo, {"campaign_id": identifier}, context, hints)
+    if not summary.get("available"):
+        return summary
+    rows = [
+        row for row in repo.list_payloads("review_items")
+        if str(row.get("campaign_id")) == identifier and row.get("classification")
+    ]
+    if context.role == "GROUP_OWNER":
+        rows = [row for row in rows if _is_assigned_to(row, context.username)]
+    return {
+        "available": True,
+        "campaign_id": identifier,
+        "summary": summarize_findings(rows),
+        "items": [
+            {
+                key: _safe_text(row.get(key))
+                for key in (
+                    "id", "identity_identifier", "access_provider", "access_name",
+                    "classification",
+                )
+            }
+            for row in rows[:MAX_RESULT_COUNT]
+        ],
     }
 
 
@@ -193,6 +250,12 @@ def golden_gaps(
     }
 
 
+def golden_summary(
+    repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
+) -> dict[str, Any]:
+    return golden_quality_summary(repo, context)
+
+
 def review_progress(
     repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
 ) -> dict[str, Any]:
@@ -213,6 +276,50 @@ def review_progress(
         "total": len(rows),
         "pending": sum(1 for x in rows if str(x.get("id")) not in decisions),
         "decided": sum(1 for x in rows if str(x.get("id")) in decisions),
+    }
+
+
+def source_status(
+    repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
+) -> dict[str, Any]:
+    if context.role not in {"ADMIN", "OPERATOR"}:
+        return {
+            "available": False,
+            "message": "Les sources ne sont pas disponibles dans votre périmètre.",
+        }
+    requested = str(args.get("provider") or "")
+    providers = [
+        row for row in repo.list_payloads("providers")
+        if context.can_access_provider(str(row.get("name") or ""))
+        and (not requested or str(row.get("name")) == requested)
+    ]
+    snapshots = [
+        row for row in repo.list_payloads("snapshots")
+        if all(
+            context.can_access_provider(str(provider.get("name") or ""))
+            for provider in row.get("providers", [])
+        )
+    ]
+    latest = max(
+        snapshots,
+        key=lambda row: str(row.get("created_at") or ""),
+        default=None,
+    )
+    return {
+        "available": True,
+        "sources": [
+            {
+                "name": _safe_text(row.get("name")),
+                "status": _safe_text(row.get("status") or "configured"),
+            }
+            for row in providers[:MAX_RESULT_COUNT]
+        ],
+        "source_count": len(providers),
+        "snapshot_count": len(snapshots),
+        "latest_snapshot": (
+            {"id": _safe_text(latest.get("id")), "created_at": _safe_text(latest.get("created_at"))}
+            if latest else None
+        ),
     }
 
 
@@ -266,8 +373,12 @@ def page_help(
 TOOL_FUNCTIONS: dict[str, Tool] = {
     "get_dashboard_summary": dashboard,
     "get_campaign_summary": campaign_summary,
+    "get_campaign_readiness": campaign_readiness,
+    "get_campaign_findings": campaign_findings,
+    "get_golden_summary": golden_summary,
     "get_golden_gaps": golden_gaps,
     "get_review_progress": review_progress,
+    "get_source_status": source_status,
     "get_guidance": guidance,
     "get_page_help": page_help,
 }
@@ -279,6 +390,44 @@ TOOL_SCHEMAS = [
         "strict": True,
         "parameters": {
             "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        },
+    },
+    {
+        "type": "function", "name": "get_campaign_readiness",
+        "description": "Read-only deterministic campaign launch readiness",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {"campaign_id": {"type": ["string", "null"]}},
+            "required": ["campaign_id"], "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function", "name": "get_campaign_findings",
+        "description": "Read-only authorized campaign finding summary",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {"campaign_id": {"type": ["string", "null"]}},
+            "required": ["campaign_id"], "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function", "name": "get_golden_summary",
+        "description": "Read-only deterministic Golden quality summary",
+        "strict": True,
+        "parameters": {
+            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        },
+    },
+    {
+        "type": "function", "name": "get_source_status",
+        "description": "Read-only authorized source and snapshot status",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {"provider": {"type": ["string", "null"]}},
+            "required": ["provider"], "additionalProperties": False,
         },
     },
     {
