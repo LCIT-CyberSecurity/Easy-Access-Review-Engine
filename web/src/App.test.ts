@@ -6,7 +6,23 @@ import { describe, expect, it } from "vitest";
 import { assistantSuggestions, safeAssistantActionRoute } from "./chatbot/AssistantDrawer";
 import { isAssistantAvailable } from "./App";
 
-import { ActionMenu, ApplicationPicker, BusinessContext, BusinessContextWarning, BusinessFeedbackRow, ExternalApiDocumentation, FunctionalRightsSummary, Golden, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, functionalRightsText, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, ReviewDrawer, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
+import { ActionMenu, ApplicationPicker, BusinessContext, BusinessContextWarning, BusinessFeedbackRow, ExternalApiDocumentation, FunctionalRightsSummary, Golden, GUIDE_FOCUS, Head, PageLoading, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, functionalRightsText, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, ReviewDrawer, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
+
+describe("premium presentation contracts", () => {
+  it("keeps the campaign title, status, subtitle and actions in one semantic header", () => {
+    const html = renderToStaticMarkup(createElement(Head, { title: "Q4 Review", subtitle: "Access review campaign", status: createElement("span", null, "Open"), children: createElement("button", null, "Continue review") }));
+    expect(html).toContain("<h1>Q4 Review</h1>");
+    expect(html).toContain("Open");
+    expect(html).toContain("Access review campaign");
+    expect(html).toContain("Continue review");
+  });
+  it("reserves space during page loading without exposing placeholder data", () => {
+    const html = renderToStaticMarkup(createElement(PageLoading, { label: "Loading campaign" }));
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain("Loading campaign");
+    expect((html.match(/class="skeleton/g) ?? []).length).toBe(6);
+  });
+});
 
 describe("review business context", () => {
   const context = { fields: { application: { source: { value: "CRM", provenance: "source_attribute", mapping_mode: "configured", attribute: "extensionAttribute6" }, manual: { value: "ERP" }, conflict: true } } };
