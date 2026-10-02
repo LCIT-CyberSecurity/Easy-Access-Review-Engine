@@ -97,7 +97,10 @@ def test_openai_provider_uses_responses_store_false_and_custom_tools_only(monkey
             return False
 
         def read(self):
-            return b'{"output_text":"ok","output":[]}'
+            return (
+                b'{"output":[{"type":"message","role":"assistant","content":'
+                b'[{"type":"output_text","text":"ok"}]}]}'
+            )
 
         def __iter__(self):
             return iter(())
@@ -115,6 +118,28 @@ def test_openai_provider_uses_responses_store_false_and_custom_tools_only(monkey
     assert result.text == "ok"
     assert captured["payload"]["store"] is False
     assert captured["payload"]["tools"] == [{"type": "function", "name": "get_guidance"}]
+
+
+def test_openai_provider_collects_message_output_text_fragments(monkeypatch):
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return (
+                b'{"output":[{"type":"reasoning"},{"type":"function_call","name":"x",'
+                b'"arguments":"{}"},{"type":"message","content":[{"type":"output_text",'
+                b'"text":"A"}]},{"type":"message","content":[{"type":"output_text",'
+                b'"text":"B"}]}]}'
+            )
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: Response())
+    provider = OpenAIProvider(ChatbotConfig(enabled=True, api_key="fake", model="test-model"))
+    assert provider.generate([], []).text == "AB"
 
 
 def test_tool_call_rechecks_current_session_authorization(tmp_path):
@@ -135,3 +160,29 @@ def test_tool_call_rechecks_current_session_authorization(tmp_path):
         Principal(), "Résumé du Dashboard", principal_resolver=lambda: current[0]
     )
     assert result["security_state"] == "unavailable"
+
+
+def test_usage_is_aggregated_across_tool_rounds(tmp_path):
+    class UsageProvider(FakeLLMProvider):
+        def __init__(self):
+            super().__init__()
+            self.round = 0
+
+        def generate(self, messages, tools):
+            self.round += 1
+            self.calls.append(messages)
+            if self.round == 1:
+                return ProviderResult(
+                    tool_calls=(ToolCall("usage-call", "get_dashboard_summary", {}),),
+                    usage={"input_tokens": 100, "output_tokens": 50},
+                    output_items=({"type": "function_call", "call_id": "usage-call"},),
+                )
+            return ProviderResult(text="done", usage={"input_tokens": 150, "output_tokens": 30})
+
+    provider = UsageProvider()
+    result = service(tmp_path, provider).handle(Principal(), "Résumé du Dashboard")
+    assert result["answer"] == "done"
+    with Repository(tmp_path / "eare.db") as repo:
+        trace = repo.list_payloads("chatbot_traces")[0]
+    assert trace["input_tokens"] == 250
+    assert trace["output_tokens"] == 80

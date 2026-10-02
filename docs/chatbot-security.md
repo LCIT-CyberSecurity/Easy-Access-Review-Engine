@@ -5,6 +5,20 @@ itself, change tool policy, construct URLs, or perform business writes.
 
 ## Data access
 
+Availability is separate from EARE data authorization:
+
+1. `EARE_CHATBOT_ENABLED` is the deployment hard switch.
+2. `system_settings.chatbot_enabled` is the ADMIN-controlled global switch.
+3. `system_users.chatbot_access_enabled` authorizes an individual user.
+4. OpenAI provider/model/key readiness is checked locally without a network healthcheck.
+
+Hiding the launcher is only UX. The server enforces the effective decision on
+`/api/chatbot/message`, `/api/chatbot/actions`, `/api/chatbot/brief`, and
+`/api/chatbot/report`, returning a generic 403 when disabled. The status endpoint is
+authenticated and safe for refresh-driven UI state. Assistant access never expands
+role, provider scope, ReviewItem, Golden or campaign permissions, and Guide remains
+independent.
+
 - ADMIN uses the existing administrator read boundaries.
 - OPERATOR is filtered through the shared Campaign authorization functions. `all`, `providers`,
   and `accesses` scopes are resolved server-side; an empty unresolved provider set fails closed.
@@ -53,6 +67,7 @@ Threats covered in V1:
 - logging leakage: traces store sanitized question/answer and never credentials/configuration.
 
 The remaining V1 limitations are heuristic injection detection, no moderation provider,
-and no admin trace viewer. Production deployment should use the existing audit retention
+and no admin trace viewer. The requested remote Docker alias `4175` must be reachable
+from the deployment network for environment-specific verification. Production deployment should use the existing audit retention
 policy and a managed secret environment. `store=false` is a privacy default, not a
 Zero Data Retention guarantee.

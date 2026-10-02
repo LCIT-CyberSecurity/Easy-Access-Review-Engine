@@ -4,6 +4,9 @@ on:
   push:
     paths:
       - "src/access_review_engine/chatbot/**"
+      - "src/access_review_engine/golden_authorization.py"
+      - "src/access_review_engine/campaign_authorization.py"
+      - "src/access_review_engine/system_admin.py"
       - "src/access_review_engine/api.py"
       - "tests/test_chatbot*.py"
       - "web/src/chatbot/**"
@@ -14,6 +17,10 @@ on:
   pull_request:
     paths:
       - "src/access_review_engine/chatbot/**"
+      - "src/access_review_engine/golden_authorization.py"
+      - "src/access_review_engine/campaign_authorization.py"
+      - "src/access_review_engine/system_admin.py"
+      - ".env.example"
       - "src/access_review_engine/api.py"
       - "tests/test_chatbot*.py"
       - "web/src/chatbot/**"

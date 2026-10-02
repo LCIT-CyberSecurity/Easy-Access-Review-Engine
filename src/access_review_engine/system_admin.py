@@ -13,7 +13,7 @@ LOCAL_SOURCE = "local"
 
 def init_system(conn: sqlite3.Connection) -> None:
     conn.executescript("""
-    CREATE TABLE IF NOT EXISTS system_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, password_hash TEXT, must_change_password INTEGER NOT NULL DEFAULT 0, api_access_enabled INTEGER NOT NULL DEFAULT 0, mcp_access_enabled INTEGER NOT NULL DEFAULT 0, session_version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS system_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, password_hash TEXT, must_change_password INTEGER NOT NULL DEFAULT 0, api_access_enabled INTEGER NOT NULL DEFAULT 0, mcp_access_enabled INTEGER NOT NULL DEFAULT 0, chatbot_access_enabled INTEGER NOT NULL DEFAULT 0, session_version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS identity_provider_configs (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, endpoint TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, settings TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_prefix TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT);
@@ -36,6 +36,8 @@ def init_system(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE system_users ADD COLUMN api_access_enabled INTEGER NOT NULL DEFAULT 0")
     if "mcp_access_enabled" not in columns:
         conn.execute("ALTER TABLE system_users ADD COLUMN mcp_access_enabled INTEGER NOT NULL DEFAULT 0")
+    if "chatbot_access_enabled" not in columns:
+        conn.execute("ALTER TABLE system_users ADD COLUMN chatbot_access_enabled INTEGER NOT NULL DEFAULT 0")
     if "session_version" not in columns:
         conn.execute("ALTER TABLE system_users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1")
     conn.commit()
@@ -43,7 +45,7 @@ def init_system(conn: sqlite3.Connection) -> None:
 def list_users(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc).isoformat()
     rows = conn.execute("""SELECT u.id, u.username, u.display_name, u.role, u.scopes, u.enabled,
-        u.must_change_password, u.api_access_enabled, u.mcp_access_enabled, u.session_version, u.auth_source, u.external_id, u.created_at,
+        u.must_change_password, u.api_access_enabled, u.mcp_access_enabled, u.chatbot_access_enabled, u.session_version, u.auth_source, u.external_id, u.created_at,
         t.token_prefix, t.last_used_at, mt.token_prefix AS mcp_token_prefix, mt.last_used_at AS mcp_token_last_used_at
         FROM system_users u LEFT JOIN api_tokens t ON t.id = (
             SELECT id FROM api_tokens WHERE user_id = u.id AND revoked_at IS NULL AND expires_at > ?
@@ -58,6 +60,7 @@ def list_users(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         "must_change_password": bool(row["must_change_password"]),
         "api_access_enabled": bool(row["api_access_enabled"]),
         "mcp_access_enabled": bool(row["mcp_access_enabled"]),
+        "chatbot_access_enabled": bool(row["chatbot_access_enabled"]),
         "session_version": int(row["session_version"]),
         "api_token_active": row["token_prefix"] is not None,
         "api_token_prefix": row["token_prefix"],
@@ -83,6 +86,19 @@ def set_external_user_api_enabled(conn: sqlite3.Connection, enabled: bool) -> No
 def mcp_enabled(conn: sqlite3.Connection) -> bool:
     row = conn.execute("SELECT value FROM system_settings WHERE key = ?", ("mcp_enabled",)).fetchone()
     return bool(row and row["value"] == "true")
+
+
+def chatbot_enabled(conn: sqlite3.Connection) -> bool:
+    row = conn.execute("SELECT value FROM system_settings WHERE key = ?", ("chatbot_enabled",)).fetchone()
+    return bool(row and row["value"] == "true")
+
+
+def set_chatbot_enabled(conn: sqlite3.Connection, enabled: bool) -> None:
+    conn.execute(
+        "INSERT INTO system_settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ("chatbot_enabled", "true" if enabled else "false"),
+    )
+    conn.commit()
 
 
 def set_mcp_enabled(conn: sqlite3.Connection, enabled: bool) -> None:
@@ -306,9 +322,10 @@ def upsert_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any
     if role == "ADMIN": scopes = ["*"]
     source = str(data.get("auth_source") or LOCAL_SOURCE).strip() or LOCAL_SOURCE
     external_id = str(data.get("external_id") or "").strip() or None
-    existing = conn.execute("SELECT api_access_enabled, mcp_access_enabled FROM system_users WHERE username = ?", (username,)).fetchone()
+    existing = conn.execute("SELECT api_access_enabled, mcp_access_enabled, chatbot_access_enabled FROM system_users WHERE username = ?", (username,)).fetchone()
     current_api_access = bool(existing["api_access_enabled"]) if existing is not None else False
     current_mcp_access = bool(existing["mcp_access_enabled"]) if existing is not None else False
+    current_chatbot_access = bool(existing["chatbot_access_enabled"]) if existing is not None else False
     raw_api_access = data.get("api_access_enabled", current_api_access)
     if not isinstance(raw_api_access, bool):
         raise ValueError("api_access_enabled must be a boolean")
@@ -317,6 +334,10 @@ def upsert_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any
     if not isinstance(raw_mcp_access, bool):
         raise ValueError("mcp_access_enabled must be a boolean")
     mcp_access_enabled = raw_mcp_access
+    raw_chatbot_access = data.get("chatbot_access_enabled", current_chatbot_access)
+    if not isinstance(raw_chatbot_access, bool):
+        raise ValueError("chatbot_access_enabled must be a boolean")
+    chatbot_access_enabled = raw_chatbot_access
     password = data.get("password")
     if source != LOCAL_SOURCE and password:
         raise ValueError("directory accounts authenticate against their directory, not a stored password")
@@ -326,18 +347,18 @@ def upsert_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any
     # clear a pending password change.
     must_change = data.get("must_change_password")
     must_change = None if must_change is None else int(bool(must_change) and source == LOCAL_SOURCE)
-    record = {"id": username, "username": username, "display_name": str(data.get("display_name") or username), "role": role, "scopes": scopes, "enabled": bool(data.get("enabled", True)), "api_access_enabled": api_access_enabled, "mcp_access_enabled": mcp_access_enabled, "auth_source": source, "external_id": external_id, "created_at": datetime.now(timezone.utc).isoformat()}
+    record = {"id": username, "username": username, "display_name": str(data.get("display_name") or username), "role": role, "scopes": scopes, "enabled": bool(data.get("enabled", True)), "api_access_enabled": api_access_enabled, "mcp_access_enabled": mcp_access_enabled, "chatbot_access_enabled": chatbot_access_enabled, "auth_source": source, "external_id": external_id, "created_at": datetime.now(timezone.utc).isoformat()}
     password_hash = _password_hash(password) if isinstance(password, str) and source == LOCAL_SOURCE else None
-    conn.execute("""INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, must_change_password, api_access_enabled, mcp_access_enabled, auth_source, external_id, created_at)
-        VALUES(?,?,?,?,?,?,?,COALESCE(?,0),?,?,?,?,?)
+    conn.execute("""INSERT INTO system_users(id, username, display_name, role, scopes, enabled, password_hash, must_change_password, api_access_enabled, mcp_access_enabled, chatbot_access_enabled, auth_source, external_id, created_at)
+        VALUES(?,?,?,?,?,?,?,COALESCE(?,0),?,?,?,?,?,?)
         ON CONFLICT(username) DO UPDATE SET display_name=excluded.display_name, role=excluded.role, scopes=excluded.scopes,
-        enabled=excluded.enabled, api_access_enabled=excluded.api_access_enabled, mcp_access_enabled=excluded.mcp_access_enabled,
+        enabled=excluded.enabled, api_access_enabled=excluded.api_access_enabled, mcp_access_enabled=excluded.mcp_access_enabled, chatbot_access_enabled=excluded.chatbot_access_enabled,
         password_hash=CASE WHEN excluded.auth_source <> ? THEN NULL ELSE COALESCE(excluded.password_hash, system_users.password_hash) END,
         must_change_password=COALESCE(?, system_users.must_change_password), auth_source=excluded.auth_source,
         external_id=COALESCE(excluded.external_id, system_users.external_id),
         session_version=system_users.session_version + CASE WHEN excluded.auth_source <> system_users.auth_source THEN 1 ELSE 0 END""",
         (record["id"], record["username"], record["display_name"], record["role"], json.dumps(scopes),
-         int(record["enabled"]), password_hash, must_change, int(api_access_enabled), int(mcp_access_enabled), source, external_id,
+         int(record["enabled"]), password_hash, must_change, int(api_access_enabled), int(mcp_access_enabled), int(chatbot_access_enabled), source, external_id,
          record["created_at"], LOCAL_SOURCE, must_change))
     conn.commit()
     record["must_change_password"] = bool(conn.execute("SELECT must_change_password FROM system_users WHERE username = ?", (username,)).fetchone()[0])

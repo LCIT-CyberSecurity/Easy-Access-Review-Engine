@@ -703,6 +703,9 @@ const reviewerCoverage = (value: unknown): string => {
   return `${s(row.resolved, "0")} resolved · ${s(row.unresolved, "0")} unresolved`;
 };
 const uiLabel = (value: string) => UI_LABEL_KEYS[value] ? ui(UI_LABEL_KEYS[value]) : value;
+export function isAssistantAvailable(status: unknown): boolean {
+  return Boolean(status && typeof status === "object" && (status as Row).available === true);
+}
 
 
 const navSections = [
@@ -907,7 +910,17 @@ function Shell({ principal }: { principal: Principal }) {
       enabled: guideEnabled,
       staleTime: 30000,
     }),
+    chatbotStatus = useQuery({
+      queryKey: ["chatbot-status"],
+      queryFn: () => getJson("chatbot/status"),
+      staleTime: 30000,
+      refetchInterval: 60000,
+    }),
+    assistantAvailable = isAssistantAvailable(chatbotStatus.data),
     guidePending = guideEnabled ? guidePendingCount(guidance.data, principal.role) : 0;
+  useEffect(() => {
+    if (!assistantAvailable) setAssistantOpen(false);
+  }, [assistantAvailable]);
   // Point at where a guide step is done: wait for the element to render, scroll
   // it into view and ring it; clicking it moves on to the next target, if any.
   useEffect(() => {
@@ -1021,9 +1034,9 @@ function Shell({ principal }: { principal: Principal }) {
               <HelpCircle size={16} /> <span>{ui("guide.title")}</span>
               {guidePending ? <span className="guide-badge" aria-hidden="true">{guidePending}</span> : null}
             </button>
-            <button className="guide-trigger" type="button" onClick={() => setAssistantOpen(true)} aria-label="Assistant EARE">
+            {assistantAvailable ? <button className="guide-trigger" type="button" onClick={() => setAssistantOpen(true)} aria-label="Assistant EARE">
               <HelpCircle size={16} /> <span>Assistant</span>
-            </button>
+            </button> : null}
             <UserMenu
               principal={principal}
               onSignOut={async () => {
@@ -1068,10 +1081,10 @@ function Shell({ principal }: { principal: Principal }) {
       {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} focus={(id) => setGuideFocus(GUIDE_FOCUS[id] ?? [])} /> : null}
       {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
       {paletteOpen ? <CommandPalette role={principal.role} close={() => setPaletteOpen(false)} /> : null}
-      <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Assistant">
+      {assistantAvailable ? <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Assistant">
         <Sparkles size={17} /> <span>Assistant</span>
-      </button>
-      {assistantOpen ? <AssistantDrawer route={location.pathname} close={() => setAssistantOpen(false)} /> : null}
+      </button> : null}
+      {assistantAvailable && assistantOpen ? <AssistantDrawer route={location.pathname} close={() => setAssistantOpen(false)} /> : null}
     </div>
   );
 }
@@ -6477,6 +6490,7 @@ const blankUser = (source = LOCAL_SOURCE): Row => ({
   enabled: true,
   api_access_enabled: false,
   mcp_access_enabled: false,
+  chatbot_access_enabled: false,
   auth_source: source,
 });
 function Confirm({
@@ -6572,6 +6586,23 @@ function McpDocumentation({ enabled, onToggle, pending = false }: { enabled: boo
   );
 }
 
+function AssistantAdministration({ enabled, deploymentEnabled, provider, model, configured, onToggle, pending = false }: { enabled: boolean; deploymentEnabled: boolean; provider: string; model: string; configured: boolean; onToggle?: (enabled: boolean) => void; pending?: boolean }) {
+  const unavailable = !deploymentEnabled || !configured;
+  return (
+    <section className="panel" aria-labelledby="assistant-admin-title">
+      <div className="section-heading">
+        <div><span className="eyebrow">ASSISTANT</span><h2 id="assistant-admin-title">Assistant IA</h2><p className="muted">Provide authorized users with the EARE Assistant. The Assistant remains limited to each user's existing EARE permissions.</p></div>
+        <strong>{enabled ? "Enabled" : "Disabled"}</strong>
+      </div>
+      <p className="field-note">Provider: {provider || "—"} · Model: {model || "—"} · Configuration: {configured ? "Ready" : "Not configured"}</p>
+      {unavailable ? <p className="field-note">{!deploymentEnabled ? "Assistant unavailable on this deployment" : "Assistant provider is not configured"}</p> : null}
+      <button className="button subtle" type="button" onClick={() => onToggle?.(!enabled)} disabled={!onToggle || pending || unavailable}>
+        {enabled ? "Disable Assistant" : "Enable Assistant"}
+      </button>
+    </section>
+  );
+}
+
 function UsersPage() {
   const c = useQueryClient(),
     q = useQuery({ queryKey: ["system"], queryFn: () => getJson("system") }),
@@ -6622,6 +6653,11 @@ function UsersPage() {
       mutationFn: (enabled: boolean) => putJson("system/settings/mcp", { enabled }),
       onSuccess: async (d) => { setError(""); setNotice(`MCP server ${d.mcp_enabled ? "enabled" : "disabled"}`); await c.invalidateQueries({ queryKey: ["system"] }); },
       onError: (e) => setError(s(e, "Unable to update MCP setting")),
+    }),
+    globalChatbot = useMutation({
+      mutationFn: (enabled: boolean) => putJson("system/settings/chatbot", { enabled }),
+      onSuccess: async (d) => { setError(""); setNotice(`Assistant ${d.chatbot_enabled ? "enabled" : "disabled"}`); await c.invalidateQueries({ queryKey: ["system"] }); },
+      onError: (e) => setError(s(e, "Unable to update Assistant setting")),
     }),
     lifecycle = useMutation({
       mutationFn: ({ action, user }: { action: string; user: Row }) =>
@@ -6715,6 +6751,15 @@ function UsersPage() {
         pending={globalApi.isPending}
       />
       <McpDocumentation enabled={Boolean(q.data?.mcp_enabled)} onToggle={(enabled) => globalMcp.mutate(enabled)} pending={globalMcp.isPending} />
+      <AssistantAdministration
+        enabled={Boolean(q.data?.chatbot_enabled)}
+        deploymentEnabled={Boolean(q.data?.chatbot_deployment_enabled)}
+        provider={s(q.data?.chatbot_provider, "—")}
+        model={s(q.data?.chatbot_model, "—")}
+        configured={Boolean(q.data?.chatbot_configured)}
+        onToggle={(enabled) => globalChatbot.mutate(enabled)}
+        pending={globalChatbot.isPending}
+      />
       {!directories.length && (
         <p className="muted">
           Only local accounts can sign in today. Configure a directory in Authentication to import accounts
@@ -6725,7 +6770,7 @@ function UsersPage() {
       {error && !open && !confirming && <p className="form-error">{error}</p>}
       <Filter v={search} onChange={setSearch} />
       <Table
-        cols={["User", "Username", "Signs in with", "Role", "Authorized domains", "API access", "MCP access", "Pending reviews", "Status", "Actions"]}
+        cols={["User", "Username", "Signs in with", "Role", "Authorized domains", "API access", "MCP access", "Assistant", "Pending reviews", "Status", "Actions"]}
         q={q}
         rows={users.map((r) => [
           s(r.display_name),
@@ -6739,6 +6784,7 @@ function UsersPage() {
             {r.api_token_active ? <small className="field-note">{s(r.api_token_prefix)} · last used {s(r.api_token_last_used_at, "never")}</small> : null}
           </div>,
           <div><Status v={r.mcp_access_enabled ? "enabled" : "disabled"} /><small className="field-note">Read-only reports</small>{r.mcp_token_active ? <small className="field-note">{s(r.mcp_token_prefix)} · last used {s(r.mcp_token_last_used_at, "never")}</small> : null}</div>,
+          <div><Status v={r.chatbot_access_enabled ? "enabled" : "disabled"} /><small className="field-note">AI assistant</small></div>,
           Number(r.pending_reviews) > 0 ? s(r.pending_reviews) : "—",
           <>
             <Status v={r.enabled ? "enabled" : "disabled"} />
@@ -6990,6 +7036,9 @@ function UsersPage() {
             <h4>MCP REPORT ACCESS</h4>
             <label className="check-row"><input type="checkbox" checked={Boolean(form.mcp_access_enabled)} onChange={(e) => setForm({ ...form, mcp_access_enabled: e.target.checked })} /> MCP access enabled for this user</label>
             <p className="field-note">Allows this user to query authorized structured reports through MCP. MCP is read-only; disabling access revokes existing MCP keys.</p>
+            <h4>ASSISTANT</h4>
+            <label className="check-row"><input type="checkbox" checked={Boolean(form.chatbot_access_enabled)} onChange={(e) => setForm({ ...form, chatbot_access_enabled: e.target.checked })} /> Assistant access enabled for this user</label>
+            <p className="field-note">Allows this user to use the EARE Assistant when the Assistant is globally enabled. The Assistant inherits the user's existing EARE role and authorized domains.</p>
             <h4>STATUS</h4>
             {form.id ? (
               <div className="status-row">

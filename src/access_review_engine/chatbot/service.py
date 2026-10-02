@@ -331,10 +331,19 @@ class AssistantService:
             {"role": row["role"], "content": row["content"]}
             for row in store.history(conversation_id, self.config.max_history_messages)
         ]
+        input_tokens = 0
+        output_tokens = 0
         for _ in range(self.config.max_tool_rounds):
             result = self.provider.generate(messages, TOOL_SCHEMAS)
+            input_tokens += int(result.usage.get("input_tokens", 0) or 0)
+            output_tokens += int(result.usage.get("output_tokens", 0) or 0)
             if not result.tool_calls:
-                return result
+                return ProviderResult(
+                    text=result.text,
+                    tool_calls=result.tool_calls,
+                    usage={"input_tokens": input_tokens, "output_tokens": output_tokens},
+                    output_items=result.output_items,
+                )
             pending_outputs: list[tuple[ToolCall, dict[str, Any]]] = []
             call_ids: set[str] = set()
             for call in result.tool_calls:

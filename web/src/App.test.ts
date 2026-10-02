@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { assistantSuggestions, safeAssistantActionRoute } from "./chatbot/AssistantDrawer";
+import { isAssistantAvailable } from "./App";
 
 import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, FunctionalRightsSummary, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, functionalRightsText, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
 
@@ -24,6 +25,11 @@ describe("ActionMenu", () => {
 });
 
 describe("EARE Assistant launcher contracts", () => {
+  it("fails closed when chatbot status is absent or unavailable", () => {
+    expect(isAssistantAvailable(undefined)).toBe(false);
+    expect(isAssistantAvailable({ available: false })).toBe(false);
+    expect(isAssistantAvailable({ available: true })).toBe(true);
+  });
   it("keeps suggestions contextual to the current page", () => {
     expect(assistantSuggestions("/campaigns/c-1")).toContain("Que reste-t-il à faire ?");
     expect(assistantSuggestions("/golden")).toContain("Qu'est-ce que je dois compléter ?");

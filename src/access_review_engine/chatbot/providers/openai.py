@@ -19,6 +19,25 @@ class ProviderError(RuntimeError):
     """Safe application error; raw provider responses never leave this module."""
 
 
+def _extract_output_text(body: dict[str, Any]) -> str:
+    fragments: list[str] = []
+    output = body.get("output")
+    if not isinstance(output, list):
+        return ""
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "output_text":
+                text = part.get("text")
+                if isinstance(text, str):
+                    fragments.append(text)
+    return "".join(fragments)
+
+
 class OpenAIProvider(LLMProvider):
     capabilities = ProviderCapabilities(True, True, False)
 
@@ -70,7 +89,7 @@ class OpenAIProvider(LLMProvider):
                 body = json.load(response)
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
             raise ProviderError("Assistant provider temporarily unavailable") from exc
-        text = str(body.get("output_text") or "")
+        text = _extract_output_text(body)
         calls: list[ToolCall] = []
         output_items: list[dict[str, Any]] = []
         raw_output = body.get("output", [])

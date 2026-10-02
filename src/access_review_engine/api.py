@@ -47,6 +47,8 @@ from access_review_engine.campaign_authorization import (
     normalize_campaign_scope,
 )
 from access_review_engine.chatbot.context import AuthorizationContext, UIHints, resolve_ui_context
+from access_review_engine.chatbot.access import chatbot_access_status, can_use_chatbot
+from access_review_engine.chatbot.config import ChatbotConfig
 from access_review_engine.chatbot.service import AssistantService
 from access_review_engine.chatbot.tools.registry import allowed_actions
 from access_review_engine.collector_runner import RunnerError, run_exporter
@@ -138,6 +140,7 @@ from access_review_engine.system_admin import (
     api_token_summary,
     authenticate_api_token,
     authenticate_user,
+    chatbot_enabled,
     create_api_token,
     create_mcp_token,
     enabled_admins,
@@ -154,6 +157,7 @@ from access_review_engine.system_admin import (
     set_enabled,
     set_external_user_api_enabled,
     set_mcp_enabled,
+    set_chatbot_enabled,
     upsert_idp,
     upsert_user,
 )
@@ -488,6 +492,18 @@ def create_app(db_path: str | None = None):
             None,
         )
 
+    def _chatbot_status(principal: WebPrincipal) -> dict[str, bool]:
+        user = _stored_user(principal.username)
+        return chatbot_access_status(ChatbotConfig.from_env(), chatbot_enabled(system_conn), user)
+
+    def _require_chatbot_access(request: Request) -> WebPrincipal:
+        principal = _require(current_user(request))
+        if not can_use_chatbot(
+            ChatbotConfig.from_env(), chatbot_enabled(system_conn), _stored_user(principal.username)
+        ):
+            raise HTTPException(status_code=403, detail="Assistant access is disabled.")
+        return principal
+
     def record_audit(
         repo: Repository,
         request: Request,
@@ -519,7 +535,7 @@ def create_app(db_path: str | None = None):
     @app.post("/api/chatbot/message")
     def chatbot_message(request: Request, payload: dict[str, Any] = Body(...)):
         """Bounded EARE assistant endpoint; all identity and scope data comes from the session."""
-        principal = _require(current_user(request))
+        principal = _require_chatbot_access(request)
         question = payload.get("message")
         if not isinstance(question, str):
             raise HTTPException(status_code=400, detail="Message must be text")
@@ -545,7 +561,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/chatbot/actions")
     def chatbot_actions(request: Request):
-        principal = _require(current_user(request))
+        principal = _require_chatbot_access(request)
         all_actions = {
             "OPEN_GOLDEN": "Ouvrir la Golden Source",
             "OPEN_CAMPAIGN": "Ouvrir les campagnes",
@@ -566,12 +582,18 @@ def create_app(db_path: str | None = None):
             ]
         }
 
+    @app.get("/api/chatbot/status")
+    def chatbot_status(request: Request):
+        principal = _require(current_user(request))
+        status = _chatbot_status(principal)
+        return {key: status[key] for key in ("available", "global_enabled", "user_enabled", "configured")}
+
     def _chatbot_hints(route: str, object_id: str | None) -> UIHints:
         return resolve_ui_context(route, object_id)
 
     @app.get("/api/chatbot/brief")
     def chatbot_brief(request: Request, route: str = "/", object_id: str | None = None):
-        principal = _require(current_user(request))
+        principal = _require_chatbot_access(request)
         hints = _chatbot_hints(route, object_id)
         with Repository(db_path) as repo:
             brief = AssistantService(lambda: Repository(db_path)).build_brief(
@@ -581,7 +603,7 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/chatbot/report")
     def chatbot_report(request: Request, route: str = "/", object_id: str | None = None):
-        principal = _require(current_user(request))
+        principal = _require_chatbot_access(request)
         hints = _chatbot_hints(route, object_id)
         with Repository(db_path) as repo:
             service = AssistantService(lambda: Repository(db_path))
@@ -989,6 +1011,25 @@ def create_app(db_path: str | None = None):
                 )
         return {"mcp_enabled": enabled}
 
+    @app.put("/api/system/settings/chatbot")
+    def system_chatbot_toggle(request: Request, payload: dict[str, Any] = Body(...)):
+        _require(current_user(request), ("ADMIN",))
+        enabled = payload.get("enabled")
+        if not isinstance(enabled, bool):
+            raise HTTPException(status_code=400, detail="enabled must be a boolean")
+        previous = chatbot_enabled(system_conn)
+        set_chatbot_enabled(system_conn, enabled)
+        if previous != enabled:
+            with Repository(db_path) as repo:
+                record_audit(
+                    repo,
+                    request,
+                    "chatbot.global_enabled" if enabled else "chatbot.global_disabled",
+                    "system_setting",
+                    "chatbot_enabled",
+                )
+        return {"chatbot_enabled": enabled}
+
     @app.get("/api/me/mcp-token")
     def me_mcp_token(request: Request):
         principal = _require(
@@ -1110,6 +1151,13 @@ def create_app(db_path: str | None = None):
             "roles": sorted(ROLES),
             "external_user_api_enabled": external_user_api_enabled(system_conn),
             "mcp_enabled": mcp_enabled(system_conn),
+            "chatbot_enabled": chatbot_enabled(system_conn),
+            "chatbot_deployment_enabled": ChatbotConfig.from_env().enabled,
+            "chatbot_provider": ChatbotConfig.from_env().provider,
+            "chatbot_model": ChatbotConfig.from_env().model,
+            "chatbot_configured": chatbot_access_status(
+                ChatbotConfig.from_env(), chatbot_enabled(system_conn), None
+            )["configured"],
         }
 
     @app.get("/api/campaign-pilots")
@@ -1234,6 +1282,7 @@ def create_app(db_path: str | None = None):
                 )
         previous_user = _stored_user(str(payload.get("username", "")))
         previous_api_access = bool(previous_user and previous_user.get("api_access_enabled"))
+        previous_chatbot_access = bool(previous_user and previous_user.get("chatbot_access_enabled"))
         previous_token = (
             api_token_summary(system_conn, str(previous_user["id"]))
             if previous_user
@@ -1274,6 +1323,18 @@ def create_app(db_path: str | None = None):
                             str(result.get("username", "")),
                             {"reason": "api_access_disabled"},
                         )
+                if previous_user is not None and previous_chatbot_access != bool(
+                    result.get("chatbot_access_enabled")
+                ):
+                    record_audit(
+                        repo,
+                        request,
+                        "chatbot.user_enabled"
+                        if result.get("chatbot_access_enabled")
+                        else "chatbot.user_disabled",
+                        "user",
+                        str(result.get("username", "")),
+                    )
             return result
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

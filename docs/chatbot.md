@@ -6,6 +6,22 @@ recommendations, and safe internal navigation actions. It is not a general chatb
 
 ## Architecture and authorization
 
+Assistant availability has three independent gates plus local provider readiness:
+
+```text
+EARE_CHATBOT_ENABLED
+        -> system_settings.chatbot_enabled
+        -> system_users.chatbot_access_enabled
+        -> local OpenAI provider configuration
+```
+
+The deployment switch is environment-only and is never changed by the WebUI. The
+global setting is ADMIN-only and defaults to false. Every user, including ADMIN,
+must have the per-user Assistant flag enabled. Revocation is evaluated from the
+current database state on every chatbot request and does not require logout.
+The API key is never stored in SQLite; the administration screen exposes only
+provider, model and a Ready/Not configured state.
+
 The server resolves the authenticated session on every request. The client cannot
 set role, scopes, tenant, organization, or permissions. Each business tool receives
 a server-derived authorization context and returns an explicit aggregate DTO. Campaign
@@ -50,6 +66,11 @@ path or write an arbitrary file.
 The API key is server-side only and is never returned or logged. If the provider is
 disabled, unconfigured, or unavailable, the deterministic security behavior remains
 active and the user receives a safe unavailable message.
+
+The raw Responses REST body is parsed through `output[]` message items and only
+`message.content[].type == "output_text"` fragments become the user answer. Reasoning,
+function-call arguments and other output items are never treated as answer text. Usage
+is aggregated across all tool rounds.
 
 ## Safety and retention
 
