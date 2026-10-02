@@ -16,7 +16,14 @@ def validate_answer(answer: str, max_chars: int) -> str:
     return answer
 
 
-def validate_action(action_id: str, label: str, allowed: set[str]) -> AssistantAction:
+def validate_action(
+    action_id: str, label: str, allowed: set[str], route: str | None = None
+) -> AssistantAction:
     if action_id not in allowed or _DANGEROUS.search(label):
         raise ValueError("Unknown or unsafe assistant action")
-    return AssistantAction(action_id, label[:120])
+    if route is not None and (
+        not route.startswith("/")
+        or any(token in route.casefold() for token in ("javascript:", "data:", "file:", "//"))
+    ):
+        raise ValueError("Unknown or unsafe assistant route")
+    return AssistantAction(action_id, label[:120], route)

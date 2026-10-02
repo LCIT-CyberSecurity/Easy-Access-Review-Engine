@@ -17,12 +17,19 @@ _OUT_OF_SCOPE = re.compile(
 )
 
 
-def classify(question: str) -> str:
+def classify(question: str, route: str = "/") -> str:
     if _SUSPICIOUS.search(question):
         return "SUSPICIOUS"
     if _OUT_OF_SCOPE.search(question):
         return "OUT_OF_SCOPE"
     text = question.casefold()
+    if any(word in text for word in (
+        "eare", "campaign", "campagne", "golden", "review", "revue", "finding",
+        "remediation", "remédiation", "source", "snapshot", "report", "rapport",
+    )):
+        explicit = True
+    else:
+        explicit = False
     if any(word in text for word in ("dashboard", "situation", "attention", "maintenant")):
         return "EARE_DASHBOARD"
     if any(word in text for word in ("campaign", "campagne", "review campaign")):
@@ -39,7 +46,24 @@ def classify(question: str) -> str:
         return "EARE_NAVIGATION"
     if any(word in text for word in ("sécurité", "security", "finding", "remediation")):
         return "EARE_SECURITY_GUIDANCE"
-    return "EARE_USAGE"
+    normalized_route = route.split("?", 1)[0].rstrip("/") or "/"
+    contextual_routes = {
+        "/": "EARE_DASHBOARD",
+        "/dashboard": "EARE_DASHBOARD",
+        "/campaigns": "EARE_CAMPAIGN",
+        "/reviews": "EARE_REVIEW",
+        "/golden": "EARE_GOLDEN",
+        "/sources": "EARE_SOURCE",
+        "/reports": "EARE_REPORT",
+    }
+    for prefix, intent in contextual_routes.items():
+        if normalized_route == prefix or normalized_route.startswith(prefix + "/"):
+            if not explicit and re.search(
+                r"\b(?:que|quoi|comment|explique|reste|compl(?:é|e)ter|faire|aide|ça|cela)\b",
+                text,
+            ):
+                return intent
+    return "OUT_OF_SCOPE"
 
 
 def validate_intent(intent: str) -> str:

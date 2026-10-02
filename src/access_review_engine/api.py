@@ -567,15 +567,21 @@ def create_app(db_path: str | None = None):
 
     @app.get("/api/chatbot/actions")
     def chatbot_actions(request: Request):
-        _require(current_user(request))
-        return {"actions": [
-            {"action_id": "OPEN_GOLDEN", "label": "Ouvrir la Golden Source"},
-            {"action_id": "OPEN_CAMPAIGN", "label": "Ouvrir les campagnes"},
-            {"action_id": "OPEN_PENDING_REVIEWS", "label": "Ouvrir les revues en attente"},
-            {"action_id": "OPEN_ACTIONS", "label": "Ouvrir les remédiations"},
-            {"action_id": "OPEN_SOURCES", "label": "Ouvrir les sources"},
-            {"action_id": "OPEN_REPORTS", "label": "Ouvrir les rapports"},
-        ]}
+        principal = _require(current_user(request))
+        all_actions = {
+            "OPEN_GOLDEN": "Ouvrir la Golden Source",
+            "OPEN_CAMPAIGN": "Ouvrir les campagnes",
+            "OPEN_PENDING_REVIEWS": "Ouvrir les revues en attente",
+            "OPEN_ACTIONS": "Ouvrir les remédiations",
+            "OPEN_SOURCES": "Ouvrir les sources",
+            "OPEN_REPORTS": "Ouvrir les rapports",
+        }
+        allowed = {"OPEN_PENDING_REVIEWS"} if principal.role in {"ADMIN", "OPERATOR", "GROUP_OWNER"} else set()
+        if principal.role in {"ADMIN", "OPERATOR"}:
+            allowed |= {"OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_SOURCES", "OPEN_REPORTS"}
+        if principal.role in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
+            allowed.add("OPEN_ACTIONS")
+        return {"actions": [{"action_id": key, "label": all_actions[key]} for key in all_actions if key in allowed]}
 
     def column_filters(request: Request) -> dict[str, str]:
         """Per-column filters travel as f.<column>=<text>, next to search and sort."""

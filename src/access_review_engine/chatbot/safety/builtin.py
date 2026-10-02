@@ -9,8 +9,8 @@ class BuiltInSafetyProvider:
     def __init__(self, config: ChatbotConfig) -> None:
         self.config = config
 
-    def check_input(self, question: str) -> tuple[str, str, bool]:
-        return guard_input(question, self.config)
+    def check_input(self, question: str, route: str = "/") -> tuple[str, str, bool]:
+        return guard_input(question, self.config, route)
 
     def check_output(self, answer: str) -> str:
         return validate_answer(answer, self.config.max_message_chars)

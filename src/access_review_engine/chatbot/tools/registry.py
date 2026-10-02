@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
 
+from access_review_engine.campaign_authorization import campaign_required_providers
 from access_review_engine.chatbot.authorization.policy import visible_campaign
 from access_review_engine.chatbot.context import AuthorizationContext, UIHints
-from access_review_engine.chatbot.security.tool_policy import MAX_RESULT_COUNT
+from access_review_engine.chatbot.security.redaction import redact_secrets
+from access_review_engine.chatbot.security.tool_policy import (
+    MAX_JSON_CHARS,
+    MAX_RESULT_COUNT,
+    MAX_STRING_CHARS,
+)
+from access_review_engine.golden_functional import functional_access_rows
 from access_review_engine.guidance import GuidanceContext, build_guidance
-from access_review_engine.storage import Repository
+from access_review_engine.storage import Repository, hydrate_golden_version
 
 Tool = Callable[[dict[str, Any], AuthorizationContext, UIHints], dict[str, Any]]
 
@@ -15,26 +23,21 @@ Tool = Callable[[dict[str, Any], AuthorizationContext, UIHints], dict[str, Any]]
 def _campaign_providers(
     row: dict[str, Any], reviews: list[dict[str, Any]], snapshots: list[dict[str, Any]]
 ) -> set[str]:
-    providers: set[str] = set()
     scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
-    if scope.get("type") == "providers":
-        providers.update(str(item) for item in scope.get("values", []))
     relevant = [item for item in reviews if item.get("campaign_id") == row.get("id")]
-    for item in relevant:
-        providers.update(
-            str(item.get(field))
-            for field in ("access_provider", "identity_provider")
-            if item.get(field)
-        )
-    if not providers and scope.get("type", "all") == "all":
-        snapshot = next(
-            (item for item in snapshots if item.get("id") == row.get("snapshot_id")), None
-        )
-        if snapshot:
-            providers.update(
-                str(item.get("name")) for item in snapshot.get("providers", []) if item.get("name")
-            )
-    return providers
+    snapshot = next((item for item in snapshots if item.get("id") == row.get("snapshot_id")), None)
+    return campaign_required_providers(
+        scope,
+        comparison_states=relevant,
+        review_items=relevant,
+        snapshot_providers=[item.get("name") for item in (snapshot or {}).get("providers", [])],
+    )
+
+
+def _is_assigned_to(row: dict[str, Any], username: str) -> bool:
+    reviewer = row.get("reviewer")
+    identity = reviewer.get("identity") if isinstance(reviewer, dict) else reviewer
+    return str(identity or "").casefold() == username.casefold()
 
 
 def _visible_campaigns(repo: Repository, context: AuthorizationContext) -> list[dict[str, Any]]:
@@ -45,9 +48,7 @@ def _visible_campaigns(repo: Repository, context: AuthorizationContext) -> list[
         if visible_campaign(context, _campaign_providers(row, reviews, snapshots)):
             result.append(row)
         elif context.role == "GROUP_OWNER" and any(
-            item.get("campaign_id") == row.get("id")
-            and str((item.get("reviewer") or {}).get("identity", "")).casefold()
-            == context.username.casefold()
+            item.get("campaign_id") == row.get("id") and _is_assigned_to(item, context.username)
             for item in reviews
         ):
             result.append(row)
@@ -62,6 +63,8 @@ def dashboard(
     reviews = [
         row for row in repo.list_payloads("review_items") if str(row.get("campaign_id")) in ids
     ]
+    if context.role == "GROUP_OWNER":
+        reviews = [row for row in reviews if _is_assigned_to(row, context.username)]
     decisions = {str(row.get("review_item_id")) for row in repo.list_payloads("decisions")}
     actions = repo.list_payloads("remediation_actions")
     if context.role != "ADMIN":
@@ -82,8 +85,10 @@ def dashboard(
     golden_sources = [
         row
         for row in repo.list_payloads("golden_sources")
-        if context.role == "ADMIN"
+        if context.role in {"ADMIN", "OPERATOR"}
+        and (context.role == "ADMIN"
         or context.can_access_provider(str(row.get("name") or ""))
+        )
     ]
     return {
         "campaigns": len([x for x in campaigns if x.get("status") == "open"]),
@@ -93,7 +98,8 @@ def dashboard(
             [
                 x
                 for x in repo.list_payloads("providers")
-                if context.can_access_provider(str(x.get("name") or ""))
+                if context.role in {"ADMIN", "OPERATOR"}
+                and context.can_access_provider(str(x.get("name") or ""))
             ]
         ),
         "snapshots": len(snapshots),
@@ -115,11 +121,13 @@ def campaign_summary(
             "message": "Cette campagne n'est pas disponible dans votre périmètre.",
         }
     items = [x for x in repo.list_payloads("review_items") if x.get("campaign_id") == identifier]
+    if context.role == "GROUP_OWNER":
+        items = [x for x in items if _is_assigned_to(x, context.username)]
     decisions = {str(x.get("review_item_id")): x for x in repo.list_payloads("decisions")}
     return {
         "available": True,
         "id": identifier,
-        "name": str(row.get("name") or "Campaign"),
+        "name": _safe_text(row.get("name") or "Campaign"),
         "status": str(row.get("status") or "unknown"),
         "total_reviews": len(items),
         "pending_reviews": sum(1 for x in items if str(x.get("id")) not in decisions),
@@ -128,49 +136,58 @@ def campaign_summary(
             {str(x.get("reviewer") or "") for x in items if x.get("reviewer")}
         ),
         "findings": sum(1 for x in items if x.get("classification")),
-        "due_at": row.get("due_at"),
+        "due_at": _safe_text(row.get("due_at")) if row.get("due_at") else None,
     }
 
 
 def golden_gaps(
     repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
 ) -> dict[str, Any]:
-    sources = [
-        x
-        for x in repo.list_payloads("golden_sources")
-        if context.role == "ADMIN" or context.can_access_provider(str(x.get("name") or ""))
-    ]
-    versions = repo.list_payloads("golden_source_versions")
+    sources = repo.list_payloads("golden_sources")
+    versions = {str(x.get("id")): x for x in repo.list_payloads("golden_source_versions")}
     gaps = {
         "without_owner": 0,
         "without_application": 0,
         "incomplete_business_context": 0,
         "functional_model_not_defined": 0,
+        "functional_model_partial": 0,
+        "functional_rights_undocumented": 0,
     }
-    for row in repo.list_payloads("access_assignments"):
-        if (
-            not context.can_access_provider(str(row.get("provider") or ""))
-            and context.role != "ADMIN"
+    rows: list[dict[str, Any]] = []
+    visible_sources = 0
+    for source in sources:
+        version = versions.get(str(source.get("active_version_id") or ""))
+        if not version:
+            continue
+        hydrated = hydrate_golden_version(version)
+        domains = {row.get("access_provider") for row in functional_access_rows(repo, hydrated)}
+        domains.discard(None)
+        if context.role != "ADMIN" and (
+            context.role != "OPERATOR" or not domains or not domains <= context.scopes
         ):
             continue
-        if not row.get("owner") and not row.get("access_owner"):
+        visible_sources += 1
+        rows.extend(functional_access_rows(repo, hydrated))
+    for row in rows[:MAX_RESULT_COUNT]:
+        if not row.get("access_owner"):
             gaps["without_owner"] += 1
-    for version in versions:
-        assignments = [
-            assignment
-            for assignment in version.get("assignments", [])
-            if context.role == "ADMIN"
-            or context.can_access_provider(str(assignment.get("provider") or ""))
-        ]
-        if version.get("completeness") in {"not_defined", "partial"}:
-            if context.role == "ADMIN" or assignments:
-                gaps["functional_model_not_defined"] += 1
-        for assignment in assignments:
-            if not assignment.get("application"):
-                gaps["without_application"] += 1
-            if not assignment.get("business_context"):
-                gaps["incomplete_business_context"] += 1
-    return {"golden_sources": len(sources), "gaps": gaps}
+        fields = row.get("business_context_fields") or {}
+        if "application" not in fields:
+            gaps["without_application"] += 1
+        if not fields or row.get("business_context_conflicts"):
+            gaps["incomplete_business_context"] += 1
+        completeness = str(row.get("completeness") or "not_defined")
+        if completeness == "not_defined":
+            gaps["functional_model_not_defined"] += 1
+        elif completeness == "partial":
+            gaps["functional_model_partial"] += 1
+        if completeness in {"not_defined", "partial"} and not row.get("functional_rights"):
+            gaps["functional_rights_undocumented"] += 1
+    return {
+        "golden_sources": visible_sources,
+        "rows_considered": min(len(rows), MAX_RESULT_COUNT),
+        "gaps": gaps,
+    }
 
 
 def review_progress(
@@ -178,15 +195,16 @@ def review_progress(
 ) -> dict[str, Any]:
     allowed_ids = {str(x.get("id")) for x in _visible_campaigns(repo, context)}
     rows = [
-        x for x in repo.list_payloads("review_items") if str(x.get("campaign_id")) in allowed_ids
+        x
+        for x in repo.list_payloads("review_items")
+        if str(x.get("campaign_id")) in allowed_ids
     ]
     decisions = {str(x.get("review_item_id")) for x in repo.list_payloads("decisions")}
     if context.role == "GROUP_OWNER":
         rows = [
             x
             for x in rows
-            if str((x.get("reviewer") or {}).get("identity", "")).casefold()
-            == context.username.casefold()
+            if _is_assigned_to(x, context.username)
         ]
     return {
         "total": len(rows),
@@ -228,8 +246,7 @@ def guidance(
             {
                 key: value
                 for key, value in item.items()
-                if key
-                in {"id", "title", "description", "reason", "priority", "status", "action_url"}
+                if key in {"id", "title", "description", "reason", "priority", "status"}
             }
             for item in result.get("recommendations", [])
         ][:MAX_RESULT_COUNT]
@@ -254,24 +271,101 @@ TOOL_FUNCTIONS: dict[str, Tool] = {
 TOOL_SCHEMAS = [
     {
         "type": "function",
-        "name": name,
-        "description": "Read-only authorized EARE projection",
+        "name": "get_dashboard_summary",
+        "description": "Read-only authorized EARE dashboard projection",
+        "strict": True,
+        "parameters": {
+            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_campaign_summary",
+        "description": "Read-only authorized EARE campaign projection",
+        "strict": True,
         "parameters": {
             "type": "object",
-            "properties": {"campaign_id": {"type": "string"}},
+            "properties": {"campaign_id": {"type": ["string", "null"]}},
+            "required": ["campaign_id"],
             "additionalProperties": False,
         },
-    }
-    for name in TOOL_FUNCTIONS
+    },
+    {
+        "type": "function",
+        "name": "get_golden_gaps",
+        "description": "Read-only authorized Golden quality projection",
+        "strict": True,
+        "parameters": {
+            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_review_progress",
+        "description": "Read-only authorized review progress projection",
+        "strict": True,
+        "parameters": {
+            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_guidance",
+        "description": "Read-only deterministic EARE guidance",
+        "strict": True,
+        "parameters": {
+            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_page_help",
+        "description": "Read-only deterministic help for the validated current page",
+        "strict": True,
+        "parameters": {
+            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        },
+    },
 ]
 
 
-def allowed_actions() -> set[str]:
-    return {
-        "OPEN_GOLDEN",
-        "OPEN_CAMPAIGN",
-        "OPEN_PENDING_REVIEWS",
-        "OPEN_ACTIONS",
-        "OPEN_SOURCES",
-        "OPEN_REPORTS",
-    }
+def _safe_text(value: Any) -> str:
+    safe, _ = redact_secrets(str(value))
+    return safe[:MAX_STRING_CHARS]
+
+
+def _sanitize_projection(value: Any) -> Any:
+    if isinstance(value, str):
+        safe, _ = redact_secrets(value)
+        return safe[:MAX_STRING_CHARS]
+    if isinstance(value, dict):
+        return {
+            str(key)[:MAX_STRING_CHARS]: _sanitize_projection(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_projection(item) for item in value[:MAX_RESULT_COUNT]]
+    if isinstance(value, tuple):
+        return [_sanitize_projection(item) for item in value[:MAX_RESULT_COUNT]]
+    return value
+
+
+def bound_tool_output(value: dict[str, Any]) -> dict[str, Any]:
+    sanitized = _sanitize_projection(value)
+    encoded = json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"), default=str)
+    if len(encoded) > MAX_JSON_CHARS:
+        return {
+            "available": True,
+            "truncated": True,
+            "message": "Résultat borné par la politique de sécurité.",
+        }
+    return sanitized
+
+
+def allowed_actions(context: AuthorizationContext) -> set[str]:
+    actions = {"OPEN_PENDING_REVIEWS"}
+    if context.role in {"ADMIN", "OPERATOR"}:
+        actions |= {"OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_SOURCES", "OPEN_REPORTS"}
+    if context.role in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
+        actions.add("OPEN_ACTIONS")
+    return actions

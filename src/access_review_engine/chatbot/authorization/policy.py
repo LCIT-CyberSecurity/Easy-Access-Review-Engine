@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from access_review_engine.campaign_authorization import can_access_campaign
 from access_review_engine.chatbot.context import AuthorizationContext
 
 
@@ -8,7 +9,10 @@ def can_read_provider(context: AuthorizationContext, provider: str) -> bool:
 
 
 def visible_campaign(context: AuthorizationContext, campaign_providers: set[str]) -> bool:
-    return context.role == "ADMIN" or (
-        context.role == "OPERATOR"
-        and ("*" in context.scopes or campaign_providers <= context.scopes)
-    )
+    if context.role == "ADMIN":
+        return True
+    if context.role != "OPERATOR":
+        return False
+    if "*" in context.scopes:
+        return True
+    return can_access_campaign(context.role, context.scopes, campaign_providers)

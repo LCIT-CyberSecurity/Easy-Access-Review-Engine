@@ -23,6 +23,7 @@ class ProviderResult:
     text: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
     usage: dict[str, int] = field(default_factory=dict)
+    output_items: tuple[dict[str, Any], ...] = ()
 
 
 class LLMProvider(Protocol):

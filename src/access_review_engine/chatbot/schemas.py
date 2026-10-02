@@ -22,6 +22,7 @@ INTENTS = (
 class AssistantAction:
     action_id: str
     label: str
+    route: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,14 @@ class AssistantResponse:
         return {
             "answer": self.answer,
             "intent": self.intent,
-            "actions": [{"action_id": a.action_id, "label": a.label} for a in self.actions],
+            "actions": [
+                {
+                    "action_id": a.action_id,
+                    "label": a.label,
+                    **({"route": a.route} if a.route else {}),
+                }
+                for a in self.actions
+            ],
             "optional_document": self.optional_document.__dict__
             if self.optional_document
             else None,

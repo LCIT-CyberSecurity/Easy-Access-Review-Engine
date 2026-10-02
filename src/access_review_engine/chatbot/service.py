@@ -9,7 +9,10 @@ from typing import Any
 
 from access_review_engine.chatbot.config import ChatbotConfig
 from access_review_engine.chatbot.context import AuthorizationContext, UIHints
-from access_review_engine.chatbot.conversation import ConversationStore
+from access_review_engine.chatbot.conversation import (
+    ConversationStore,
+    cleanup_expired_chatbot_data_periodically,
+)
 from access_review_engine.chatbot.observability.audit import record as record_audit
 from access_review_engine.chatbot.observability.traces import record as record_trace
 from access_review_engine.chatbot.prompts import (
@@ -19,7 +22,8 @@ from access_review_engine.chatbot.prompts import (
     TOOL_POLICY_VERSION,
 )
 from access_review_engine.chatbot.providers.base import LLMProvider, ProviderResult
-from access_review_engine.chatbot.providers.openai import OpenAIProvider, ProviderError
+from access_review_engine.chatbot.providers.openai import ProviderError
+from access_review_engine.chatbot.providers.registry import build_provider
 from access_review_engine.chatbot.safety.builtin import BuiltInSafetyProvider
 from access_review_engine.chatbot.schemas import AssistantResponse
 from access_review_engine.chatbot.scope import classify
@@ -28,6 +32,8 @@ from access_review_engine.chatbot.tools.registry import (
     TOOL_FUNCTIONS,
     TOOL_SCHEMAS,
     allowed_actions,
+    bound_tool_output,
+    campaign_summary,
 )
 from access_review_engine.storage import Repository
 
@@ -51,7 +57,16 @@ class AssistantService:
         self.repo_factory = repo_factory
         self.config = config or ChatbotConfig.from_env()
         self.safety = BuiltInSafetyProvider(self.config)
-        self.provider = provider or OpenAIProvider(self.config)
+        self.provider_error: ProviderError | None = None
+        if provider is not None:
+            self.provider = provider
+        else:
+            try:
+                self.provider = build_provider(self.config)
+            except ProviderError as exc:
+                self.provider = None
+                self.provider_error = exc
+        self._tool_events: list[dict[str, str]] = []
 
     @staticmethod
     def _context(principal: Any) -> AuthorizationContext:
@@ -71,10 +86,17 @@ class AssistantService:
         principal_resolver: Callable[[], Any] | None = None,
     ) -> dict[str, Any]:
         started = time.monotonic()
+        self._tool_events = []
         hints = hints or UIHints()
-        safe_question, intent, secret_redacted = self.safety.check_input(question)
+        safe_question, intent, secret_redacted = self.safety.check_input(question, hints.route)
         context = self._context(principal)
         with self.repo_factory() as repo:
+            cleanup_expired_chatbot_data_periodically(repo, self.config.trace_retention_days)
+            store = ConversationStore(repo, context.subject)
+            # Validate a supplied conversation before classification so an out-of-scope
+            # message cannot be used to probe another user's conversation.
+            if conversation_id:
+                store.get_or_create(conversation_id)
             if secret_redacted:
                 record_audit(
                     repo,
@@ -84,16 +106,29 @@ class AssistantService:
                 )
             if intent == "OUT_OF_SCOPE":
                 record_audit(repo, "chatbot.out_of_scope", context.username, {})
+                record_trace(repo, {
+                    "id": str(uuid.uuid4()), "user_id": context.subject,
+                    "question": safe_question[:2000], "answer": OUT_OF_SCOPE,
+                    "provider": "none", "model": None, "intent": intent,
+                    "security_flags": ["out_of_scope"], "tools_called": [],
+                    "tools_denied": [], "created_at": datetime.now(UTC).isoformat(),
+                })
                 return AssistantResponse(
                     OUT_OF_SCOPE, intent, security_state="out_of_scope"
                 ).as_dict()
             if intent == "SUSPICIOUS":
                 record_audit(repo, "chatbot.prompt_injection_suspected", context.username, {})
+                record_trace(repo, {
+                    "id": str(uuid.uuid4()), "user_id": context.subject,
+                    "question": safe_question[:2000], "answer": SUSPICIOUS,
+                    "provider": "none", "model": None, "intent": intent,
+                    "security_flags": ["suspicious"], "tools_called": [],
+                    "tools_denied": [], "created_at": datetime.now(UTC).isoformat(),
+                })
                 return AssistantResponse(SUSPICIOUS, intent, security_state="suspicious").as_dict()
-            store = ConversationStore(repo, context.subject)
             conversation_id = store.get_or_create(conversation_id)
             store.append(conversation_id, "user", safe_question)
-            if not self.config.enabled:
+            if not self.config.enabled or self.provider is None:
                 record_audit(
                     repo, "chatbot.provider_error", context.username, {"reason": "disabled"}
                 )
@@ -142,7 +177,9 @@ class AssistantService:
             actions = ()
             if intent in action_by_intent:
                 action_id, label = action_by_intent[intent]
-                actions = (validate_action(action_id, label, allowed_actions()),)
+                route = self._resolve_action(repo, action_id, context, hints)
+                if route is not None and action_id in allowed_actions(context):
+                    actions = (validate_action(action_id, label, allowed_actions(context), route),)
             response = AssistantResponse(
                 answer, intent, actions=actions, security_state=security_state
             ).as_dict()
@@ -155,13 +192,24 @@ class AssistantService:
                     "user_id": context.subject,
                     "question": safe_question[:2000],
                     "answer": answer[:4000],
-                    "provider": self.config.provider,
+                    "provider": (
+                        self.config.provider if self.provider is not None else "unsupported"
+                    ),
                     "model": self.config.model,
                     "intent": intent,
                     "prompt_version": ASSISTANT_PROMPT_VERSION,
                     "scope_policy_version": SCOPE_POLICY_VERSION,
                     "tool_policy_version": TOOL_POLICY_VERSION,
                     "security_policy_version": SECURITY_POLICY_VERSION,
+                    "tools_called": [
+                        event["tool"] for event in self._tool_events if event["status"] == "allowed"
+                    ],
+                    "tools_denied": [
+                        event for event in self._tool_events if event["status"] == "denied"
+                    ],
+                    "input_tokens": result.usage.get("input_tokens"),
+                    "output_tokens": result.usage.get("output_tokens"),
+                    "security_flags": [security_state] if security_state != "ok" else [],
                     "latency_ms": int((time.monotonic() - started) * 1000),
                     "created_at": datetime.now(UTC).isoformat(),
                 },
@@ -174,6 +222,25 @@ class AssistantService:
             )
             return response
 
+    @staticmethod
+    def _resolve_action(
+        repo: Repository, action_id: str, context: AuthorizationContext, hints: UIHints
+    ) -> str | None:
+        if action_id not in allowed_actions(context):
+            return None
+        if action_id == "OPEN_CAMPAIGN":
+            candidate = campaign_summary(repo, {"campaign_id": hints.object_id}, context, hints)
+            if candidate.get("available") and hints.object_id:
+                return f"/campaigns/{hints.object_id}"
+            return "/campaigns"
+        return {
+            "OPEN_GOLDEN": "/golden",
+            "OPEN_PENDING_REVIEWS": "/reviews",
+            "OPEN_ACTIONS": "/actions",
+            "OPEN_SOURCES": "/sources",
+            "OPEN_REPORTS": "/reports",
+        }.get(action_id)
+
     def _generate(
         self,
         repo: Repository,
@@ -185,6 +252,8 @@ class AssistantService:
         hints: UIHints,
         principal_resolver: Callable[[], Any] | None,
     ) -> ProviderResult:
+        if self.provider is None:
+            raise ProviderError("Assistant provider is unavailable")
         messages: list[dict[str, Any]] = [
             {"role": row["role"], "content": row["content"]}
             for row in store.history(conversation_id, self.config.max_history_messages)
@@ -201,40 +270,58 @@ class AssistantService:
                     context = self._context(refreshed)
                 function = TOOL_FUNCTIONS.get(call.name)
                 if function is None or not isinstance(call.arguments, dict):
-                    record_audit(repo, "chatbot.tool_denied", context.username, {"tool": call.name})
+                    self._tool_events.append(
+                        {"tool": call.name, "status": "denied", "reason": "unknown_tool"}
+                    )
+                    record_audit(repo, "chatbot.tool_denied", context.username, {
+                        "conversation_id": conversation_id, "tool": call.name,
+                        "reason": "unknown_tool", "result_count": 0,
+                    })
                     raise ValueError("Unknown tool")
-                if set(call.arguments) - {"campaign_id"} or (
-                    "campaign_id" in call.arguments
-                    and not isinstance(call.arguments["campaign_id"], str)
-                ):
+                schema = next((item for item in TOOL_SCHEMAS if item["name"] == call.name), None)
+                properties = set((schema or {}).get("parameters", {}).get("properties", {}))
+                required = set((schema or {}).get("parameters", {}).get("required", []))
+                if set(call.arguments) != properties or not required <= set(call.arguments):
+                    self._tool_events.append(
+                        {"tool": call.name, "status": "denied", "reason": "invalid_arguments"}
+                    )
                     record_audit(
                         repo,
                         "chatbot.tool_denied",
                         context.username,
-                        {"tool": call.name, "reason": "invalid_arguments"},
+                        {
+                            "conversation_id": conversation_id, "tool": call.name,
+                            "reason": "invalid_arguments", "result_count": 0,
+                        },
                     )
                     raise ValueError("Invalid tool arguments")
                 # Context is reconstructed by the API on every request and passed to every call.
-                projected = function(repo, call.arguments, context, hints)
+                projected = bound_tool_output(function(repo, call.arguments, context, hints))
+                self._tool_events.append(
+                    {"tool": call.name, "status": "allowed", "reason": "authorized"}
+                )
                 record_audit(
                     repo,
                     "chatbot.tool_allowed",
                     context.username,
-                    {"tool": call.name, "result_count": len(projected)},
-                )
-                messages.append(
                     {
-                        "type": "function_call",
-                        "call_id": call.call_id,
-                        "name": call.name,
-                        "arguments": call.arguments,
-                    }
+                        "conversation_id": conversation_id, "tool": call.name,
+                        "reason": "authorized", "result_count": len(projected),
+                    },
                 )
+                for item in result.output_items:
+                    if item.get("type") in {"reasoning", "function_call"}:
+                        messages.append(item)
                 messages.append(
                     {
                         "type": "function_call_output",
                         "call_id": call.call_id,
-                        "output": json.dumps(projected, ensure_ascii=False, separators=(",", ":")),
+                        "output": json.dumps({
+                            "type": "eare_data",
+                            "untrusted": True,
+                            "tool": call.name,
+                            "data": projected,
+                        }, ensure_ascii=False, separators=(",", ":")),
                     }
                 )
         raise ValueError("Tool round limit exceeded")
@@ -254,7 +341,7 @@ class FakeLLMProvider:
         return ProviderResult(text=self.answer)
 
     def classify(self, question: str, route: str) -> str:
-        return classify(question)
+        return classify(question, route)
 
     def validate_configuration(self) -> None:
         return None

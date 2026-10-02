@@ -28,6 +28,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Sparkles,
   Sun,
   UserCog,
   Users,
@@ -1067,6 +1068,9 @@ function Shell({ principal }: { principal: Principal }) {
       {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} focus={(id) => setGuideFocus(GUIDE_FOCUS[id] ?? [])} /> : null}
       {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
       {paletteOpen ? <CommandPalette role={principal.role} close={() => setPaletteOpen(false)} /> : null}
+      <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Assistant">
+        <Sparkles size={17} /> <span>Assistant</span>
+      </button>
       {assistantOpen ? <AssistantDrawer route={location.pathname} close={() => setAssistantOpen(false)} /> : null}
     </div>
   );

@@ -72,7 +72,14 @@ class OpenAIProvider(LLMProvider):
             raise ProviderError("Assistant provider temporarily unavailable") from exc
         text = str(body.get("output_text") or "")
         calls: list[ToolCall] = []
-        for item in body.get("output", []):
+        output_items: list[dict[str, Any]] = []
+        raw_output = body.get("output", [])
+        if not isinstance(raw_output, list):
+            raise ProviderError("Assistant returned invalid output")
+        for item in raw_output:
+            if not isinstance(item, dict):
+                raise ProviderError("Assistant returned invalid output")
+            output_items.append(item)
             if item.get("type") != "function_call":
                 continue
             try:
@@ -93,4 +100,5 @@ class OpenAIProvider(LLMProvider):
                 for key, value in usage.items()
                 if key in {"input_tokens", "output_tokens"}
             },
+            output_items=tuple(output_items),
         )
