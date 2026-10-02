@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "src/access_review_engine/chatbot/**"
+      - "src/access_review_engine/api.py"
       - "tests/test_chatbot*.py"
       - "web/src/chatbot/**"
       - "web/src/App.tsx"
@@ -13,6 +14,7 @@ on:
   pull_request:
     paths:
       - "src/access_review_engine/chatbot/**"
+      - "src/access_review_engine/api.py"
       - "tests/test_chatbot*.py"
       - "web/src/chatbot/**"
       - "web/src/App.tsx"

@@ -25,7 +25,7 @@ from access_review_engine.chatbot.providers.base import LLMProvider, ProviderRes
 from access_review_engine.chatbot.providers.openai import ProviderError
 from access_review_engine.chatbot.providers.registry import build_provider
 from access_review_engine.chatbot.safety.builtin import BuiltInSafetyProvider
-from access_review_engine.chatbot.schemas import AssistantResponse
+from access_review_engine.chatbot.schemas import AssistantBrief, AssistantResponse
 from access_review_engine.chatbot.scope import classify
 from access_review_engine.chatbot.security.output_guard import validate_action
 from access_review_engine.chatbot.tools.registry import (
@@ -34,6 +34,10 @@ from access_review_engine.chatbot.tools.registry import (
     allowed_actions,
     bound_tool_output,
     campaign_summary,
+    dashboard,
+    golden_gaps,
+    guidance,
+    review_progress,
 )
 from access_review_engine.storage import Repository
 
@@ -106,35 +110,29 @@ class AssistantService:
                 )
             if intent == "OUT_OF_SCOPE":
                 record_audit(repo, "chatbot.out_of_scope", context.username, {})
-                record_trace(repo, {
-                    "id": str(uuid.uuid4()), "user_id": context.subject,
-                    "question": safe_question[:2000], "answer": OUT_OF_SCOPE,
-                    "provider": "none", "model": None, "intent": intent,
-                    "security_flags": ["out_of_scope"], "tools_called": [],
-                    "tools_denied": [], "created_at": datetime.now(UTC).isoformat(),
-                })
+                record_trace(repo, self._early_trace(
+                    context, conversation_id, safe_question, OUT_OF_SCOPE, intent, "out_of_scope"
+                ))
                 return AssistantResponse(
                     OUT_OF_SCOPE, intent, security_state="out_of_scope"
                 ).as_dict()
             if intent == "SUSPICIOUS":
                 record_audit(repo, "chatbot.prompt_injection_suspected", context.username, {})
-                record_trace(repo, {
-                    "id": str(uuid.uuid4()), "user_id": context.subject,
-                    "question": safe_question[:2000], "answer": SUSPICIOUS,
-                    "provider": "none", "model": None, "intent": intent,
-                    "security_flags": ["suspicious"], "tools_called": [],
-                    "tools_denied": [], "created_at": datetime.now(UTC).isoformat(),
-                })
+                record_trace(repo, self._early_trace(
+                    context, conversation_id, safe_question, SUSPICIOUS, intent, "suspicious"
+                ))
                 return AssistantResponse(SUSPICIOUS, intent, security_state="suspicious").as_dict()
             conversation_id = store.get_or_create(conversation_id)
             store.append(conversation_id, "user", safe_question)
+            brief = self.build_brief(repo, context, hints) if intent == "EARE_REPORT" else None
             if not self.config.enabled or self.provider is None:
                 record_audit(
                     repo, "chatbot.provider_error", context.username, {"reason": "disabled"}
                 )
                 return {
                     **AssistantResponse(
-                        UNAVAILABLE, intent, security_state="unavailable"
+                        UNAVAILABLE, intent, optional_document=brief,
+                        security_state="unavailable"
                     ).as_dict(),
                     "conversation_id": conversation_id,
                 }
@@ -181,7 +179,8 @@ class AssistantService:
                 if route is not None and action_id in allowed_actions(context):
                     actions = (validate_action(action_id, label, allowed_actions(context), route),)
             response = AssistantResponse(
-                answer, intent, actions=actions, security_state=security_state
+                answer, intent, actions=actions, optional_document=brief,
+                security_state=security_state,
             ).as_dict()
             response["conversation_id"] = conversation_id
             record_trace(
@@ -221,6 +220,80 @@ class AssistantService:
                 {"conversation_id": conversation_id, "intent": intent},
             )
             return response
+
+    @staticmethod
+    def _early_trace(
+        context: AuthorizationContext,
+        conversation_id: str | None,
+        question: str,
+        answer: str,
+        intent: str,
+        security_flag: str,
+    ) -> dict[str, Any]:
+        return {
+            "id": str(uuid.uuid4()), "conversation_id": conversation_id,
+            "message_id": None, "user_id": context.subject,
+            "question": question[:2000], "answer": answer[:4000],
+            "provider": "none", "model": None, "intent": intent,
+            "prompt_version": ASSISTANT_PROMPT_VERSION,
+            "scope_policy_version": SCOPE_POLICY_VERSION,
+            "tool_policy_version": TOOL_POLICY_VERSION,
+            "security_policy_version": SECURITY_POLICY_VERSION,
+            "tools_called": [], "tools_denied": [],
+            "input_tokens": None, "output_tokens": None,
+            "security_flags": [security_flag],
+            "latency_ms": 0, "created_at": datetime.now(UTC).isoformat(),
+        }
+
+    @staticmethod
+    def build_brief(
+        repo: Repository, context: AuthorizationContext, hints: UIHints
+    ) -> AssistantBrief:
+        summary = dashboard(repo, {}, context, hints)
+        progress = review_progress(repo, {}, context, hints)
+        gaps = golden_gaps(repo, {}, context, hints)
+        guidance_result = guidance(repo, {}, context, hints)
+        metrics = {
+            "campaigns": summary["campaigns"],
+            "pending_reviews": progress["pending"],
+            "decided_reviews": progress["decided"],
+            "open_actions": summary["open_actions"],
+            "golden_sources": gaps["golden_sources"],
+            "golden_rows_considered": gaps["rows_considered"],
+        }
+        findings = tuple(
+            f"{name}: {value}"
+            for name, value in gaps["gaps"].items()
+            if isinstance(value, int) and value > 0
+        )
+        recommendations = tuple(
+            str(item.get("title") or item.get("description") or item.get("id"))
+            for item in guidance_result.get("recommendations", [])[:5]
+        )
+        return AssistantBrief(
+            title="Synthèse EARE",
+            generated_at=datetime.now(UTC).isoformat(),
+            scope=f"role={context.role}; user={context.username}",
+            executive_summary="Synthèse calculée uniquement à partir des projections autorisées.",
+            metrics=metrics,
+            findings=findings,
+            recommendations=recommendations,
+        )
+
+    @staticmethod
+    def render_brief_markdown(brief: AssistantBrief) -> str:
+        lines = [
+            f"# {brief.title}", "", f"- Generated at: {brief.generated_at}",
+            f"- Scope: {brief.scope}", "", brief.executive_summary, "", "## Metrics",
+        ]
+        lines.extend(f"- {key}: {value}" for key, value in brief.metrics.items())
+        if brief.findings:
+            lines.extend(["", "## Findings", *[f"- {item}" for item in brief.findings]])
+        if brief.recommendations:
+            lines.extend([
+                "", "## Recommendations", *[f"- {item}" for item in brief.recommendations]
+            ])
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _resolve_action(

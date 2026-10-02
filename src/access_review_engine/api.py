@@ -46,6 +46,8 @@ from access_review_engine.campaign_authorization import (
     can_access_campaign,
     normalize_campaign_scope,
 )
+from access_review_engine.chatbot.context import UIHints
+from access_review_engine.chatbot.service import AssistantService
 from access_review_engine.collector_runner import RunnerError, run_exporter
 from access_review_engine.config_loader import (
     connector_path,
@@ -82,8 +84,6 @@ from access_review_engine.golden_annotations import (
     set_assignment_annotation,
 )
 from access_review_engine.guidance import GuidanceContext, build_guidance
-from access_review_engine.chatbot.context import UIHints
-from access_review_engine.chatbot.service import AssistantService
 from access_review_engine.mcp_server import build_mcp_asgi
 from access_review_engine.reporting import (
     access_names_from_snapshot,
@@ -582,6 +582,31 @@ def create_app(db_path: str | None = None):
         if principal.role in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
             allowed.add("OPEN_ACTIONS")
         return {"actions": [{"action_id": key, "label": all_actions[key]} for key in all_actions if key in allowed]}
+
+    def _chatbot_hints(route: str, object_id: str | None) -> UIHints:
+        safe_route = route if isinstance(route, str) and route.startswith("/") and len(route) <= 300 else "/"
+        safe_object = object_id if isinstance(object_id, str) and len(object_id) <= 200 else None
+        return UIHints(safe_route, safe_object)
+
+    @app.get("/api/chatbot/brief")
+    def chatbot_brief(request: Request, route: str = "/", object_id: str | None = None):
+        principal = _require(current_user(request))
+        hints = _chatbot_hints(route, object_id)
+        with Repository(db_path) as repo:
+            brief = AssistantService(lambda: Repository(db_path)).build_brief(
+                repo, AssistantService._context(principal), hints
+            )
+        return asdict(brief)
+
+    @app.get("/api/chatbot/report")
+    def chatbot_report(request: Request, route: str = "/", object_id: str | None = None):
+        principal = _require(current_user(request))
+        hints = _chatbot_hints(route, object_id)
+        with Repository(db_path) as repo:
+            service = AssistantService(lambda: Repository(db_path))
+            brief = service.build_brief(repo, service._context(principal), hints)
+            content = service.render_brief_markdown(brief)
+        return Response(content=content, media_type="text/markdown")
 
     def column_filters(request: Request) -> dict[str, str]:
         """Per-column filters travel as f.<column>=<text>, next to search and sort."""

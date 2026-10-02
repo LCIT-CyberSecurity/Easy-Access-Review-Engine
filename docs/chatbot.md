@@ -37,6 +37,11 @@ storage as conversation state but is not a claim of Zero Data Retention. EARE ow
 bounded history and sanitized traces. Stateless tool continuation replays required opaque output
 items in memory, including reasoning items; reasoning content is never persisted.
 
+The controlled endpoints `/api/chatbot/brief` and `/api/chatbot/report` expose a deterministic
+`AssistantBrief` with dashboard, review progress and Golden-quality projections. The Markdown
+report is generated server-side from authorized DTOs; the assistant cannot choose a filesystem
+path or write an arbitrary file.
+
 The API key is server-side only and is never returned or logged. If the provider is
 disabled, unconfigured, or unavailable, the deterministic security behavior remains
 active and the user receives a safe unavailable message.

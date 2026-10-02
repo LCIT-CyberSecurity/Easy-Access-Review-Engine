@@ -4,6 +4,20 @@ import { postJson } from "../api/client";
 
 type Message = { role: "user" | "assistant"; content: string; action?: { label: string; route: string } };
 
+export function assistantSuggestions(route: string): string[] {
+  const suggestions = ["Que dois-je faire maintenant ?"];
+  if (route.startsWith("/campaigns")) suggestions.push("Que reste-t-il à faire ?");
+  if (route.startsWith("/golden")) suggestions.push("Qu'est-ce que je dois compléter ?");
+  if (route.startsWith("/reviews")) suggestions.push("Que dois-je traiter ?");
+  return suggestions;
+}
+
+export function safeAssistantActionRoute(route: unknown): string | null {
+  return typeof route === "string" && route.startsWith("/") && !route.includes("://")
+    ? route
+    : null;
+}
+
 export function AssistantDrawer({ route, close }: { route: string; close: () => void }) {
   const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -25,8 +39,9 @@ export function AssistantDrawer({ route, close }: { route: string; close: () => 
       setConversationId(String(result.conversation_id ?? conversationId ?? ""));
       setMessages((items) => [...items, { role: "assistant", content: String(result.answer ?? "") }]);
       for (const action of Array.isArray(result.actions) ? result.actions : []) {
-        if (typeof action?.route === "string" && action.route.startsWith("/") && !action.route.includes("://")) {
-          setMessages((items) => [...items, { role: "assistant", content: "", action: { label: String(action.label ?? action.action_id), route: action.route } }]);
+        const actionRoute = safeAssistantActionRoute(action?.route);
+        if (actionRoute) {
+          setMessages((items) => [...items, { role: "assistant", content: "", action: { label: String(action.label ?? action.action_id), route: actionRoute } }]);
         }
       }
     } catch (error) {
@@ -49,10 +64,7 @@ export function AssistantDrawer({ route, close }: { route: string; close: () => 
         {loading ? <div className="chatbot-message assistant">Analyse en cours…</div> : null}
       </div>
       <div className="chatbot-suggestions">
-        <button onClick={() => void send("Que dois-je faire maintenant ?")}>Que faire maintenant ?</button>
-        {route.startsWith("/campaigns") ? <button onClick={() => void send("Que reste-t-il à faire ?")}>Que reste-t-il à faire ?</button> : null}
-        {route.startsWith("/golden") ? <button onClick={() => void send("Qu'est-ce que je dois compléter ?")}>Que compléter ?</button> : null}
-        {route.startsWith("/reviews") ? <button onClick={() => void send("Que dois-je traiter ?")}>Que traiter ?</button> : null}
+        {assistantSuggestions(route).map((suggestion) => <button key={suggestion} onClick={() => void send(suggestion)}>{suggestion}</button>)}
       </div>
       <form className="chatbot-form" onSubmit={(event) => { event.preventDefault(); void send(); }}>
         <input value={value} maxLength={8000} onChange={(event) => setValue(event.target.value)} placeholder="Posez une question sur EARE…" aria-label="Question à l'assistant" />

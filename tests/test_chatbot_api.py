@@ -46,3 +46,18 @@ def test_chatbot_actions_are_allowlisted(tmp_path: Path, monkeypatch):
     assert response.status_code == 200
     assert all(set(item) == {"action_id", "label"} for item in response.json()["actions"])
     assert all("url" not in item for item in response.json()["actions"])
+
+
+def test_chatbot_brief_and_markdown_report_are_controlled(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("EARE_CHATBOT_ENABLED", "false")
+    client = _client(tmp_path)
+    brief = client.get("/api/chatbot/brief?route=/")
+    assert brief.status_code == 200
+    assert {
+        "title", "generated_at", "scope", "executive_summary", "metrics", "findings",
+        "recommendations",
+    } <= set(brief.json())
+    report = client.get("/api/chatbot/report?route=/")
+    assert report.status_code == 200
+    assert report.headers["content-type"].startswith("text/markdown")
+    assert "# Synthèse EARE" in report.text

@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { assistantSuggestions, safeAssistantActionRoute } from "./chatbot/AssistantDrawer";
 
 import { ActionMenu, ApplicationPicker, ExternalApiDocumentation, FunctionalRightsSummary, GUIDE_FOCUS, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, functionalRightsText, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
 
@@ -19,6 +20,21 @@ describe("ActionMenu", () => {
     expect(html).toContain('aria-label="More actions for Alice"');
     expect(html).toContain("Reset password");
     expect(html).toContain("Disable");
+  });
+});
+
+describe("EARE Assistant launcher contracts", () => {
+  it("keeps suggestions contextual to the current page", () => {
+    expect(assistantSuggestions("/campaigns/c-1")).toContain("Que reste-t-il à faire ?");
+    expect(assistantSuggestions("/golden")).toContain("Qu'est-ce que je dois compléter ?");
+    expect(assistantSuggestions("/reviews")).toContain("Que dois-je traiter ?");
+  });
+
+  it("accepts only internal action routes", () => {
+    expect(safeAssistantActionRoute("/campaigns/c-1")).toBe("/campaigns/c-1");
+    expect(safeAssistantActionRoute("javascript:alert(1)")).toBeNull();
+    expect(safeAssistantActionRoute("https://example.test")).toBeNull();
+    expect(safeAssistantActionRoute("data:text/html,x")).toBeNull();
   });
 });
 
