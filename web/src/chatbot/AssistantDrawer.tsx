@@ -13,7 +13,8 @@ export function assistantSuggestions(route: string): string[] {
 }
 
 export function safeAssistantActionRoute(route: unknown): string | null {
-  return typeof route === "string" && route.startsWith("/") && !route.includes("://")
+  return typeof route === "string" && route.startsWith("/") && !route.startsWith("//")
+    && !route.includes("://") && !route.includes("\\") && !/[\u0000-\u001f]/.test(route)
     ? route
     : null;
 }

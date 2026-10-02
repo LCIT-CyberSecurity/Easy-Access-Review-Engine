@@ -25,9 +25,10 @@ from access_review_engine.chatbot.providers.base import LLMProvider, ProviderRes
 from access_review_engine.chatbot.providers.openai import ProviderError
 from access_review_engine.chatbot.providers.registry import build_provider
 from access_review_engine.chatbot.safety.builtin import BuiltInSafetyProvider
-from access_review_engine.chatbot.schemas import AssistantBrief, AssistantResponse
+from access_review_engine.chatbot.schemas import AssistantAction, AssistantBrief, AssistantResponse
 from access_review_engine.chatbot.scope import classify
 from access_review_engine.chatbot.security.output_guard import validate_action
+from access_review_engine.chatbot.security.tool_policy import validate_tool_arguments
 from access_review_engine.chatbot.tools.registry import (
     TOOL_FUNCTIONS,
     TOOL_SCHEMAS,
@@ -61,6 +62,7 @@ class AssistantService:
         self.repo_factory = repo_factory
         self.config = config or ChatbotConfig.from_env()
         self.safety = BuiltInSafetyProvider(self.config)
+        self.provider: LLMProvider | None
         self.provider_error: ProviderError | None = None
         if provider is not None:
             self.provider = provider
@@ -96,7 +98,9 @@ class AssistantService:
         context = self._context(principal)
         with self.repo_factory() as repo:
             cleanup_expired_chatbot_data_periodically(repo, self.config.trace_retention_days)
-            store = ConversationStore(repo, context.subject)
+            store = ConversationStore(
+                repo, context.subject, store_content=self.config.store_message_content
+            )
             # Validate a supplied conversation before classification so an out-of-scope
             # message cannot be used to probe another user's conversation.
             if conversation_id:
@@ -110,7 +114,7 @@ class AssistantService:
                 )
             if intent == "OUT_OF_SCOPE":
                 record_audit(repo, "chatbot.out_of_scope", context.username, {})
-                record_trace(repo, self._early_trace(
+                self._record_trace(repo, self._early_trace(
                     context, conversation_id, safe_question, OUT_OF_SCOPE, intent, "out_of_scope"
                 ))
                 return AssistantResponse(
@@ -118,7 +122,7 @@ class AssistantService:
                 ).as_dict()
             if intent == "SUSPICIOUS":
                 record_audit(repo, "chatbot.prompt_injection_suspected", context.username, {})
-                record_trace(repo, self._early_trace(
+                self._record_trace(repo, self._early_trace(
                     context, conversation_id, safe_question, SUSPICIOUS, intent, "suspicious"
                 ))
                 return AssistantResponse(SUSPICIOUS, intent, security_state="suspicious").as_dict()
@@ -138,7 +142,7 @@ class AssistantService:
                 }
             security_state = "ok"
             try:
-                result = self._generate(
+                result, context = self._generate(
                     repo,
                     context,
                     store,
@@ -172,7 +176,7 @@ class AssistantService:
                 "EARE_SOURCE": ("OPEN_SOURCES", "Voir les sources"),
                 "EARE_REPORT": ("OPEN_REPORTS", "Voir les rapports"),
             }
-            actions = ()
+            actions: tuple[AssistantAction, ...] = ()
             if intent in action_by_intent:
                 action_id, label = action_by_intent[intent]
                 route = self._resolve_action(repo, action_id, context, hints)
@@ -183,7 +187,7 @@ class AssistantService:
                 security_state=security_state,
             ).as_dict()
             response["conversation_id"] = conversation_id
-            record_trace(
+            self._record_trace(
                 repo,
                 {
                     "id": str(uuid.uuid4()),
@@ -220,6 +224,14 @@ class AssistantService:
                 {"conversation_id": conversation_id, "intent": intent},
             )
             return response
+        raise AssertionError("Assistant request completed without a response")
+
+    def _record_trace(self, repo: Repository, payload: dict[str, Any]) -> None:
+        if not self.config.log_conversations or not self.config.store_message_content:
+            payload = {**payload, "question": None, "answer": None}
+        if not self.config.log_tool_calls:
+            payload = {**payload, "tools_called": [], "tools_denied": []}
+        record_trace(repo, payload)
 
     @staticmethod
     def _early_trace(
@@ -324,16 +336,23 @@ class AssistantService:
         intent: str,
         hints: UIHints,
         principal_resolver: Callable[[], Any] | None,
-    ) -> ProviderResult:
+    ) -> tuple[ProviderResult, AuthorizationContext]:
         if self.provider is None:
             raise ProviderError("Assistant provider is unavailable")
         messages: list[dict[str, Any]] = [
             {"role": row["role"], "content": row["content"]}
             for row in store.history(conversation_id, self.config.max_history_messages)
         ]
+        # Keep the active question in memory even when durable message content is disabled.
+        if not messages or messages[-1] != {"role": "user", "content": question}:
+            messages.append({"role": "user", "content": question})
         input_tokens = 0
         output_tokens = 0
+        tool_call_count = 0
         for _ in range(self.config.max_tool_rounds):
+            context_size = len(json.dumps(messages, ensure_ascii=False, default=str))
+            if context_size > self.config.max_context_chars:
+                raise ValueError("Assistant context limit exceeded")
             result = self.provider.generate(messages, TOOL_SCHEMAS)
             input_tokens += int(result.usage.get("input_tokens", 0) or 0)
             output_tokens += int(result.usage.get("output_tokens", 0) or 0)
@@ -343,10 +362,20 @@ class AssistantService:
                     tool_calls=result.tool_calls,
                     usage={"input_tokens": input_tokens, "output_tokens": output_tokens},
                     output_items=result.output_items,
-                )
+                ), context
             pending_outputs: list[tuple[ToolCall, dict[str, Any]]] = []
             call_ids: set[str] = set()
             for call in result.tool_calls:
+                tool_call_count += 1
+                if tool_call_count > self.config.max_tool_calls:
+                    self._tool_events.append(
+                        {"tool": call.name, "status": "denied", "reason": "tool_call_limit"}
+                    )
+                    record_audit(repo, "chatbot.tool_denied", context.username, {
+                        "conversation_id": conversation_id, "tool": call.name,
+                        "reason": "tool_call_limit", "result_count": 0,
+                    })
+                    raise ValueError("Tool call limit exceeded")
                 if not call.call_id or call.call_id in call_ids:
                     raise ProviderError("Assistant returned invalid tool call id")
                 call_ids.add(call.call_id)
@@ -366,9 +395,7 @@ class AssistantService:
                     })
                     raise ValueError("Unknown tool")
                 schema = next((item for item in TOOL_SCHEMAS if item["name"] == call.name), None)
-                properties = set((schema or {}).get("parameters", {}).get("properties", {}))
-                required = set((schema or {}).get("parameters", {}).get("required", []))
-                if set(call.arguments) != properties or not required <= set(call.arguments):
+                if schema is None or not validate_tool_arguments(call.arguments, schema):
                     self._tool_events.append(
                         {"tool": call.name, "status": "denied", "reason": "invalid_arguments"}
                     )
@@ -383,7 +410,10 @@ class AssistantService:
                     )
                     raise ValueError("Invalid tool arguments")
                 # Context is reconstructed by the API on every request and passed to every call.
-                projected = bound_tool_output(function(repo, call.arguments, context, hints))
+                projected = bound_tool_output(
+                    function(repo, call.arguments, context, hints),
+                    max_items=self.config.max_result_items,
+                )
                 self._tool_events.append(
                     {"tool": call.name, "status": "allowed", "reason": "authorized"}
                 )

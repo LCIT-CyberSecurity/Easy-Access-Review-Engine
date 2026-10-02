@@ -14,9 +14,10 @@ def _now() -> str:
 
 
 class ConversationStore:
-    def __init__(self, repo: Repository, user_id: str) -> None:
+    def __init__(self, repo: Repository, user_id: str, *, store_content: bool = True) -> None:
         self.repo = repo
         self.user_id = user_id
+        self.store_content = store_content
 
     def get_or_create(self, conversation_id: str | None) -> str:
         if conversation_id:
@@ -33,28 +34,28 @@ class ConversationStore:
 
     def append(self, conversation_id: str, role: str, content: str) -> str:
         message_id = str(uuid.uuid4())
-        self.repo.insert_append_only(
-            "chatbot_messages",
-            {
-                "id": message_id,
-                "conversation_id": conversation_id,
-                "user_id": self.user_id,
-                "role": role,
-                "content": content,
-                "created_at": _now(),
-            },
-        )
+        payload = {
+            "id": message_id,
+            "conversation_id": conversation_id,
+            "user_id": self.user_id,
+            "role": role,
+            "content": content if self.store_content else None,
+            "content_stored": self.store_content,
+            "created_at": _now(),
+        }
+        self.repo.insert_append_only("chatbot_messages", payload)
         row = self.repo.get_payload("chatbot_conversations", conversation_id) or {}
         row["updated_at"] = _now()
         self.repo.upsert("chatbot_conversations", row)
         return message_id
 
     def history(self, conversation_id: str, limit: int) -> list[dict[str, Any]]:
-        return [
+        rows = [
             row
             for row in self.repo.list_payloads("chatbot_messages")
             if row.get("conversation_id") == conversation_id and row.get("user_id") == self.user_id
         ][-limit:]
+        return [row for row in rows if isinstance(row.get("content"), str)]
 
 
 def cleanup_expired_chatbot_data(repo: Repository, retention_days: int) -> int:

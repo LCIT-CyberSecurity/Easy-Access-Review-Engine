@@ -18,7 +18,7 @@ from access_review_engine.golden_functional import functional_access_rows
 from access_review_engine.guidance import GuidanceContext, build_guidance
 from access_review_engine.storage import Repository, hydrate_golden_version
 
-Tool = Callable[[dict[str, Any], AuthorizationContext, UIHints], dict[str, Any]]
+Tool = Callable[[Repository, dict[str, Any], AuthorizationContext, UIHints], dict[str, Any]]
 
 
 def _campaign_providers(
@@ -337,24 +337,30 @@ def _safe_text(value: Any) -> str:
     return safe[:MAX_STRING_CHARS]
 
 
-def _sanitize_projection(value: Any) -> Any:
+def _sanitize_projection(value: Any, max_items: int = MAX_RESULT_COUNT) -> Any:
     if isinstance(value, str):
         safe, _ = redact_secrets(value)
         return safe[:MAX_STRING_CHARS]
     if isinstance(value, dict):
-        return {
-            str(key)[:MAX_STRING_CHARS]: _sanitize_projection(item)
-            for key, item in value.items()
-        }
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            safe_key = str(key)[:MAX_STRING_CHARS]
+            if any(token in safe_key.casefold() for token in (
+                "password", "secret", "api_key", "apikey", "bearer", "private_key",
+                "refresh_token", "access_token", "credential", "client_secret",
+            )):
+                continue
+            result[safe_key] = _sanitize_projection(item, max_items)
+        return result
     if isinstance(value, list):
-        return [_sanitize_projection(item) for item in value[:MAX_RESULT_COUNT]]
+        return [_sanitize_projection(item, max_items) for item in value[:max_items]]
     if isinstance(value, tuple):
-        return [_sanitize_projection(item) for item in value[:MAX_RESULT_COUNT]]
+        return [_sanitize_projection(item, max_items) for item in value[:max_items]]
     return value
 
 
-def bound_tool_output(value: dict[str, Any]) -> dict[str, Any]:
-    sanitized = _sanitize_projection(value)
+def bound_tool_output(value: dict[str, Any], max_items: int = MAX_RESULT_COUNT) -> dict[str, Any]:
+    sanitized = _sanitize_projection(value, max_items)
     encoded = json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"), default=str)
     if len(encoded) > MAX_JSON_CHARS:
         return {
@@ -362,7 +368,7 @@ def bound_tool_output(value: dict[str, Any]) -> dict[str, Any]:
             "truncated": True,
             "message": "Résultat borné par la politique de sécurité.",
         }
-    return sanitized
+    return sanitized if isinstance(sanitized, dict) else {"available": False}
 
 
 def allowed_actions(context: AuthorizationContext) -> set[str]:
