@@ -41,10 +41,16 @@ and usable without an LLM.
 ```text
 EARE_CHATBOT_ENABLED=true
 EARE_CHATBOT_PROVIDER=openai
-EARE_OPENAI_API_KEY=sk-test-example-not-a-real-key
+EARE_OPENAI_API_KEY=<server-injected-secret>
 EARE_OPENAI_MODEL=<server-configured-model>
 EARE_CHATBOT_TIMEOUT=20
 EARE_CHATBOT_MAX_TOOL_ROUNDS=3
+EARE_CHATBOT_MAX_TOOL_CALLS=6
+EARE_CHATBOT_MAX_CONTEXT_CHARS=24000
+EARE_CHATBOT_MAX_RESULT_ITEMS=100
+EARE_CHATBOT_STORE_MESSAGE_CONTENT=true
+EARE_CHATBOT_LOG_CONVERSATIONS=true
+EARE_CHATBOT_LOG_TOOL_CALLS=true
 EARE_CHATBOT_TRACE_RETENTION_DAYS=30
 ```
 
@@ -66,6 +72,19 @@ path or write an arbitrary file.
 The API key is server-side only and is never returned or logged. If the provider is
 disabled, unconfigured, or unavailable, the deterministic security behavior remains
 active and the user receives a safe unavailable message.
+
+## Context contract
+
+The browser sends only a bounded route and optional selected object reference. The server
+rebuilds the authorized context from the current authenticated principal and EARE read
+models before calling the provider. The model receives only allowlisted aggregate DTOs,
+validated page help, deterministic Guidance and validated semantic action IDs. It never
+receives ORM objects, provider credentials, connector configuration, raw database data or
+the full page payload.
+
+The assistant is business read-only. It can explain, summarize, guide and prepare a
+controlled Markdown/JSON-style brief, but it cannot approve, revoke, edit Golden Source,
+change campaigns, launch remediation, import data or modify providers.
 
 The raw Responses REST body is parsed through `output[]` message items and only
 `message.content[].type == "output_text"` fragments become the user answer. Reasoning,

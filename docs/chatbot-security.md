@@ -54,6 +54,11 @@ bounded and removes old orphan conversations while leaving `audit_events` untouc
 are count- and size-bounded. The assistant is read-only: approval, revocation, assignment,
 Golden mutation, collection, RBAC, deletion and connector writes are not exposed.
 
+Operational defaults are: 8,000 characters per message, 12 history messages, 24,000 context
+characters, 3 tool rounds, 6 tool calls, 100 result items, 800 output tokens and a 20-second
+provider timeout. These values can be tuned with the `EARE_CHATBOT_*` environment settings;
+the hard security controls listed above remain enforced.
+
 Threats covered in V1:
 
 - direct and indirect prompt injection: user and imported EARE strings are untrusted data;
@@ -67,7 +72,28 @@ Threats covered in V1:
 - logging leakage: traces store sanitized question/answer and never credentials/configuration.
 
 The remaining V1 limitations are heuristic injection detection, no moderation provider,
-and no admin trace viewer. The requested remote Docker alias `4175` must be reachable
+and no admin trace viewer. Operational limits are configurable through the environment,
+but authorization, scope enforcement, tool allowlists, schema validation, secret filtering,
+safe navigation, provider credential isolation and conversation ownership are hard controls
+and cannot be disabled by configuration. The requested remote Docker alias `4175` must be reachable
 from the deployment network for environment-specific verification. Production deployment should use the existing audit retention
 policy and a managed secret environment. `store=false` is a privacy default, not a
 Zero Data Retention guarantee.
+
+## Trust boundary
+
+```text
+Browser
+  |
+  v
+EARE API -> authentication/current principal
+          -> AssistantContext and authorization
+          -> ToolBroker/read projections
+          -> DTO allowlist and data firewall
+          -> LLM provider
+```
+
+Imported provider strings and user text remain untrusted data at every stage. Security
+events contain metadata and safe references only. Conversation content can be disabled with
+`EARE_CHATBOT_STORE_MESSAGE_CONTENT=false`; in that mode raw message and trace content is
+not persisted, while security metadata remains available for audit.

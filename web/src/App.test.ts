@@ -41,6 +41,8 @@ describe("EARE Assistant launcher contracts", () => {
     expect(safeAssistantActionRoute("javascript:alert(1)")).toBeNull();
     expect(safeAssistantActionRoute("https://example.test")).toBeNull();
     expect(safeAssistantActionRoute("data:text/html,x")).toBeNull();
+    expect(safeAssistantActionRoute("//example.test/path")).toBeNull();
+    expect(safeAssistantActionRoute("/campaigns\\\\secret")).toBeNull();
   });
 });
 
