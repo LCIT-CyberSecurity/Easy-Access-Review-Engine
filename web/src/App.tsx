@@ -1093,16 +1093,25 @@ function Shell({ principal }: { principal: Principal }) {
     </div>
   );
 }
-function Head({ title, subtitle, children }: { title: string; subtitle?: string; children?: ReactNode }) {
+export function Head({ title, subtitle, status, children }: { title: string; subtitle?: string; status?: ReactNode; children?: ReactNode }) {
   return (
     <div className="page-header">
       <div>
-        <h1>{uiLabel(title)}</h1>
+        <div className="page-heading-line"><h1>{uiLabel(title)}</h1>{status}</div>
         {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
       </div>
       {children}
     </div>
   );
+}
+export function PageLoading({ label }: { label: string }) {
+  return <div className="page-loading" role="status" aria-busy="true" aria-label={label}>
+    <span className="skeleton page-loading-title" aria-hidden="true" />
+    <div className="page-loading-grid" aria-hidden="true">
+      {Array.from({ length: 4 }, (_, index) => <span className="skeleton" key={index} />)}
+    </div>
+    <span className="skeleton-label">{label}</span>
+  </div>;
 }
 // One vocabulary for every state the product shows, so a status reads the same everywhere.
 const STATUS_LABELS: Record<string, string> = {
@@ -2134,7 +2143,7 @@ function Home() {
       ["Findings", m.findings, "/findings", "in the last collection"],
       ["Remediation actions", m.remediation_actions, "/actions", "to carry out"],
     ];
-  if (q.isLoading) return <div className="empty">{ui("common.loading")}</div>;
+  if (q.isLoading) return <PageLoading label={ui("common.loading")} />;
   if (q.isError)
     return (
       <div className="empty">
@@ -2151,7 +2160,7 @@ function Home() {
           + New campaign
         </NavLink>
       </Head>
-      <p className="muted">
+      <p className="muted dashboard-meta">
         {q.data?.collected_at
           ? `Data collected ${when(q.data.collected_at)}${collectedFrom ? ` · ${collectedFrom}` : ""}`
           : "Nothing has been collected yet."}
@@ -2246,7 +2255,7 @@ function Home() {
         </div>
       ) : null}
       <div className="dashboard-grid">
-        <section className="panel">
+        <section className="panel panel--primary">
           <div className="panel-title">
             <h2>{uiLabel("Needs attention")}</h2>
             <span className="muted">
@@ -4023,10 +4032,10 @@ function CampaignDetail({ principal }: { principal: Principal }) {
     status = s(c?.status),
     pending = Number(c?.pending ?? reviews.filter((r) => !r.decision).length),
     ctas = campaignCtas(status, pending);
-  if (!c) return <div className="empty">{q.isLoading ? "Loading..." : "Campaign not found"}</div>;
+  if (!c) return q.isLoading ? <PageLoading label={ui("common.loading")} /> : <div className="empty">Campaign not found</div>;
   return (
     <>
-      <Head title={s(c.name)}>
+      <Head title={s(c.name)} status={<Status v={status} />}>
         <div className="button-row">
           <NavLink to="/campaigns">Back</NavLink>
           {status === "draft" ? <NavLink className="button subtle" to={"/campaigns/" + id + "/edit"}>Edit draft</NavLink> : null}
@@ -4126,7 +4135,7 @@ function CampaignDetail({ principal }: { principal: Principal }) {
             </section>
           ) : null}
           <div className="dashboard-grid">
-            <section className="panel">
+            <section className="panel panel--primary">
               <div className="panel-title">
                 <h2>Where the campaign stands</h2>
                 <span className="muted">
@@ -4932,7 +4941,7 @@ export function Golden({ principal }: { principal: Principal }) {
         contain beyond this list is reported as unexpected, and everything missing from the systems is
         reported as missing.
       </p>
-      {(principal.role === "ADMIN" || principal.role === "OPERATOR") && <section className="panel" aria-label="Business context issues">
+      {(principal.role === "ADMIN" || principal.role === "OPERATOR") && <section className="panel panel--quiet" aria-label="Business context issues">
         <h2>Business context issues <span className="muted">{s(feedbackQuery.data?.total, "0")} open</span></h2>
         <p className="muted">Reviewer reports request verification; they do not change the Golden Source or a past decision. Source and EARE reference values are not independently verified target ACLs.</p>
         {feedbackQuery.isError ? <p role="alert">Unable to load context feedback.</p> : null}
