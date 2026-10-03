@@ -2402,6 +2402,9 @@ def create_app(db_path: str | None = None) -> Any:
         offset: int = 0,
         sort: str | None = None,
         order: str | None = None,
+        organization: str | None = None,
+        information_system: str | None = None,
+        include_descendants: bool = False,
     ):
         """Return expected roles/groups with their permissions and holder counts."""
         from access_review_engine.functional_context import functional_context

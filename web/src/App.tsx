@@ -77,7 +77,7 @@ import {
   validProviderScope,
 } from "./projections";
 import { goldenFunctionalRightsAreValid } from "./goldenFunctionalValidation";
-import { goldenFunctionalPresentation, type FunctionalRightsGroup } from "./goldenFunctionalPresentation";
+import { capabilityPresentation, goldenFunctionalPresentation, originShortLabel, type FunctionalRightsGroup } from "./goldenFunctionalPresentation";
 import { BUSINESS_CONTEXT_FIELDS, conflictFields, provenanceLabel } from "./businessContextPresentation";
 import { AssistantDrawer } from "./chatbot/AssistantDrawer";
 const s = (v: unknown, f = "—") =>
@@ -725,7 +725,7 @@ const navSections = [
   {
     heading: "ACCESS & REFERENCE",
     items: [
-      { to: "/perimeters", label: "Perimeters", icon: Layers, roles: ["ADMIN", "OPERATOR"] },
+      { to: "/perimeters", label: "Scopes", icon: Layers, roles: ["ADMIN", "OPERATOR"] },
       { to: "/identities", label: "Identities", icon: Users, roles: ["ADMIN", "OPERATOR"] },
       { to: "/accesses", label: "Access", icon: KeyRound, roles: ["ADMIN", "OPERATOR"] },
       { to: "/golden", label: "Golden Source", icon: ShieldCheck, roles: ["ADMIN", "OPERATOR"] },
@@ -2513,8 +2513,8 @@ function Perimeters({ principal }: { principal: Principal }) {
     mutationFn: ({ organization_id, information_system_id }: { organization_id: string; information_system_id: string }) => deleteJson(`perimeters/associations/${organization_id}/${information_system_id}`),
     onSuccess: () => void refresh(),
   });
-  if (query.isLoading) return <PageLoading label="Loading perimeters…" />;
-  if (query.isError) return <p className="form-error">Unable to load perimeters.</p>;
+  if (query.isLoading) return <PageLoading label="Loading tags…" />;
+  if (query.isError) return <p className="form-error">Unable to load tags.</p>;
   const label = (row: Row) => Array.isArray(row.path) ? row.path.join(" › ") : s(row.name);
   const associatedSystems = (organizationId: string) => associations.filter((row) => row.organization_id === organizationId).map((row) => systems.find((item) => item.id === row.information_system_id)).filter(Boolean) as Row[];
   const associatedOrganizations = (systemId: string) => associations.filter((row) => row.information_system_id === systemId).map((row) => organizations.find((item) => item.id === row.organization_id)).filter(Boolean) as Row[];
@@ -2523,7 +2523,7 @@ function Perimeters({ principal }: { principal: Principal }) {
   const editor = editing ? <form className="panel perimeter-editor" onSubmit={(event) => { event.preventDefault(); save.mutate(editing); }}><strong>Edit {editing.kind === "organization" ? "organization" : "information system"}</strong><input value={s(editing.name)} onChange={(event) => setEditing({ ...editing, name: event.target.value })} aria-label="Perimeter name" required /><select value={s(editing.parent_id, "")} onChange={(event) => setEditing({ ...editing, parent_id: event.target.value || null })} aria-label="Perimeter parent"><option value="">Root</option>{(editing.kind === "organization" ? organizations : systems).filter((row) => row.id !== editing.id).map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={save.isPending}>Save</button><button type="button" className="button subtle" onClick={() => setEditing(null)}>Cancel</button></form> : null;
   return (
     <>
-      <Head title="Perimeters" subtitle="Classify and target EARE objects without changing access semantics." />
+      <Head title="Tags" subtitle="Classify and target EARE objects without changing access semantics." />
       {editor}
       <div className="workspace-grid">
         <section className="panel">
@@ -3227,7 +3227,7 @@ export function ReviewDrawer({
               {groupEvidence.permission_name ? <><dt>Permission</dt><dd>{s(groupEvidence.permission_name)}</dd></> : null}
               {groupEvidence.policy_name ? <><dt>Policy</dt><dd>{s(groupEvidence.policy_name)}</dd></> : null}
               {groupEvidence.resource_name ? <><dt>Resource</dt><dd>{s(groupEvidence.resource_name)}</dd></> : null}
-              {groupScopes.length ? <><dt>Scopes</dt><dd>{groupScopes.join(", ")}</dd></> : null}
+              {groupScopes.length ? <><dt>Tags</dt><dd>{groupScopes.join(", ")}</dd></> : null}
               {groupEvidence.permission_decision_strategy ? <><dt>Decision strategy</dt><dd>{s(groupEvidence.permission_decision_strategy)}</dd></> : null}
               {groupEvidence.resource_server_policy_enforcement_mode ? <><dt>Resource server enforcement</dt><dd>{s(groupEvidence.resource_server_policy_enforcement_mode)}</dd></> : null}
               {groupEvidence.resource_server_decision_strategy ? <><dt>Resource server decision strategy</dt><dd>{s(groupEvidence.resource_server_decision_strategy)}</dd></> : null}
@@ -3915,7 +3915,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
             </label>
           ) : null}
           <div className="wide-field campaign-scope">
-            <span className="step-label">1b</span> Perimeter targeting
+            <span className="step-label">1b</span> Tag targeting
             <div className="inline-form">
               <label>Organizations<select multiple size={Math.min(5, Math.max(2, arr(perimeterQuery.data?.organizations).length))} value={vals(form.perimeter_organizations)} onChange={(event) => setForm({ ...form, perimeter_organizations: Array.from(event.currentTarget.selectedOptions, (option) => option.value) })}>{arr(perimeterQuery.data?.organizations).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}</select></label>
               <label>Information systems<select multiple size={Math.min(5, Math.max(2, arr(perimeterQuery.data?.information_systems).length))} value={vals(form.perimeter_information_systems)} onChange={(event) => setForm({ ...form, perimeter_information_systems: Array.from(event.currentTarget.selectedOptions, (option) => option.value) })}>{arr(perimeterQuery.data?.information_systems).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}</select></label>
@@ -4081,6 +4081,12 @@ function CampaignDetail({ principal }: { principal: Principal }) {
     [confirmAction, setConfirmAction] = useState<string | null>(null),
     [reviewView, setReviewView] = useState("pending"),
     [accessFilter, setAccessFilter] = useState<"business" | "system" | "all">("business"),
+    [reviewSearch, setReviewSearch] = useState(""),
+    [reviewDecisions, setReviewDecisions] = useState<string[]>([]),
+    [reviewTags, setReviewTags] = useState<string[]>([]),
+    [reviewSort, setReviewSort] = useState(""),
+    [reviewOrder, setReviewOrder] = useState("asc"),
+    [selectedReviewIds, setSelectedReviewIds] = useState<string[]>([]),
     toast = useToast(),
     m = useMutation({
       mutationFn: (a: string) => postJson("campaigns/" + id + "/" + a),
@@ -4197,6 +4203,31 @@ function CampaignDetail({ principal }: { principal: Principal }) {
         ? decided
         : reviews,
     visibleReviews = filterSystemReviews(statusReviews, accessFilter),
+    reviewTagOptions = [...new Set(visibleReviews.flatMap((row) => arr(row.perimeters).map((tag) => s(tag.name)).filter(Boolean)))].sort(),
+    reviewNeedle = reviewSearch.trim().toLocaleLowerCase(),
+    reviewRows = visibleReviews
+      .filter((row) => {
+        const haystack = [row.identity_display_name, row.identity_identifier, row.application, row.access_display_name, row.access_name, row.access_provider].map((value) => s(value)).join(" ").toLocaleLowerCase();
+        const rowTags = arr(row.perimeters).map((tag) => s(tag.name));
+        return (!reviewNeedle || haystack.includes(reviewNeedle))
+          && (!reviewDecisions.length || reviewDecisions.includes(s(row.decision, "pending")))
+          && (!reviewTags.length || reviewTags.some((tag) => rowTags.includes(tag)));
+      })
+      .sort((left, right) => {
+        if (!reviewSort) return 0;
+        const value = (row: Row) => reviewSort === "decision" ? s(row.decision, "pending") : reviewSort === "perimeters" ? arr(row.perimeters).map((tag) => s(tag.name)).join(", ") : s(row[reviewSort]);
+        return value(left).localeCompare(value(right), undefined, { sensitivity: "base" }) * (reviewOrder === "asc" ? 1 : -1);
+      }),
+    reviewSorting: SortState = {
+      sort: reviewSort,
+      order: reviewOrder,
+      toggle: (field: string) => {
+        setReviewOrder(reviewSort === field && reviewOrder === "asc" ? "desc" : "asc");
+        setReviewSort(field);
+      },
+    },
+    reviewId = (row: Row) => s(row.id, `${s(row.identity_provider)}:${s(row.identity_identifier)}:${s(row.access_provider)}:${s(row.access_name)}`),
+    selectedVisibleReviewIds = reviewRows.map(reviewId),
     status = s(c?.status),
     pending = Number(c?.pending ?? reviews.filter((r) => !r.decision).length),
     ctas = campaignCtas(status, pending);
@@ -4446,16 +4477,30 @@ function CampaignDetail({ principal }: { principal: Principal }) {
                 ))}
               </div>
             </div>
+          <Filter v={reviewSearch} onChange={setReviewSearch}>
+            <MultiSelectFilter values={reviewDecisions} onChange={setReviewDecisions} options={["pending", "approve", "revoke", "not_applicable"]} placeholder="Decision" />
+            <MultiSelectFilter values={reviewTags} onChange={setReviewTags} options={reviewTagOptions} placeholder="Tags" />
+            <button type="button" className="button subtle" onClick={() => setSelectedReviewIds(selectedVisibleReviewIds)} disabled={!reviewRows.length}>Select visible ({reviewRows.length})</button>
+            <button type="button" className="button subtle" onClick={() => setSelectedReviewIds([])} disabled={!selectedReviewIds.length}>Clear selection</button>
+          </Filter>
+          <p className="field-note">{selectedReviewIds.length} selected · {reviewRows.length} visible</p>
           <Table
-          cols={["Identity", "Application", "Access / role", "What it allows", "Via / origin", "Reviewer", "Status", "Action"]}
-          rows={visibleReviews.map((r) => [
+          cols={["Select", "Identity", "Application", "Access / role", "What it allows", "Tags", "Via / origin", "Reviewer", "Status", "Action"]}
+          fields={[null, "identity_display_name", "application", "access_display_name", null, "perimeters", "via", "reviewer", "decision", null]}
+          sorting={reviewSorting}
+          rows={reviewRows.map((r) => [
+            <input type="checkbox" aria-label={`Select ${s(r.identity_display_name, s(r.identity_identifier))}`} checked={selectedReviewIds.includes(reviewId(r))} onChange={(event) => setSelectedReviewIds((current) => event.target.checked ? [...new Set([...current, reviewId(r)])] : current.filter((id) => id !== reviewId(r)))} />,
             <button className="link-button" onClick={() => setSelected(r)}>
               {s(r.identity_display_name, s(r.identity_identifier))}
               <Sub>{s(r.identity_provider)}</Sub>
             </button>,
             <span>{s(r.application)}</span>,
             <div><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>{reviewPermissionText(r.permission)}</Sub>{arr(r.grants).length ? <Sub>Grants: {arr(r.grants).map((grant) => s(grant.display_name)).join(", ")}</Sub> : null}</div>,
-            <span className="functional-rights-text">{functionalRightsText(r)}</span>,
+            <FunctionalRightsSummary row={r} />,
+            (() => {
+              const tags = arr(r.perimeters);
+              return tags.length ? <span className="chip-row campaign-tags" aria-label="Tags">{tags.slice(0, 4).map((tag) => <span className="application-chip" key={`${s(tag.type)}:${s(tag.id)}`} title={Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)}>{s(tag.name)}</span>)}{tags.length > 4 ? <span className="muted" title={tags.slice(4).map((tag) => Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)).join("\n")}>+{tags.length - 4}</span> : null}</span> : <span className="muted">—</span>;
+            })(),
             <span>{s(r.via, r.direct ? "Direct assignment" : "Inherited")}</span>,
             <div>{ownerText(r.reviewer)}<Sub>{r.reviewer ? "Responsible reviewer" : "No reviewer assigned"}</Sub></div>,
             <Status v={r.decision ?? "pending"} />,
@@ -4634,20 +4679,33 @@ function GoldenFunctionalSuggestions({ rows, onEdit }: { rows: Row[]; onEdit: (r
 
 export function FunctionalRightsSummary({ row, onAction }: { row: Row; onAction?: (action: string) => void }) {
   const presentation = goldenFunctionalPresentation(row);
+  const statusTone = presentation.status.toLocaleLowerCase().replaceAll(" ", "-");
+  const actionLabel = presentation.action === "Complete functional rights" ? "Complete rights" : presentation.action;
   const groups = (items: FunctionalRightsGroup[], label?: string) => items.length ? (
     <div className="functional-rights-groups">
       {label ? <small className="muted">{label}</small> : null}
-      {items.map((group) => <div className="functional-rights-group" key={`${label ?? "direct"}:${group.resource}`}><strong>{group.resource}</strong><span>{group.capabilities.join(" · ")}</span></div>)}
+      {items.map((group) => <div className="functional-rights-group" key={`${label ?? "direct"}:${group.resource}`}>
+        <strong>{group.resource}</strong>
+        <span className="capability-tokens">
+          {group.capabilities.map((capability) => {
+            const token = capabilityPresentation(capability);
+            return <span className="capability-token" key={`${group.resource}:${capability}`} title={token.fullLabel} aria-label={token.fullLabel}>{token.shortLabel}</span>;
+          })}
+        </span>
+      </div>)}
     </div>
   ) : null;
   return (
     <div className="functional-rights-summary">
       {groups(presentation.groups)}
       {groups(presentation.inheritedGroups, "Inherited / effective rights")}
-      <span className="functional-status" role="status">{presentation.status}</span>
-      {presentation.description ? <small>{presentation.description}</small> : null}
-      {presentation.origin ? <small>{presentation.origin}</small> : null}
-      {onAction ? <button type="button" className={presentation.status === "System access" ? "link-button" : "button subtle"} onClick={() => onAction(presentation.action)}>{presentation.action}</button> : null}
+      <div className="functional-status-line">
+        <span className={`functional-status functional-status-${statusTone}`} role="status" title={presentation.description || undefined} aria-label={presentation.description ? `${presentation.status}: ${presentation.description}` : presentation.status}>
+          {presentation.status}
+        </span>
+        {presentation.origin ? <span className="functional-origin" title={presentation.origin}>{originShortLabel(presentation.origin)}</span> : null}
+      </div>
+      {onAction ? <button type="button" className={presentation.status === "System access" ? "link-button" : "link-button functional-rights-action"} onClick={() => onAction(presentation.action)}>{actionLabel}</button> : null}
     </div>
   );
 }
@@ -4687,6 +4745,7 @@ export function Golden({ principal }: { principal: Principal }) {
     [tab, setTab] = useState("accesses"),
     [holders, setHolders] = useState<Row | null>(null),
     [editingHolder, setEditingHolder] = useState<Row | null>(null),
+    [scopeEditing, setScopeEditing] = useState<Row | null>(null),
     [editingAccess, setEditingAccess] = useState<Row | null>(null),
     [pendingAccessEdit, setPendingAccessEdit] = useState<Row | null>(null),
     [pendingAccessTab, setPendingAccessTab] = useState<string | null>(null),
@@ -4723,6 +4782,36 @@ export function Golden({ principal }: { principal: Principal }) {
       retry: false,
     }),
     perimeterQuery = useQuery({ queryKey: ["perimeters"], queryFn: () => getJson("perimeters"), retry: false }),
+    scopeAssignments = useQuery({
+      queryKey: ["golden-scope-assignments", scopeEditing?.access_provider, scopeEditing?.access_name],
+      queryFn: () => getJson("perimeters/assignments", {
+        object_type: "access",
+        object_id: s(scopeEditing?.access_id, "") || `${s(scopeEditing?.access_provider)}:${s(scopeEditing?.access_name)}`,
+      }),
+      enabled: Boolean(scopeEditing),
+      retry: false,
+    }),
+    assignScope = useMutation({
+      mutationFn: ({ scope_type, scope_id }: { scope_type: string; scope_id: string }) => postJson("perimeters/assignments", {
+        scope_type,
+        scope_id,
+        object_type: "access",
+        object_id: s(scopeEditing?.access_id, "") || `${s(scopeEditing?.access_provider)}:${s(scopeEditing?.access_name)}`,
+      }),
+      onSuccess: async () => {
+        await scopeAssignments.refetch();
+        await c.invalidateQueries({ queryKey: ["golden-accesses"] });
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to assign the scope") }),
+    }),
+    removeScope = useMutation({
+      mutationFn: (assignmentId: string) => deleteJson(`perimeters/assignments/${encodeURIComponent(assignmentId)}`),
+      onSuccess: async () => {
+        await scopeAssignments.refetch();
+        await c.invalidateQueries({ queryKey: ["golden-accesses"] });
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to remove the scope") }),
+    }),
     applicationCatalog = useQuery({
       queryKey: ["golden-applications"],
       queryFn: () => getJson("golden-applications"),
@@ -5375,6 +5464,19 @@ export function Golden({ principal }: { principal: Principal }) {
                 rows={expectedAccesses.map((r) => {
                   const key = `${s(r.access_provider)}:${s(r.access_name)}`;
                   const editing = editingAccess?.key === key;
+                  const editingScopes = scopeEditing?.access_provider === r.access_provider && scopeEditing?.access_name === r.access_name;
+                  const currentScopeAssignments = editingScopes ? arr(scopeAssignments.data?.items) : [];
+                  const selectedScopeIds = (scopeType: string) => currentScopeAssignments.filter((item) => s(item.scope_type) === scopeType).map((item) => s(item.scope_id));
+                  const updateScopes = (scopeType: string, selectedIds: string[]) => {
+                    const current = new Set(selectedScopeIds(scopeType));
+                    const selected = new Set(selectedIds);
+                    currentScopeAssignments
+                      .filter((item) => s(item.scope_type) === scopeType && !selected.has(s(item.scope_id)))
+                      .forEach((item) => removeScope.mutate(s(item.id)));
+                    selectedIds
+                      .filter((scopeId) => !current.has(scopeId))
+                      .forEach((scopeId) => assignScope.mutate({ scope_type: scopeType, scope_id: scopeId }));
+                  };
                   const applicationOptions = Array.from(new Set([
                     ...arr(applicationCatalog.data?.applications as Row[] | undefined).map((option) => s(option.name)).filter(Boolean),
                     ...vals(accessesQuery.data?.application_options).flatMap(splitPermissions),
@@ -5399,9 +5501,10 @@ export function Golden({ principal }: { principal: Principal }) {
                     ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>{functionalRightsText(r)}</small></div>
                     : <FunctionalRightsSummary row={r} onAction={() => openFunctionalEditor(r, goldenFunctionalPresentation(r).status === "Source suggestion available" ? "suggestion" : "define")} />;
                   return [
-                    <button className="link-button" onClick={() => setHolders(r)}>
-                      {s(r.access_display_name, s(r.access_name))}
-                      {arr(r.perimeters).length ? <span className="chip-row">{arr(r.perimeters).slice(0, 4).map((tag) => {
+                    <div className="golden-scope-cell">
+                      <button className="link-button" onClick={() => setHolders(r)}>
+                        {s(r.access_display_name, s(r.access_name))}
+                        {arr(r.perimeters).length ? <span className="chip-row">{arr(r.perimeters).slice(0, 4).map((tag) => {
                         const pathLabel = Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name);
                         const filterKey = s(tag.type) === "organization" ? "organization" : "information_system";
                         return <span
@@ -5413,8 +5516,17 @@ export function Golden({ principal }: { principal: Principal }) {
                           onClick={(event) => { event.stopPropagation(); filterKey === "organization" ? setScopeOrganization(s(tag.id)) : setScopeInformationSystem(s(tag.id)); setOffset(0); }}
                           onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); filterKey === "organization" ? setScopeOrganization(s(tag.id)) : setScopeInformationSystem(s(tag.id)); setOffset(0); } }}
                         >{s(tag.name)}</span>;
-                      })}{arr(r.perimeters).length > 4 ? <span className="muted" title={arr(r.perimeters).slice(4).map((tag) => Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)).join("\n")}>+{arr(r.perimeters).length - 4}</span> : null}</span> : null}
-                    </button>,
+                        })}{arr(r.perimeters).length > 4 ? <span className="muted" title={arr(r.perimeters).slice(4).map((tag) => Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)).join("\n")}>+{arr(r.perimeters).length - 4}</span> : null}</span> : null}
+                      </button>
+                      {principal.role === "ADMIN" ? <>
+                        <button type="button" className="text-button" onClick={() => setScopeEditing(editingScopes ? null : r)}>Tags</button>
+                        {editingScopes ? <div className="golden-scope-editor">
+                          <label>Organizations<select multiple value={selectedScopeIds("organization")} onChange={(event) => updateScopes("organization", Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{arr(perimeterQuery.data?.organizations).filter((item) => item.active).map((item) => <option key={s(item.id)} value={s(item.id)}>{Array.isArray(item.path) ? item.path.join(" › ") : s(item.name)}</option>)}</select></label>
+                          <label>Information systems<select multiple value={selectedScopeIds("information_system")} onChange={(event) => updateScopes("information_system", Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{arr(perimeterQuery.data?.information_systems).filter((item) => item.active).map((item) => <option key={s(item.id)} value={s(item.id)}>{Array.isArray(item.path) ? item.path.join(" › ") : s(item.name)}</option>)}</select></label>
+                          <small className="muted">Select with Ctrl/Cmd for multiple tags.</small>
+                        </div> : null}
+                      </> : null}
+                    </div>,
                     applicationCell,
                     permissionCell,
                     s(r.access_provider),

@@ -99,6 +99,27 @@ def _operator_client(db: Path, scopes: list[str] | None = None) -> TestClient:
 
 
 if TestClient is not None:
+    def test_golden_accesses_without_perimeter_filters_returns_success(tmp_path):
+        db = tmp_path / "golden-accesses.db"
+        app = create_app(str(db))
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        init_system(conn)
+        upsert_user(conn, {"username": "golden-operator", "role": "OPERATOR", "password": "operator-password"})
+        conn.close()
+        source = create_golden_source("Main baseline")
+        version = create_golden_version(source, [], "manual")
+        source.active_version_id = version.id
+        with Repository(db) as repo:
+            repo.upsert("golden_sources", source)
+            repo.upsert("golden_source_versions", version)
+
+        client = TestClient(app)
+        _login(client, "golden-operator", "operator-password")
+        response = client.get("/api/golden-sources/Main%20baseline/accesses")
+
+        assert response.status_code == 200
+
     def test_remediation_manager_cannot_read_governance_tables():
         client = _client()
         _login(client, "remediation", "remediation-password")
