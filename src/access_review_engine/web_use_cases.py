@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import sqlite3
 import tempfile
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -17,6 +16,7 @@ from typing import Any
 
 from access_review_engine.application import import_file_to_repository, load_classification_rules
 from access_review_engine.campaign_authorization import normalize_campaign_scope
+from access_review_engine.database import make_engine, sqlite_database_path
 from access_review_engine.domain import Campaign, Finding, GoldenSourceVersion, Snapshot
 from access_review_engine.services import (
     compare_snapshot,
@@ -87,7 +87,8 @@ def snapshot_collection_scope(repo: Repository, snapshot: Snapshot) -> dict[str,
     providers: set[str] = set()
     complete = True
     for row in imports:
-        scope = row.get("scope") if isinstance(row.get("scope"), dict) else {}
+        scope_value = row.get("scope")
+        scope = scope_value if isinstance(scope_value, dict) else {}
         providers.update(str(value) for value in scope.get("values", []) if value)
         if row.get("provider"):
             providers.add(str(row["provider"]))
@@ -271,8 +272,13 @@ def preview_import(
     classification_rules: str | Path | None = None,
     source_config: dict[str, object] | None = None,
 ) -> PreviewSyncResult:
-    """Run the real import engine against a SQLite backup and discard the backup."""
-    source = Path(db_path)
+    """Run the real import engine against a temporary SQLite copy and discard it.
+
+    ``db_path`` may be a legacy filesystem path or a SQLAlchemy database URL. Keep it
+    opaque here so PostgreSQL and URL-form SQLite sources reach the backend-aware helpers
+    without being interpreted as filesystem paths.
+    """
+    source: str | Path = db_path
     target_parent = Path(tempfile.mkdtemp(prefix="eare-preview-"))
     target = target_parent / "preview.db"
     before = table_counts(source)
@@ -369,44 +375,94 @@ def preview_import(
 
 
 def table_counts(path: str | Path) -> dict[str, int]:
+    from sqlalchemy import Column, MetaData, Table, Text, func, inspect, select
+
     from access_review_engine.storage import TABLES
 
     counts = {table: 0 for table in TABLES}
-    if not Path(path).exists():
+    sqlite_path = sqlite_database_path(path)
+    if sqlite_path is not None and not sqlite_path.exists():
         return counts
-    connection = sqlite3.connect(path)
+    engine = make_engine(path)
     try:
-        for table in counts:
-            counts[table] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        with engine.connect() as connection:
+            inspector = inspect(connection)
+            for table in counts:
+                if inspector.has_table(table):
+                    table_object = Table(table, MetaData(), Column("id", Text))
+                    counts[table] = int(
+                        connection.execute(
+                            select(func.count()).select_from(table_object)
+                        ).scalar_one()
+                    )
     finally:
-        connection.close()
+        engine.dispose()
     return counts
 
 
 def backup_if_present(source: str | Path, target: Path) -> None:
-    if not Path(source).exists():
+    from sqlalchemy import Column, MetaData, Table, Text, delete, insert, inspect, select
+
+    from access_review_engine.storage import TABLES
+
+    sqlite_path = sqlite_database_path(source)
+    if sqlite_path is not None and not sqlite_path.exists():
         return
-    source_conn = sqlite3.connect(source)
-    target_conn = sqlite3.connect(target)
+    source_engine = make_engine(source)
+    target_repo = Repository(target)
     try:
-        source_conn.backup(target_conn)
+        with source_engine.connect() as source_conn:
+            inspector = inspect(source_conn)
+            for table in sorted(TABLES):
+                if not inspector.has_table(table):
+                    continue
+                source_table = Table(
+                    table,
+                    MetaData(),
+                    Column("id", Text),
+                    Column("payload", Text),
+                    Column("created_at", Text),
+                    Column("provider", Text),
+                    Column("name", Text),
+                    Column("version", Text),
+                )
+                rows = source_conn.execute(select(source_table)).mappings().all()
+                target_table = target_repo._tables[table]
+                target_repo.conn.raw.execute(delete(target_table))
+                for row in rows:
+                    target_repo.conn.raw.execute(insert(target_table).values(**dict(row)))
+                target_repo.conn.commit()
     finally:
-        target_conn.close()
-        source_conn.close()
+        target_repo.close()
+        source_engine.dispose()
 
 
 def object_deltas(before_path: str | Path, after_path: str | Path) -> dict[str, dict[str, int]]:
+    from sqlalchemy import Column, MetaData, Table, Text, inspect, select
+
     from access_review_engine.storage import TABLES
 
     def records(path: str | Path, table: str) -> dict[str, dict[str, Any]]:
-        if not Path(path).exists():
+        sqlite_path = sqlite_database_path(path)
+        if sqlite_path is not None and not sqlite_path.exists():
             return {}
-        connection = sqlite3.connect(path)
+        engine = make_engine(path)
         try:
-            rows = connection.execute(f"SELECT id, payload FROM {table}").fetchall()
-            return {str(row[0]): json.loads(str(row[1])) for row in rows}
+            with engine.connect() as connection:
+                if not inspect(connection).has_table(table):
+                    return {}
+                table_object = Table(
+                    table,
+                    MetaData(),
+                    Column("id", Text),
+                    Column("payload", Text),
+                )
+                rows = connection.execute(
+                    select(table_object.c.id, table_object.c.payload)
+                ).fetchall()
+                return {str(row[0]): json.loads(str(row[1])) for row in rows}
         finally:
-            connection.close()
+            engine.dispose()
 
     result: dict[str, dict[str, int]] = {}
     for table in TABLES:

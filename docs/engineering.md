@@ -76,9 +76,10 @@ Effective: Emma -> CRM-Sales -> contacts:read + contacts:write
                    +--------------+               +----------------+
                    v                                               v
           +------------------+                            +------------------+
-          | SQLite Repository|                            | Domain Services  |
-          | JSON payloads    |                            | comparison       |
-          | explicit tables  |                            | effective graph  |
+          | SQLAlchemy Core |                            | Domain Services  |
+          | SQLite/PostgreSQL|                           | comparison       |
+          | JSON payloads   |                            | effective graph  |
+          | explicit tables |                             |                  |
           +--------+---------+                            +--------+---------+
                    |                                               |
                    v                                               v
@@ -106,7 +107,8 @@ Business rules that describe the shape of the model belong here, not in importer
 ### `importers/`
 
 Translate trusted offline exports into `ImportResult` objects. AD and OpenLDAP importers preserve
-native identifiers, raw provenance and collection limitations. They do not write SQLite directly
+native identifiers, raw provenance and collection limitations. They do not write to the persistence
+backend directly.
 and do not calculate review findings.
 
 ### `application.py`
@@ -123,7 +125,7 @@ from ZIP, LDIF and SQLite details.
 
 ### `storage.py`
 
-Provides the current SQLite repository. Payloads are canonical JSON, while tables and indexes keep
+Provides the current SQLAlchemy Core repository for SQLite and PostgreSQL. Payloads are canonical JSON, while tables and indexes keep
 future relational boundaries explicit. Hydration functions preserve legacy optional fields.
 
 ### `reporting.py`
@@ -190,7 +192,7 @@ persisted as direct AccessAssignment objects.
 
 ### Access identity and collision policy
 
-The historical logical key remains `(provider, name)` for SQLite and legacy compatibility. Stable
+The historical logical key remains `(provider, name)` for SQLite, PostgreSQL and legacy compatibility. Stable
 provider identifiers help reconcile renames, for example an AD SID or OpenLDAP `entryUUID`, but a
 native ID is not automatically a universal Access identity.
 
@@ -250,7 +252,7 @@ the field hydrates as empty for backward compatibility.
 A non-authoritative relation observation is additive: observed relations may be added or refreshed,
 but relations absent from a scoped, partial or unknown observation are retained. The same conservative
 delete rule applies to identities and direct assignments. `persist_import_result` wraps the provider,
-import batch, business objects and immutable snapshot in one SQLite transaction. A rejected import
+import batch, business objects and immutable snapshot in one database transaction. A rejected import
 therefore records no successful ImportBatch and leaves no partial business state.
 
 ## 6. Effective graph design
@@ -316,9 +318,16 @@ reviewer saw.
 
 ## 8. Persistence and compatibility
 
-The repository uses SQLite with canonical JSON payloads and explicit tables for providers,
-identities, accesses, assignments, relations, imports, snapshots, Golden versions, campaigns,
-review items, decisions and remediation actions.
+The repository uses SQLAlchemy Core over SQLite or PostgreSQL, with canonical JSON `TEXT`
+payloads and the existing explicit tables for providers, identities, accesses, assignments,
+relations, imports, snapshots, Golden versions, campaigns, review items, decisions and
+remediation actions. `EARE_DATABASE_URL` selects the backend; a plain path and `EARE_DB_PATH`
+remain compatible with existing SQLite installations. Alembic revision `0001_repository_schema`
+creates the repository schema; application initialization remains idempotent for development.
+
+Storage roadmap: V1 adds PostgreSQL support and backend parity without changing the EARE model;
+V2 covers copying existing SQLite data and production cutover; V3 may add PostgreSQL-specific
+optimizations only when justified. V1 does not convert data or use JSONB.
 
 Compatibility rules:
 

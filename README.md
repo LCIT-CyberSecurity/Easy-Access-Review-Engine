@@ -173,6 +173,24 @@ eare --help
 
 By default EARE stores its local state in `access-review.db`. To use another database file, pass `--db` before the command.
 
+The application can also use PostgreSQL with the same EARE repository model. Install the app extra (which includes SQLAlchemy, Alembic and psycopg 3), then configure `EARE_DATABASE_URL`:
+
+```sh
+EARE_DATABASE_URL='postgresql+psycopg://eare:<password>@localhost:5432/eare' eare analyze
+```
+
+SQLite paths and URLs remain supported; `EARE_DB_PATH` remains available for compatibility. `EARE_DATABASE_URL` takes precedence when no explicit `--db` is supplied. The application creates missing repository tables idempotently; for controlled schema management, run `alembic upgrade head` with the same `EARE_DATABASE_URL` before starting EARE.
+
+For local PostgreSQL contract tests, start the test-only service and pass its URL:
+
+```sh
+docker compose -f docker-compose.postgres-test.yml up -d --wait
+EARE_TEST_POSTGRES_URL='postgresql+psycopg://eare_test:eare_test_only@localhost:55432/eare_test' .venv/bin/pytest -q tests/test_storage_backend_parity.py
+docker compose -f docker-compose.postgres-test.yml down
+```
+
+PostgreSQL support and SQLite parity are V1. Importing existing SQLite data into PostgreSQL and production cutover are V2; PostgreSQL-specific optimization is V3. V1 deliberately keeps canonical `payload` values as `TEXT` and does not migrate data automatically.
+
 ### 2. Configure read-only IDP access
 
 Use a dedicated read-only account. Do not reuse an admin or remediation account.
