@@ -272,8 +272,13 @@ def preview_import(
     classification_rules: str | Path | None = None,
     source_config: dict[str, object] | None = None,
 ) -> PreviewSyncResult:
-    """Run the real import engine against a SQLite backup and discard the backup."""
-    source = Path(db_path)
+    """Run the real import engine against a temporary SQLite copy and discard it.
+
+    ``db_path`` may be a legacy filesystem path or a SQLAlchemy database URL. Keep it
+    opaque here so PostgreSQL and URL-form SQLite sources reach the backend-aware helpers
+    without being interpreted as filesystem paths.
+    """
+    source: str | Path = db_path
     target_parent = Path(tempfile.mkdtemp(prefix="eare-preview-"))
     target = target_parent / "preview.db"
     before = table_counts(source)
