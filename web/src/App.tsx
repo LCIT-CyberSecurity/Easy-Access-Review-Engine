@@ -1041,9 +1041,6 @@ function Shell({ principal }: { principal: Principal }) {
               <HelpCircle size={16} /> <span>{ui("guide.title")}</span>
               {guidePending ? <span className="guide-badge" aria-hidden="true">{guidePending}</span> : null}
             </button>
-            {assistantAvailable ? <button className="guide-trigger" type="button" onClick={() => setAssistantOpen(true)} aria-label="Chatbot EARE">
-              <HelpCircle size={16} /> <span>Chatbot</span>
-            </button> : null}
             <UserMenu
               principal={principal}
               onSignOut={async () => {
@@ -5503,6 +5500,7 @@ export function Golden({ principal }: { principal: Principal }) {
                   "Application",
                   "What it allows",
                   "Source",
+                  "Tags",
                   "Expected holders",
                   "Comment",
                   "Owner",
@@ -5513,6 +5511,7 @@ export function Golden({ principal }: { principal: Principal }) {
                   "access_target",
                   "access_description",
                   "access_provider",
+                  null,
                   "expected_identities",
                   "access_comment",
                   "access_owner",
@@ -5561,36 +5560,35 @@ export function Golden({ principal }: { principal: Principal }) {
                   const permissionCell = editing
                     ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>{functionalRightsText(r)}</small></div>
                     : <FunctionalRightsSummary row={r} onAction={() => openFunctionalEditor(r, goldenFunctionalPresentation(r).status === "Source suggestion available" ? "suggestion" : "define")} />;
+                  const tagsCell = <div className="golden-scope-cell">
+                    {arr(r.perimeters).length ? <span className="chip-row" aria-label="Tags">{arr(r.perimeters).slice(0, 4).map((tag) => {
+                      const pathLabel = Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name);
+                      const filterKey = s(tag.type) === "organization" ? "organization" : "information_system";
+                      return <span
+                        className="application-chip perimeter-chip"
+                        key={`${s(tag.type)}:${s(tag.id)}`}
+                        role="button"
+                        tabIndex={0}
+                        title={`${s(tag.type) === "organization" ? "Organization" : "Information system"} · ${pathLabel}`}
+                        onClick={() => { filterKey === "organization" ? setScopeOrganization(s(tag.id)) : setScopeInformationSystem(s(tag.id)); setOffset(0); }}
+                        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); filterKey === "organization" ? setScopeOrganization(s(tag.id)) : setScopeInformationSystem(s(tag.id)); setOffset(0); } }}
+                      >{s(tag.name)}</span>;
+                    })}{arr(r.perimeters).length > 4 ? <span className="muted" title={arr(r.perimeters).slice(4).map((tag) => Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)).join("\n")}>+{arr(r.perimeters).length - 4}</span> : null}</span> : <span className="muted">—</span>}
+                    {principal.role === "ADMIN" ? <>
+                      <button type="button" className="text-button" onClick={() => setScopeEditing(editingScopes ? null : r)}>Tags</button>
+                      {editingScopes ? <div className="golden-scope-editor">
+                        <label>Organizations<select multiple value={selectedScopeIds("organization")} onChange={(event) => updateScopes("organization", Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{arr(perimeterQuery.data?.organizations).filter((item) => item.active).map((item) => <option key={s(item.id)} value={s(item.id)}>{Array.isArray(item.path) ? item.path.join(" › ") : s(item.name)}</option>)}</select></label>
+                        <label>Information systems<select multiple value={selectedScopeIds("information_system")} onChange={(event) => updateScopes("information_system", Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{arr(perimeterQuery.data?.information_systems).filter((item) => item.active).map((item) => <option key={s(item.id)} value={s(item.id)}>{Array.isArray(item.path) ? item.path.join(" › ") : s(item.name)}</option>)}</select></label>
+                        <small className="muted">Select with Ctrl/Cmd for multiple tags.</small>
+                      </div> : null}
+                    </> : null}
+                  </div>;
                   return [
-                    <div className="golden-scope-cell">
-                      <button className="link-button" onClick={() => setHolders(r)}>
-                        {s(r.access_display_name, s(r.access_name))}
-                        {arr(r.perimeters).length ? <span className="chip-row">{arr(r.perimeters).slice(0, 4).map((tag) => {
-                        const pathLabel = Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name);
-                        const filterKey = s(tag.type) === "organization" ? "organization" : "information_system";
-                        return <span
-                          className="application-chip perimeter-chip"
-                          key={`${s(tag.type)}:${s(tag.id)}`}
-                          role="button"
-                          tabIndex={0}
-                          title={`${s(tag.type) === "organization" ? "Organization" : "Information system"} · ${pathLabel}`}
-                          onClick={(event) => { event.stopPropagation(); filterKey === "organization" ? setScopeOrganization(s(tag.id)) : setScopeInformationSystem(s(tag.id)); setOffset(0); }}
-                          onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); filterKey === "organization" ? setScopeOrganization(s(tag.id)) : setScopeInformationSystem(s(tag.id)); setOffset(0); } }}
-                        >{s(tag.name)}</span>;
-                        })}{arr(r.perimeters).length > 4 ? <span className="muted" title={arr(r.perimeters).slice(4).map((tag) => Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)).join("\n")}>+{arr(r.perimeters).length - 4}</span> : null}</span> : null}
-                      </button>
-                      {principal.role === "ADMIN" ? <>
-                        <button type="button" className="text-button" onClick={() => setScopeEditing(editingScopes ? null : r)}>Tags</button>
-                        {editingScopes ? <div className="golden-scope-editor">
-                          <label>Organizations<select multiple value={selectedScopeIds("organization")} onChange={(event) => updateScopes("organization", Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{arr(perimeterQuery.data?.organizations).filter((item) => item.active).map((item) => <option key={s(item.id)} value={s(item.id)}>{Array.isArray(item.path) ? item.path.join(" › ") : s(item.name)}</option>)}</select></label>
-                          <label>Information systems<select multiple value={selectedScopeIds("information_system")} onChange={(event) => updateScopes("information_system", Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{arr(perimeterQuery.data?.information_systems).filter((item) => item.active).map((item) => <option key={s(item.id)} value={s(item.id)}>{Array.isArray(item.path) ? item.path.join(" › ") : s(item.name)}</option>)}</select></label>
-                          <small className="muted">Select with Ctrl/Cmd for multiple tags.</small>
-                        </div> : null}
-                      </> : null}
-                    </div>,
+                    <button className="link-button" onClick={() => setHolders(r)}>{s(r.access_display_name, s(r.access_name))}</button>,
                     applicationCell,
                     permissionCell,
                     s(r.access_provider),
+                    tagsCell,
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.expected_identities, "0")} people
                     </button>,
