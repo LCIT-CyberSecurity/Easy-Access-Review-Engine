@@ -1075,6 +1075,7 @@ def open_campaign(
     campaign: Campaign,
     snapshot: Snapshot,
     fallback_reviewer: OwnerRef | None = None,
+    reviewer_assignments: dict[tuple[str, str], OwnerRef] | None = None,
 ) -> tuple[Campaign, list[ReviewItem]]:
     if campaign.status != CampaignStatus.DRAFT:
         raise ValueError("Only draft campaigns can be opened")
@@ -1084,7 +1085,9 @@ def open_campaign(
     for row in reviewable_comparison_states(snapshot):
         access = accesses.get((str(row["access_provider"]), str(row["access_name"])))
         identity = identities.get((str(row["identity_provider"]), str(row["identity_identifier"])))
-        reviewer = _resolve_reviewer(access, identity, campaign, fallback_reviewer)
+        reviewer = _resolve_reviewer(
+            access, identity, campaign, fallback_reviewer, reviewer_assignments
+        )
         if reviewer is None and not campaign.allow_unresolved_reviewers:
             raise ValueError("Campaign has review items without resolvable reviewer")
         items.append(
@@ -1149,14 +1152,17 @@ def _resolve_reviewer(
     identity: Identity | None,
     campaign: Campaign,
     fallback_reviewer: OwnerRef | None,
+    reviewer_assignments: dict[tuple[str, str], OwnerRef] | None = None,
 ) -> OwnerRef | None:
-    return (
-        access.access_owner
-        if access and access.access_owner
-        else identity.account_owner
-        if identity and identity.account_owner
-        else campaign.default_reviewer or campaign.manager or fallback_reviewer
-    )
+    if access and access.access_owner:
+        return access.access_owner
+    if identity and identity.account_owner:
+        return identity.account_owner
+    if access is not None and reviewer_assignments:
+        assigned = reviewer_assignments.get((access.provider, access.name))
+        if assigned is not None:
+            return assigned
+    return campaign.default_reviewer or campaign.manager or fallback_reviewer
 
 
 def create_decision(
