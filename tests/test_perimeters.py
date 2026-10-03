@@ -37,15 +37,25 @@ def test_perimeters_reject_self_parent_and_cycles(tmp_path):
             raise AssertionError("cycle was accepted")
 
 
-def test_active_organization_requires_information_system_for_targeting(tmp_path):
+def test_active_organization_without_information_system_can_be_targeted(tmp_path):
     with Repository(tmp_path / "perimeters.db") as repo:
-        organization = create_perimeter(repo, "organization", {"name": "ACGM"})
+        organization = create_perimeter(repo, "organization", {"name": "LCIT France"})
+        validate_selection(repo, {"organizations": [organization["id"]]})
+
+
+def test_inactive_organization_cannot_be_targeted(tmp_path):
+    with Repository(tmp_path / "perimeters.db") as repo:
+        organization = create_perimeter(
+            repo,
+            "organization",
+            {"name": "Inactive org", "active": False},
+        )
         try:
             validate_selection(repo, {"organizations": [organization["id"]]})
         except ValueError as exc:
-            assert "associated information system" in str(exc)
+            assert "inactive" in str(exc).lower()
         else:
-            raise AssertionError("organization without an information system was targetable")
+            raise AssertionError("inactive organization was targetable")
 
 
 def test_perimeter_delete_is_safe_for_references(tmp_path):
