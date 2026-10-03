@@ -7,6 +7,7 @@ from access_review_engine.chatbot.config import ChatbotConfig
 from access_review_engine.chatbot.context import AuthorizationContext, UIHints, resolve_ui_context
 from access_review_engine.chatbot.providers.base import ProviderResult, ToolCall
 from access_review_engine.chatbot.providers.registry import build_provider
+from access_review_engine.chatbot.prompts import CHATBOT_PROMPT_VERSION, SYSTEM_PROMPT
 from access_review_engine.chatbot.scope import classify
 from access_review_engine.chatbot.security.tool_policy import validate_tool_arguments
 from access_review_engine.chatbot.service import AssistantService, FakeLLMProvider
@@ -20,6 +21,14 @@ from access_review_engine.chatbot.tools.registry import (
 )
 from access_review_engine.golden_authorization import can_access_golden
 from access_review_engine.storage import Repository
+
+
+def test_chatbot_prompt_defines_courteous_security_consultant_behavior() -> None:
+    assert CHATBOT_PROMPT_VERSION == "eare-chatbot-v2"
+    assert "expert security consultant" in SYSTEM_PROMPT
+    assert "courteous" in SYSTEM_PROMPT
+    assert "polite" in SYSTEM_PROMPT
+    assert "professional" in SYSTEM_PROMPT
 
 
 def _context(role: str, scopes: frozenset[str], username: str = "alice") -> AuthorizationContext:
