@@ -1092,7 +1092,7 @@ function Shell({ principal }: { principal: Principal }) {
       {assistantAvailable ? <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Chatbot">
         <Sparkles size={17} /> <span>Chatbot</span>
       </button> : null}
-      {assistantAvailable && assistantOpen ? <AssistantDrawer route={location.pathname} role={principal.role} close={() => setAssistantOpen(false)} /> : null}
+      {assistantAvailable ? <AssistantDrawer route={location.pathname} role={principal.role} open={assistantOpen} close={() => setAssistantOpen(false)} /> : null}
     </div>
   );
 }

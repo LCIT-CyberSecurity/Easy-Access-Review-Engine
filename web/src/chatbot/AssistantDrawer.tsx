@@ -44,7 +44,7 @@ export function safeAssistantActionRoute(route: unknown): string | null {
     : null;
 }
 
-export function AssistantDrawer({ route, role = "ADMIN", close }: { route: string; role?: string; close: () => void }) {
+export function AssistantDrawer({ route, role = "ADMIN", open = true, close }: { route: string; role?: string; open?: boolean; close: () => void }) {
   const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>([]);
   const [value, setValue] = useState("");
@@ -77,7 +77,7 @@ export function AssistantDrawer({ route, role = "ADMIN", close }: { route: strin
     }
   };
   return (
-    <aside className="chatbot-drawer" aria-label="Chatbot EARE">
+    <aside className="chatbot-drawer" aria-label="Chatbot EARE" hidden={!open}>
       <div className="chatbot-header"><strong>Chatbot EARE</strong><button className="text-button" onClick={close}>×</button></div>
       <div className="chatbot-messages">
         {!messages.length ? <p className="muted">Je peux vous aider à comprendre EARE, vos campagnes, vos revues et votre Golden Source.</p> : null}
