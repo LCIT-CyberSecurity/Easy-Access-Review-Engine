@@ -725,7 +725,7 @@ const navSections = [
   {
     heading: "ACCESS & REFERENCE",
     items: [
-      { to: "/perimeters", label: "Perimeters", icon: Layers, roles: ["ADMIN", "OPERATOR"] },
+      { to: "/perimeters", label: "Scopes", icon: Layers, roles: ["ADMIN", "OPERATOR"] },
       { to: "/identities", label: "Identities", icon: Users, roles: ["ADMIN", "OPERATOR"] },
       { to: "/accesses", label: "Access", icon: KeyRound, roles: ["ADMIN", "OPERATOR"] },
       { to: "/golden", label: "Golden Source", icon: ShieldCheck, roles: ["ADMIN", "OPERATOR"] },
@@ -2439,6 +2439,39 @@ function PageGuide({ title, text, actions, total }: { title: string; text: strin
     </aside>
   );
 }
+function PerimeterTree({ rows, emptyText }: { rows: Row[]; emptyText: string }) {
+  const children = new Map<string, Row[]>();
+  for (const row of rows) {
+    const parent = s(row.parent_id, "");
+    const bucket = children.get(parent) ?? [];
+    bucket.push(row);
+    children.set(parent, bucket);
+  }
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set((children.get("") ?? []).filter((row) => (children.get(s(row.id)) ?? []).length).map((row) => s(row.id))),
+  );
+  const toggle = (id: string) => setExpanded((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const render = (row: Row): ReactNode => {
+    const descendants = children.get(s(row.id)) ?? [];
+    const isExpanded = expanded.has(s(row.id));
+    const childId = `perimeter-tree-${s(row.id)}`;
+    return <li className="perimeter-tree-node" key={s(row.id)}>
+      <div className="perimeter-tree-label">
+        {descendants.length ? <button className="perimeter-tree-toggle" type="button" aria-label={`${isExpanded ? "Collapse" : "Expand"} ${s(row.name)}`} aria-expanded={isExpanded} aria-controls={childId} onClick={() => toggle(s(row.id))}>{isExpanded ? "−" : "+"}</button> : <span className="perimeter-tree-spacer" aria-hidden="true" />}
+        <strong>{s(row.name)}</strong>
+        {!row.active ? <span className="muted"> · inactive</span> : null}
+      </div>
+      {descendants.length && isExpanded ? <ul id={childId}>{descendants.sort((left, right) => s(left.name).localeCompare(s(right.name))).map(render)}</ul> : null}
+    </li>;
+  };
+  const roots = (children.get("") ?? []).sort((left, right) => s(left.name).localeCompare(s(right.name)));
+  return roots.length ? <ul className="perimeter-tree" aria-label={emptyText}>{roots.map(render)}</ul> : <p className="muted">{emptyText}</p>;
+}
+
 function Perimeters({ principal }: { principal: Principal }) {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["perimeters"], queryFn: () => getJson("perimeters") });
@@ -2480,8 +2513,8 @@ function Perimeters({ principal }: { principal: Principal }) {
     mutationFn: ({ organization_id, information_system_id }: { organization_id: string; information_system_id: string }) => deleteJson(`perimeters/associations/${organization_id}/${information_system_id}`),
     onSuccess: () => void refresh(),
   });
-  if (query.isLoading) return <PageLoading label="Loading perimeters…" />;
-  if (query.isError) return <p className="form-error">Unable to load perimeters.</p>;
+  if (query.isLoading) return <PageLoading label="Loading tags…" />;
+  if (query.isError) return <p className="form-error">Unable to load tags.</p>;
   const label = (row: Row) => Array.isArray(row.path) ? row.path.join(" › ") : s(row.name);
   const associatedSystems = (organizationId: string) => associations.filter((row) => row.organization_id === organizationId).map((row) => systems.find((item) => item.id === row.information_system_id)).filter(Boolean) as Row[];
   const associatedOrganizations = (systemId: string) => associations.filter((row) => row.information_system_id === systemId).map((row) => organizations.find((item) => item.id === row.organization_id)).filter(Boolean) as Row[];
@@ -2490,14 +2523,16 @@ function Perimeters({ principal }: { principal: Principal }) {
   const editor = editing ? <form className="panel perimeter-editor" onSubmit={(event) => { event.preventDefault(); save.mutate(editing); }}><strong>Edit {editing.kind === "organization" ? "organization" : "information system"}</strong><input value={s(editing.name)} onChange={(event) => setEditing({ ...editing, name: event.target.value })} aria-label="Perimeter name" required /><select value={s(editing.parent_id, "")} onChange={(event) => setEditing({ ...editing, parent_id: event.target.value || null })} aria-label="Perimeter parent"><option value="">Root</option>{(editing.kind === "organization" ? organizations : systems).filter((row) => row.id !== editing.id).map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={save.isPending}>Save</button><button type="button" className="button subtle" onClick={() => setEditing(null)}>Cancel</button></form> : null;
   return (
     <>
-      <Head title="Perimeters" subtitle="Classify and target EARE objects without changing access semantics." />
+      <Head title="Tags" subtitle="Classify and target EARE objects without changing access semantics." />
       {editor}
       <div className="workspace-grid">
         <section className="panel">
           <div className="section-heading"><div><span className="eyebrow">ORGANIZATIONS</span><h2>Organizations</h2></div><span className="muted">{organizations.length}</span></div>
           <input className="filter-input" value={organizationSearch} onChange={(event) => setOrganizationSearch(event.target.value)} placeholder="Search organizations" aria-label="Search organizations" />
           <div className="perimeter-list">
-            {visibleOrganizations.map((row) => <div className="perimeter-row" key={s(row.id)}><div><strong>{label(row)}</strong>{!row.active ? <span className="muted"> · inactive</span> : null}<div className="chip-row">{associatedSystems(s(row.id)).map((system) => <span className="application-chip" key={s(system.id)} title={`Information system · ${label(system)}`}>{s(system.name)}</span>)}</div></div>{editable ? <div className="row-actions"><button className="text-button" onClick={() => setEditing({ ...row, kind: "organization" })}>Edit</button><button className="text-button" onClick={() => deactivate.mutate({ kind: "organizations", id: s(row.id) })} disabled={!row.active}>Deactivate</button><button className="text-button" onClick={() => remove.mutate({ kind: "organizations", id: s(row.id) })}>Delete</button></div> : null}</div>)}
+            <PerimeterTree rows={visibleOrganizations} emptyText="No organization matches the search." />
+            {visibleOrganizations.map((row) => !associatedSystems(s(row.id)).length && row.active ? <div className="perimeter-warning" key={`${s(row.id)}-warning`}>⚠ {s(row.name)} has no associated information system yet.</div> : null)}
+            {visibleOrganizations.map((row) => <div className="perimeter-row" key={`${s(row.id)}-actions`}><div><span className="muted">{label(row)}</span><div className="chip-row">{associatedSystems(s(row.id)).map((system) => <span className="application-chip" key={s(system.id)} title={`Information system · ${label(system)}`}>{s(system.name)}</span>)}</div></div>{editable ? <div className="row-actions"><button className="text-button" onClick={() => setEditing({ ...row, kind: "organization" })}>Edit</button><button className="text-button" onClick={() => deactivate.mutate({ kind: "organizations", id: s(row.id) })} disabled={!row.active}>Deactivate</button><button className="text-button" onClick={() => remove.mutate({ kind: "organizations", id: s(row.id) })}>Delete</button></div> : null}</div>)}
             {!organizations.length ? <p className="muted">No organization yet.</p> : null}
           </div>
           {editable ? <form className="inline-form" onSubmit={(event) => { event.preventDefault(); if (organizationName.trim()) create.mutate({ kind: "organizations", name: organizationName, parent_id: organizationParent }); }}><input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder="New organization" aria-label="New organization" /><select value={organizationParent} onChange={(event) => setOrganizationParent(event.target.value)} aria-label="Organization parent"><option value="">Root organization</option>{organizations.map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={create.isPending}>Add</button></form> : null}
@@ -2506,7 +2541,8 @@ function Perimeters({ principal }: { principal: Principal }) {
           <div className="section-heading"><div><span className="eyebrow">INFORMATION SYSTEMS</span><h2>Information systems</h2></div><span className="muted">{systems.length}</span></div>
           <input className="filter-input" value={systemSearch} onChange={(event) => setSystemSearch(event.target.value)} placeholder="Search information systems" aria-label="Search information systems" />
           <div className="perimeter-list">
-            {visibleSystems.map((row) => <div className="perimeter-row" key={s(row.id)}><div><strong>{label(row)}</strong>{!row.active ? <span className="muted"> · inactive</span> : null}<div className="chip-row">{associatedOrganizations(s(row.id)).map((organization) => <span className="application-chip" key={s(organization.id)} title={`Organization · ${label(organization)}`}>{s(organization.name)}</span>)}</div></div>{editable ? <div className="row-actions"><button className="text-button" onClick={() => setEditing({ ...row, kind: "information_system" })}>Edit</button><button className="text-button" onClick={() => deactivate.mutate({ kind: "information-systems", id: s(row.id) })} disabled={!row.active}>Deactivate</button><button className="text-button" onClick={() => remove.mutate({ kind: "information-systems", id: s(row.id) })}>Delete</button></div> : null}</div>)}
+            <PerimeterTree rows={visibleSystems} emptyText="No information system matches the search." />
+            {visibleSystems.map((row) => <div className="perimeter-row" key={`${s(row.id)}-actions`}><div><span className="muted">{label(row)}</span><div className="chip-row">{associatedOrganizations(s(row.id)).map((organization) => <span className="application-chip" key={s(organization.id)} title={`Organization · ${label(organization)}`}>{s(organization.name)}</span>)}</div></div>{editable ? <div className="row-actions"><button className="text-button" onClick={() => setEditing({ ...row, kind: "information_system" })}>Edit</button><button className="text-button" onClick={() => deactivate.mutate({ kind: "information-systems", id: s(row.id) })} disabled={!row.active}>Deactivate</button><button className="text-button" onClick={() => remove.mutate({ kind: "information-systems", id: s(row.id) })}>Delete</button></div> : null}</div>)}
             {!systems.length ? <p className="muted">No information system yet.</p> : null}
           </div>
           {editable ? <form className="inline-form" onSubmit={(event) => { event.preventDefault(); if (systemName.trim()) create.mutate({ kind: "information-systems", name: systemName, parent_id: systemParent }); }}><input value={systemName} onChange={(event) => setSystemName(event.target.value)} placeholder="New information system" aria-label="New information system" /><select value={systemParent} onChange={(event) => setSystemParent(event.target.value)} aria-label="Information system parent"><option value="">Root information system</option>{systems.map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={create.isPending}>Add</button></form> : null}
@@ -3191,7 +3227,7 @@ export function ReviewDrawer({
               {groupEvidence.permission_name ? <><dt>Permission</dt><dd>{s(groupEvidence.permission_name)}</dd></> : null}
               {groupEvidence.policy_name ? <><dt>Policy</dt><dd>{s(groupEvidence.policy_name)}</dd></> : null}
               {groupEvidence.resource_name ? <><dt>Resource</dt><dd>{s(groupEvidence.resource_name)}</dd></> : null}
-              {groupScopes.length ? <><dt>Scopes</dt><dd>{groupScopes.join(", ")}</dd></> : null}
+              {groupScopes.length ? <><dt>Tags</dt><dd>{groupScopes.join(", ")}</dd></> : null}
               {groupEvidence.permission_decision_strategy ? <><dt>Decision strategy</dt><dd>{s(groupEvidence.permission_decision_strategy)}</dd></> : null}
               {groupEvidence.resource_server_policy_enforcement_mode ? <><dt>Resource server enforcement</dt><dd>{s(groupEvidence.resource_server_policy_enforcement_mode)}</dd></> : null}
               {groupEvidence.resource_server_decision_strategy ? <><dt>Resource server decision strategy</dt><dd>{s(groupEvidence.resource_server_decision_strategy)}</dd></> : null}
@@ -3905,7 +3941,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
             </label>
           ) : null}
           <div className="wide-field campaign-scope">
-            <span className="step-label">1b</span> Perimeter targeting
+            <span className="step-label">1b</span> Tag targeting
             <div className="inline-form">
               <label>Organizations<select multiple size={Math.min(5, Math.max(2, arr(perimeterQuery.data?.organizations).length))} value={vals(form.perimeter_organizations)} onChange={(event) => setForm({ ...form, perimeter_organizations: Array.from(event.currentTarget.selectedOptions, (option) => option.value) })}>{arr(perimeterQuery.data?.organizations).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}</select></label>
               <label>Information systems<select multiple size={Math.min(5, Math.max(2, arr(perimeterQuery.data?.information_systems).length))} value={vals(form.perimeter_information_systems)} onChange={(event) => setForm({ ...form, perimeter_information_systems: Array.from(event.currentTarget.selectedOptions, (option) => option.value) })}>{arr(perimeterQuery.data?.information_systems).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}</select></label>
@@ -4082,6 +4118,10 @@ function CampaignDetail({ principal }: { principal: Principal }) {
     [confirmAction, setConfirmAction] = useState<string | null>(null),
     [reviewView, setReviewView] = useState("pending"),
     [accessFilter, setAccessFilter] = useState<"business" | "system" | "all">("business"),
+    reviewColumns = useColumnFilters(),
+    [reviewSort, setReviewSort] = useState(""),
+    [reviewOrder, setReviewOrder] = useState("asc"),
+    [selectedReviewIds, setSelectedReviewIds] = useState<string[]>([]),
     toast = useToast(),
     m = useMutation({
       mutationFn: (a: string) => postJson("campaigns/" + id + "/" + a),
@@ -4198,6 +4238,53 @@ function CampaignDetail({ principal }: { principal: Principal }) {
         ? decided
         : reviews,
     visibleReviews = filterSystemReviews(statusReviews, accessFilter),
+    reviewFiltering: FilterState = {
+      ...reviewColumns.filtering,
+      options: {
+        identity_display_name: [...new Set(visibleReviews.map((row) => s(row.identity_display_name, s(row.identity_identifier))).filter(Boolean))].sort(),
+        application: [...new Set(visibleReviews.map((row) => s(row.application)).filter(Boolean))].sort(),
+        access_display_name: [...new Set(visibleReviews.map((row) => s(row.access_display_name, s(row.access_name))).filter(Boolean))].sort(),
+        perimeters: [...new Set(visibleReviews.flatMap((row) => arr(row.perimeters).map((tag) => s(tag.name)).filter(Boolean)))].sort(),
+        via: [...new Set(visibleReviews.map((row) => s(row.via, row.direct ? "Direct assignment" : "Inherited")).filter(Boolean))].sort(),
+        decision: ["pending", "approve", "revoke", "not_applicable"],
+      },
+    },
+    reviewRows = visibleReviews
+      .filter((row) => {
+        return Object.entries(reviewColumns.filtering.values).every(([field, value]) => {
+          const selected = s(value).split("|").filter(Boolean);
+          if (!selected.length) return true;
+          const visibleValue = field === "identity_display_name"
+            ? s(row.identity_display_name, s(row.identity_identifier))
+            : field === "access_display_name"
+              ? s(row.access_display_name, s(row.access_name))
+              : field === "perimeters"
+                ? arr(row.perimeters).map((tag) => s(tag.name))
+                : field === "decision"
+                  ? s(row.decision, "pending")
+                  : field === "via"
+                    ? s(row.via, row.direct ? "Direct assignment" : "Inherited")
+                    : s(row[field]);
+          return Array.isArray(visibleValue)
+            ? selected.some((item) => visibleValue.includes(item))
+            : selected.includes(visibleValue);
+        });
+      })
+      .sort((left, right) => {
+        if (!reviewSort) return 0;
+        const value = (row: Row) => reviewSort === "decision" ? s(row.decision, "pending") : reviewSort === "perimeters" ? arr(row.perimeters).map((tag) => s(tag.name)).join(", ") : s(row[reviewSort]);
+        return value(left).localeCompare(value(right), undefined, { sensitivity: "base" }) * (reviewOrder === "asc" ? 1 : -1);
+      }),
+    reviewSorting: SortState = {
+      sort: reviewSort,
+      order: reviewOrder,
+      toggle: (field: string) => {
+        setReviewOrder(reviewSort === field && reviewOrder === "asc" ? "desc" : "asc");
+        setReviewSort(field);
+      },
+    },
+    reviewId = (row: Row) => s(row.id, `${s(row.identity_provider)}:${s(row.identity_identifier)}:${s(row.access_provider)}:${s(row.access_name)}`),
+    selectedVisibleReviewIds = reviewRows.map(reviewId),
     status = s(c?.status),
     pending = Number(c?.pending ?? reviews.filter((r) => !r.decision).length),
     ctas = campaignCtas(status, pending);
@@ -4447,16 +4534,29 @@ function CampaignDetail({ principal }: { principal: Principal }) {
                 ))}
               </div>
             </div>
+          <div className="button-row review-selection-actions">
+            <button type="button" className="button subtle" onClick={() => setSelectedReviewIds(selectedVisibleReviewIds)} disabled={!reviewRows.length}>Select visible ({reviewRows.length})</button>
+            <button type="button" className="button subtle" onClick={() => setSelectedReviewIds([])} disabled={!selectedReviewIds.length}>Clear selection</button>
+            <span className="field-note">{selectedReviewIds.length} selected · {reviewRows.length} visible</span>
+          </div>
           <Table
-          cols={["Identity", "Application", "Access / role", "What it allows", "Via / origin", "Reviewer", "Status", "Action"]}
-          rows={visibleReviews.map((r) => [
+          cols={["Select", "Identity", "Application", "Access / role", "What it allows", "Tags", "Via / origin", "Reviewer", "Status", "Action"]}
+          fields={[null, "identity_display_name", "application", "access_display_name", null, "perimeters", "via", "reviewer", "decision", null]}
+          sorting={reviewSorting}
+          filtering={reviewFiltering}
+          rows={reviewRows.map((r) => [
+            <input type="checkbox" aria-label={`Select ${s(r.identity_display_name, s(r.identity_identifier))}`} checked={selectedReviewIds.includes(reviewId(r))} onChange={(event) => setSelectedReviewIds((current) => event.target.checked ? [...new Set([...current, reviewId(r)])] : current.filter((id) => id !== reviewId(r)))} />,
             <button className="link-button" onClick={() => setSelected(r)}>
               {s(r.identity_display_name, s(r.identity_identifier))}
               <Sub>{s(r.identity_provider)}</Sub>
             </button>,
             <span>{s(r.application)}</span>,
             <div><strong>{s(r.access_display_name, s(r.access_name))}</strong><Sub>{reviewPermissionText(r.permission)}</Sub>{arr(r.grants).length ? <Sub>Grants: {arr(r.grants).map((grant) => s(grant.display_name)).join(", ")}</Sub> : null}</div>,
-            <span className="functional-rights-text">{functionalRightsText(r)}</span>,
+            <FunctionalRightsSummary row={r} />,
+            (() => {
+              const tags = arr(r.perimeters);
+              return tags.length ? <span className="chip-row campaign-tags" aria-label="Tags">{tags.slice(0, 4).map((tag) => <span className="application-chip" key={`${s(tag.type)}:${s(tag.id)}`} title={Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)}>{s(tag.name)}</span>)}{tags.length > 4 ? <span className="muted" title={tags.slice(4).map((tag) => Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)).join("\n")}>+{tags.length - 4}</span> : null}</span> : <span className="muted">—</span>;
+            })(),
             <span>{s(r.via, r.direct ? "Direct assignment" : "Inherited")}</span>,
             <div>{ownerText(r.reviewer)}<Sub>{r.reviewer ? "Responsible reviewer" : "No reviewer assigned"}</Sub></div>,
             <Status v={r.decision ?? "pending"} />,
@@ -4706,6 +4806,7 @@ export function Golden({ principal }: { principal: Principal }) {
     [tab, setTab] = useState("accesses"),
     [holders, setHolders] = useState<Row | null>(null),
     [editingHolder, setEditingHolder] = useState<Row | null>(null),
+    [scopeEditing, setScopeEditing] = useState<Row | null>(null),
     [editingAccess, setEditingAccess] = useState<Row | null>(null),
     [pendingAccessEdit, setPendingAccessEdit] = useState<Row | null>(null),
     [pendingAccessTab, setPendingAccessTab] = useState<string | null>(null),
@@ -4742,6 +4843,36 @@ export function Golden({ principal }: { principal: Principal }) {
       retry: false,
     }),
     perimeterQuery = useQuery({ queryKey: ["perimeters"], queryFn: () => getJson("perimeters"), retry: false }),
+    scopeAssignments = useQuery({
+      queryKey: ["golden-scope-assignments", scopeEditing?.access_provider, scopeEditing?.access_name],
+      queryFn: () => getJson("perimeters/assignments", {
+        object_type: "access",
+        object_id: s(scopeEditing?.access_id, "") || `${s(scopeEditing?.access_provider)}:${s(scopeEditing?.access_name)}`,
+      }),
+      enabled: Boolean(scopeEditing),
+      retry: false,
+    }),
+    assignScope = useMutation({
+      mutationFn: ({ scope_type, scope_id }: { scope_type: string; scope_id: string }) => postJson("perimeters/assignments", {
+        scope_type,
+        scope_id,
+        object_type: "access",
+        object_id: s(scopeEditing?.access_id, "") || `${s(scopeEditing?.access_provider)}:${s(scopeEditing?.access_name)}`,
+      }),
+      onSuccess: async () => {
+        await scopeAssignments.refetch();
+        await c.invalidateQueries({ queryKey: ["golden-accesses"] });
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to assign the scope") }),
+    }),
+    removeScope = useMutation({
+      mutationFn: (assignmentId: string) => deleteJson(`perimeters/assignments/${encodeURIComponent(assignmentId)}`),
+      onSuccess: async () => {
+        await scopeAssignments.refetch();
+        await c.invalidateQueries({ queryKey: ["golden-accesses"] });
+      },
+      onError: (error) => setNotice({ tone: "error", text: s(error, "Unable to remove the scope") }),
+    }),
     applicationCatalog = useQuery({
       queryKey: ["golden-applications"],
       queryFn: () => getJson("golden-applications"),
@@ -5394,6 +5525,19 @@ export function Golden({ principal }: { principal: Principal }) {
                 rows={expectedAccesses.map((r) => {
                   const key = `${s(r.access_provider)}:${s(r.access_name)}`;
                   const editing = editingAccess?.key === key;
+                  const editingScopes = scopeEditing?.access_provider === r.access_provider && scopeEditing?.access_name === r.access_name;
+                  const currentScopeAssignments = editingScopes ? arr(scopeAssignments.data?.items) : [];
+                  const selectedScopeIds = (scopeType: string) => currentScopeAssignments.filter((item) => s(item.scope_type) === scopeType).map((item) => s(item.scope_id));
+                  const updateScopes = (scopeType: string, selectedIds: string[]) => {
+                    const current = new Set(selectedScopeIds(scopeType));
+                    const selected = new Set(selectedIds);
+                    currentScopeAssignments
+                      .filter((item) => s(item.scope_type) === scopeType && !selected.has(s(item.scope_id)))
+                      .forEach((item) => removeScope.mutate(s(item.id)));
+                    selectedIds
+                      .filter((scopeId) => !current.has(scopeId))
+                      .forEach((scopeId) => assignScope.mutate({ scope_type: scopeType, scope_id: scopeId }));
+                  };
                   const applicationOptions = Array.from(new Set([
                     ...arr(applicationCatalog.data?.applications as Row[] | undefined).map((option) => s(option.name)).filter(Boolean),
                     ...vals(accessesQuery.data?.application_options).flatMap(splitPermissions),
@@ -5418,9 +5562,10 @@ export function Golden({ principal }: { principal: Principal }) {
                     ? <div className="inline-edit-stack"><PermissionPicker value={s(editingAccess?.business_permission, "")} options={permissionOptions} disabled={saveAccessRow.isPending} onChange={(value) => setEditingAccess({ ...editingAccess, business_permission: value })} /><small>{functionalRightsText(r)}</small></div>
                     : <FunctionalRightsSummary row={r} onAction={() => openFunctionalEditor(r, goldenFunctionalPresentation(r).status === "Source suggestion available" ? "suggestion" : "define")} />;
                   return [
-                    <button className="link-button" onClick={() => setHolders(r)}>
-                      {s(r.access_display_name, s(r.access_name))}
-                      {arr(r.perimeters).length ? <span className="chip-row">{arr(r.perimeters).slice(0, 4).map((tag) => {
+                    <div className="golden-scope-cell">
+                      <button className="link-button" onClick={() => setHolders(r)}>
+                        {s(r.access_display_name, s(r.access_name))}
+                        {arr(r.perimeters).length ? <span className="chip-row">{arr(r.perimeters).slice(0, 4).map((tag) => {
                         const pathLabel = Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name);
                         const filterKey = s(tag.type) === "organization" ? "organization" : "information_system";
                         return <span
@@ -5432,8 +5577,17 @@ export function Golden({ principal }: { principal: Principal }) {
                           onClick={(event) => { event.stopPropagation(); filterKey === "organization" ? setScopeOrganization(s(tag.id)) : setScopeInformationSystem(s(tag.id)); setOffset(0); }}
                           onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); filterKey === "organization" ? setScopeOrganization(s(tag.id)) : setScopeInformationSystem(s(tag.id)); setOffset(0); } }}
                         >{s(tag.name)}</span>;
-                      })}{arr(r.perimeters).length > 4 ? <span className="muted" title={arr(r.perimeters).slice(4).map((tag) => Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)).join("\n")}>+{arr(r.perimeters).length - 4}</span> : null}</span> : null}
-                    </button>,
+                        })}{arr(r.perimeters).length > 4 ? <span className="muted" title={arr(r.perimeters).slice(4).map((tag) => Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)).join("\n")}>+{arr(r.perimeters).length - 4}</span> : null}</span> : null}
+                      </button>
+                      {principal.role === "ADMIN" ? <>
+                        <button type="button" className="text-button" onClick={() => setScopeEditing(editingScopes ? null : r)}>Tags</button>
+                        {editingScopes ? <div className="golden-scope-editor">
+                          <label>Organizations<select multiple value={selectedScopeIds("organization")} onChange={(event) => updateScopes("organization", Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{arr(perimeterQuery.data?.organizations).filter((item) => item.active).map((item) => <option key={s(item.id)} value={s(item.id)}>{Array.isArray(item.path) ? item.path.join(" › ") : s(item.name)}</option>)}</select></label>
+                          <label>Information systems<select multiple value={selectedScopeIds("information_system")} onChange={(event) => updateScopes("information_system", Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>{arr(perimeterQuery.data?.information_systems).filter((item) => item.active).map((item) => <option key={s(item.id)} value={s(item.id)}>{Array.isArray(item.path) ? item.path.join(" › ") : s(item.name)}</option>)}</select></label>
+                          <small className="muted">Select with Ctrl/Cmd for multiple tags.</small>
+                        </div> : null}
+                      </> : null}
+                    </div>,
                     applicationCell,
                     permissionCell,
                     s(r.access_provider),

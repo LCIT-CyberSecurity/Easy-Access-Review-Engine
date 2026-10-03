@@ -341,8 +341,20 @@ td > a:hover, .link-button:hover { text-decoration: underline; text-underline-of
 .perimeter-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
 .perimeter-editor input, .perimeter-editor select { min-width: 220px; }
 .chip-remove { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0 0 0 4px; }
+.perimeter-tree { list-style: none; margin: 16px 0; padding: 0; }
+.perimeter-tree ul { list-style: none; margin: 0 0 0 13px; padding: 0 0 0 17px; border-left: 1px solid var(--border); }
+.perimeter-tree-node { position: relative; padding: 4px 0; }
+.perimeter-tree-node > ul > .perimeter-tree-node::before { content: ""; position: absolute; top: 17px; left: -17px; width: 15px; border-top: 1px solid var(--border); }
+.perimeter-tree-label { display: flex; align-items: center; gap: 7px; min-height: 28px; }
+.perimeter-tree-toggle { width: 20px; height: 20px; padding: 0; border: 1px solid var(--border); border-radius: 3px; background: var(--surface); color: var(--text); cursor: pointer; line-height: 16px; font-size: 15px; }
+.perimeter-tree-toggle:hover, .perimeter-tree-toggle:focus-visible { border-color: var(--primary, #4267b2); }
+.perimeter-tree-spacer { width: 20px; }
 .perimeter-chip { cursor: pointer; }
 .perimeter-chip:focus-visible { outline: 2px solid var(--primary, #4267b2); outline-offset: 2px; }
+.golden-scope-cell { display: grid; gap: 5px; min-width: 180px; }
+.golden-scope-editor { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.golden-scope-editor label { display: grid; gap: 3px; font-size: 12px; }
+.golden-scope-editor select { min-width: 180px; max-width: 260px; min-height: 54px; }
 @media (max-width: 900px) { .workspace-grid { grid-template-columns: 1fr; } }
 .check-row { display: flex; align-items: center; gap: 8px; }
 .status-row { display: flex; flex-basis: 100%; align-items: center; gap: 12px; }

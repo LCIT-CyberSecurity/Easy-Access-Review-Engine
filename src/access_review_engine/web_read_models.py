@@ -10,6 +10,7 @@ from access_review_engine.access_context import access_enrichment, business_cont
 from access_review_engine.domain import GoldenSourceAssignment
 from access_review_engine.functional_context import functional_context
 from access_review_engine.golden_annotations import annotation_for_assignment
+from access_review_engine.perimeters import path as perimeter_path
 from access_review_engine.services import calculate_effective_accesses
 from access_review_engine.storage import (
     Repository,
@@ -143,6 +144,12 @@ def _add_review_provenance(repo: Repository, rows: list[dict[str, Any]]) -> None
         for payload in repo.list_payloads("golden_sources")
     }
     campaign_access_contexts = repo.list_payloads("campaign_access_contexts")
+    perimeter_nodes = {
+        (kind, str(item.get("id"))): item
+        for kind, table in (("organization", "organizations"), ("information_system", "information_systems"))
+        for item in repo.list_payloads(table)
+    }
+    scope_assignments = repo.list_payloads("scope_assignments")
     contexts_by_access_id = {
         (str(item.get("campaign_id")), str(item.get("access_id"))): item
         for item in campaign_access_contexts
@@ -254,6 +261,38 @@ def _add_review_provenance(repo: Repository, rows: list[dict[str, Any]]) -> None
             derived_accesses, key=lambda item: str(item["display_name"]).casefold()
         )
         observed_access = snapshot_accesses.get(snapshot_id, {}).get((key[2], key[3]), {})
+        observed_identity = snapshot_identities.get(snapshot_id, {}).get((key[0], key[1]), {})
+        object_ids = {
+            "access": {str(observed_access.get("id") or ""), f"{key[2]}:{key[3]}"},
+            "identity": {str(observed_identity.get("id") or ""), f"{key[0]}:{key[1]}"},
+            "target": set(),
+        }
+        target = observed_access.get("target")
+        if isinstance(target, dict):
+            object_ids["target"].update(
+                str(target.get(field))
+                for field in ("id", "identifier")
+                if target.get(field)
+            )
+        tags = []
+        for assignment in scope_assignments:
+            scope_type = str(assignment.get("scope_type") or "")
+            scope_id = str(assignment.get("scope_id") or "")
+            if str(assignment.get("object_id") or "") not in object_ids.get(str(assignment.get("object_type") or ""), set()):
+                continue
+            node = perimeter_nodes.get((scope_type, scope_id))
+            if node is None:
+                continue
+            tags.append({
+                "id": scope_id,
+                "name": node.get("name"),
+                "type": scope_type,
+                "path": [item["name"] for item in perimeter_path(repo, scope_type, scope_id)],
+            })
+        row["perimeters"] = sorted(
+            {(tag["type"], tag["id"]): tag for tag in tags}.values(),
+            key=lambda tag: (tag["type"], str(tag["name"]).casefold()),
+        )
         row.update(snapshot_contexts.get(snapshot_id, {}).get((key[2], key[3]), {}))
         paths = row.get("paths", [])
         if paths:
@@ -297,7 +336,6 @@ def _add_review_provenance(repo: Repository, rows: list[dict[str, Any]]) -> None
         )
         version = golden_versions.get(str(campaign.get("golden_source_version_id") or ""))
         if version is not None:
-            observed_identity = snapshot_identities.get(snapshot_id, {}).get((key[0], key[1]), {})
             control_object = observed_access.get("control_object")
             control_object = control_object if isinstance(control_object, dict) else {}
             permission_payload = observed_access.get("permission")

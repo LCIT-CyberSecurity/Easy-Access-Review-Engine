@@ -2402,6 +2402,9 @@ def create_app(db_path: str | None = None) -> Any:
         offset: int = 0,
         sort: str | None = None,
         order: str | None = None,
+        organization: str | None = None,
+        information_system: str | None = None,
+        include_descendants: bool = False,
     ):
         """Return expected roles/groups with their permissions and holder counts."""
         from access_review_engine.functional_context import functional_context
@@ -2523,9 +2526,11 @@ def create_app(db_path: str | None = None) -> Any:
             scope_assignments = repo.list_payloads("scope_assignments")
             organizations = {str(item["id"]): item for item in perimeter_all(repo, "organization")}
             information_systems = {str(item["id"]): item for item in perimeter_all(repo, "information_system")}
+            organization_filter = organization
+            information_system_filter = information_system
             selected = {
-                "organization": {value for value in str(organization or "").split(",") if value},
-                "information_system": {value for value in str(information_system or "").split(",") if value},
+                "organization": {value for value in str(organization_filter or "").split(",") if value},
+                "information_system": {value for value in str(information_system_filter or "").split(",") if value},
             }
             try:
                 validate_selection_data(
