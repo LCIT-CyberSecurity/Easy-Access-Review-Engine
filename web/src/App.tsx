@@ -4117,7 +4117,7 @@ function CampaignDetail({ principal }: { principal: Principal }) {
     },
     [confirmAction, setConfirmAction] = useState<string | null>(null),
     [reviewView, setReviewView] = useState("pending"),
-    [accessFilter, setAccessFilter] = useState<"business" | "system" | "all">("business"),
+    [accessFilter, setAccessFilter] = useState<"business" | "system" | "all">("all"),
     reviewColumns = useColumnFilters(),
     [reviewSort, setReviewSort] = useState(""),
     [reviewOrder, setReviewOrder] = useState("asc"),
