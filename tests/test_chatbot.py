@@ -81,6 +81,25 @@ def test_classifier_never_receives_eare_data():
     assert classify("Pourquoi ma Golden est incomplète ?") == "EARE_GOLDEN"
 
 
+def test_classifier_covers_access_governance_knowledge_without_tools():
+    assert classify("Comment organiser une revue d'accès ?") == "EARE_ACCESS_GUIDANCE"
+    assert classify("Quelles bonnes pratiques pour les comptes techniques ?") == "EARE_ACCESS_GUIDANCE"
+    assert classify("Quelle différence entre Access et Permission ?") == "EARE_ACCESS_GUIDANCE"
+    assert classify("Qu'est-ce qu'un FunctionalRight ?") == "EARE_ACCESS_GUIDANCE"
+    assert classify("Où gérer les SI ?") == "EARE_NAVIGATION"
+    assert classify("Où gérer les utilisateurs ?") == "EARE_NAVIGATION"
+    assert classify("Comment créer une campagne ?") == "EARE_USAGE"
+    assert classify("Quel temps fera-t-il demain ?") == "OUT_OF_SCOPE"
+
+
+def test_empty_provider_response_is_never_returned_as_an_empty_answer(tmp_path):
+    result = service(tmp_path, FakeLLMProvider(""), enabled=True).handle(
+        Principal(), "Explique-moi Access et Permission"
+    )
+    assert result["answer"]
+    assert result["security_state"] == "empty_provider_response"
+
+
 def test_redaction_is_stable():
     safe, changed = redact_secrets("Bearer abc.def")
     assert changed and safe == "[REDACTED]"
@@ -154,12 +173,12 @@ def test_tool_call_rechecks_current_session_authorization(tmp_path):
     result = assistant.handle(
         Principal(), "Résumé du Dashboard", principal_resolver=lambda: current[0]
     )
-    assert result["security_state"] == "unavailable"  # tool round is bounded safely
+    assert result["security_state"] == "tool_validation_error"  # tool round is bounded safely
     current[0] = None
     result = assistant.handle(
         Principal(), "Résumé du Dashboard", principal_resolver=lambda: current[0]
     )
-    assert result["security_state"] == "unavailable"
+    assert result["security_state"] == "authorization_changed"
 
 
 def test_usage_is_aggregated_across_tool_rounds(tmp_path):

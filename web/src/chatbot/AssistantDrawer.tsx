@@ -31,6 +31,8 @@ export function assistantSuggestions(route: string, role = "ADMIN"): string[] {
     suggestions.push("Quel est l'état de cette source ?", "Le snapshot est-il exploitable ?");
   } else if (route.startsWith("/actions") && (canReadOperationalData || role === "BUSINESS_ADMIN" || role === "REMEDIATION_MANAGER")) {
     suggestions.push("Que dois-je faire maintenant ?", "Quelles remédiations restent ouvertes ?");
+  } else if (route.startsWith("/perimeters")) {
+    suggestions.push("À quoi servent les périmètres ?", "Comment associer un SI à une organisation ?");
   } else {
     suggestions.push("Que dois-je faire maintenant ?");
   }
@@ -63,7 +65,10 @@ export function AssistantDrawer({ route, role = "ADMIN", open = true, close }: {
         ...(conversationId ? { conversation_id: conversationId } : {}),
       });
       setConversationId(String(result.conversation_id ?? conversationId ?? ""));
-      setMessages((items) => [...items, { role: "assistant", content: String(result.answer ?? "") }]);
+      const answer = typeof result.answer === "string" && result.answer.trim()
+        ? result.answer
+        : "Le chatbot n'a pas retourné de réponse exploitable.";
+      setMessages((items) => [...items, { role: "assistant", content: answer }]);
       for (const action of Array.isArray(result.actions) ? result.actions : []) {
         const actionRoute = safeAssistantActionRoute(action?.route);
         if (actionRoute) {

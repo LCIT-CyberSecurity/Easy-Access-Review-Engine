@@ -35,6 +35,7 @@ from access_review_engine.chatbot.tools.registry import (
     allowed_actions,
     bound_tool_output,
     campaign_summary,
+    find_authorized_campaign,
     dashboard,
     golden_gaps,
     guidance,
@@ -48,6 +49,7 @@ OUT_OF_SCOPE = (
 )
 SUSPICIOUS = "Je peux uniquement aider à comprendre et utiliser EARE dans votre périmètre autorisé."
 UNAVAILABLE = "Chatbot IA temporairement indisponible."
+EMPTY_PROVIDER = "Je n'ai pas pu générer une réponse exploitable à cette question."
 
 
 class AssistantService:
@@ -152,21 +154,36 @@ class AssistantService:
                     hints,
                     principal_resolver,
                 )
-                answer = self.safety.check_output(
-                    result.text or "Je n'ai pas trouvé de donnée disponible dans votre périmètre."
-                )
+                if not isinstance(result.text, str) or not result.text.strip():
+                    answer = EMPTY_PROVIDER
+                    security_state = "empty_provider_response"
+                    record_audit(
+                        repo,
+                        "chatbot.empty_provider_response",
+                        context.username,
+                        {"conversation_id": conversation_id},
+                    )
+                else:
+                    answer = self.safety.check_output(result.text)
             except (ProviderError, ValueError, PermissionError) as exc:
+                if isinstance(exc, ProviderError):
+                    audit_event = "chatbot.provider_error"
+                    failure_state = "unavailable"
+                elif isinstance(exc, PermissionError):
+                    audit_event = "chatbot.authorization_changed"
+                    failure_state = "authorization_changed"
+                else:
+                    audit_event = "chatbot.tool_validation_error"
+                    failure_state = "tool_validation_error"
                 record_audit(
                     repo,
-                    "chatbot.provider_error"
-                    if isinstance(exc, ProviderError)
-                    else "chatbot.tool_denied",
+                    audit_event,
                     context.username,
                     {"conversation_id": conversation_id},
                 )
                 answer = UNAVAILABLE
                 result = ProviderResult()
-                security_state = "unavailable"
+                security_state = failure_state
             store.append(conversation_id, "assistant", answer)
             action_by_intent = {
                 "EARE_DASHBOARD": ("OPEN_ACTIONS", "Voir les actions"),
@@ -176,10 +193,14 @@ class AssistantService:
                 "EARE_SOURCE": ("OPEN_SOURCES", "Voir les sources"),
                 "EARE_REPORT": ("OPEN_REPORTS", "Voir les rapports"),
             }
+            if intent in {"EARE_NAVIGATION", "EARE_USAGE", "EARE_ACCESS_GUIDANCE"}:
+                navigation_action = self._navigation_action(safe_question)
+                if navigation_action is not None:
+                    action_by_intent[intent] = navigation_action
             actions: tuple[AssistantAction, ...] = ()
             if intent in action_by_intent:
                 action_id, label = action_by_intent[intent]
-                route = self._resolve_action(repo, action_id, context, hints)
+                route = self._resolve_action(repo, action_id, context, hints, safe_question)
                 if route is not None and action_id in allowed_actions(context):
                     actions = (validate_action(action_id, label, allowed_actions(context), route),)
             response = AssistantResponse(
@@ -309,7 +330,8 @@ class AssistantService:
 
     @staticmethod
     def _resolve_action(
-        repo: Repository, action_id: str, context: AuthorizationContext, hints: UIHints
+        repo: Repository, action_id: str, context: AuthorizationContext, hints: UIHints,
+        question: str = "",
     ) -> str | None:
         if action_id not in allowed_actions(context):
             return None
@@ -317,6 +339,10 @@ class AssistantService:
             candidate = campaign_summary(repo, {"campaign_id": hints.object_id}, context, hints)
             if candidate.get("available") and hints.object_id:
                 return f"/campaigns/{hints.object_id}"
+            if any(term in question.casefold() for term in ("ouvre", "ouvrir", "open", "campagne", "campaign")):
+                matches = find_authorized_campaign(repo, {"query": question}, context, hints).get("matches", [])
+                if len(matches) == 1:
+                    return f"/campaigns/{matches[0]['id']}"
             return "/campaigns"
         return {
             "OPEN_GOLDEN": "/golden",
@@ -324,7 +350,37 @@ class AssistantService:
             "OPEN_ACTIONS": "/actions",
             "OPEN_SOURCES": "/sources",
             "OPEN_REPORTS": "/reports",
+            "OPEN_PERIMETERS": "/perimeters",
+            "OPEN_IDENTITIES": "/identities",
+            "OPEN_ACCESSES": "/accesses",
+            "CREATE_CAMPAIGN": "/campaigns/new",
+            "OPEN_USERS": "/system/users",
         }.get(action_id)
+
+    @staticmethod
+    def _navigation_action(question: str) -> tuple[str, str] | None:
+        text = question.casefold()
+        if any(term in text for term in ("si", "système d'information", "systeme d'information", "organisation", "périmètre", "perimetre", "scope")):
+            return "OPEN_PERIMETERS", "Ouvrir les périmètres"
+        if any(term in text for term in ("créer une campagne", "creer une campagne", "nouvelle campagne", "lancer une campagne")):
+            return "CREATE_CAMPAIGN", "Créer une campagne"
+        if any(term in text for term in ("golden", "référentiel", "referentiel")):
+            return "OPEN_GOLDEN", "Ouvrir la Golden Source"
+        if any(term in text for term in ("identité", "identite", "identity")):
+            return "OPEN_IDENTITIES", "Ouvrir les identités"
+        if any(term in text for term in ("accesses", "accès", "acces")):
+            return "OPEN_ACCESSES", "Ouvrir les accès"
+        if any(term in text for term in ("revue", "review")):
+            return "OPEN_PENDING_REVIEWS", "Ouvrir les revues en attente"
+        if any(term in text for term in ("source", "snapshot")):
+            return "OPEN_SOURCES", "Ouvrir les sources"
+        if any(term in text for term in ("rapport", "report")):
+            return "OPEN_REPORTS", "Ouvrir les rapports"
+        if any(term in text for term in ("remédiation", "remediation", "action")):
+            return "OPEN_ACTIONS", "Ouvrir les remédiations"
+        if any(term in text for term in ("utilisateurs", "users", "administration des utilisateurs")):
+            return "OPEN_USERS", "Ouvrir les utilisateurs"
+        return None
 
     def _generate(
         self,

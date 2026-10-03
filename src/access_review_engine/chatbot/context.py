@@ -5,7 +5,9 @@ from dataclasses import dataclass
 
 _ROUTE_OBJECT = re.compile(r"^/(campaigns|reviews)/([A-Za-z0-9._:-]+)$")
 _KNOWN_ROUTES = {
-    "/", "/dashboard", "/campaigns", "/reviews", "/golden", "/sources", "/reports", "/actions"
+    "/", "/dashboard", "/campaigns", "/campaigns/new", "/reviews", "/golden", "/sources",
+    "/reports", "/actions", "/perimeters", "/identities", "/accesses", "/findings",
+    "/system/users",
 }
 
 

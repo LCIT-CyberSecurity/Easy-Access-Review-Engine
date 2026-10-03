@@ -108,6 +108,34 @@ def _page_help(route: str) -> dict[str, Any]:
             "description": "guide.page.reports.description",
             "topics": [{"id": "report", "question": "guide.question.reportMeaning", "answer": "guide.answer.reportMeaning"}, {"id": "next", "question": "guide.question.next", "answer": "guide.answer.next"}],
         },
+        "/perimeters": {
+            "title": "Périmètres",
+            "description": "Gérer les organisations, les systèmes d'information et leurs associations.",
+            "topics": [
+                {"id": "organization", "question": "Comment créer une organisation ?", "answer": "Créez une organisation racine ou un enfant, puis associez explicitement les systèmes d'information nécessaires."},
+                {"id": "information_system", "question": "Comment associer un SI à une organisation ?", "answer": "Ouvrez l'organisation, sélectionnez les systèmes d'information associés, puis enregistrez l'association."},
+            ],
+        },
+        "/identities": {
+            "title": "Identités",
+            "description": "Consulter les identités et leur posture d'authentification autorisée.",
+            "topics": [{"id": "identity", "question": "Que puis-je vérifier sur une identité ?", "answer": "Vérifiez son statut, sa source, sa posture d'authentification et ses accès associés selon vos droits."}],
+        },
+        "/accesses": {
+            "title": "Accès",
+            "description": "Consulter les accès et comprendre les permissions, capabilities et targets associés.",
+            "topics": [{"id": "access", "question": "Quelle différence entre Access et Permission ?", "answer": "Un Access est l'objet revu ou certifié ; une Permission est le droit technique natif exposé par le système source."}],
+        },
+        "/findings": {
+            "title": "Findings",
+            "description": "Analyser les écarts et les éléments nécessitant une décision dans le périmètre autorisé.",
+            "topics": [{"id": "finding", "question": "Comment interpréter un unexpected ?", "answer": "Unexpected indique qu'une affectation observée ne correspond pas à l'état attendu de référence ; vérifiez sa justification avant toute décision."}],
+        },
+        "/system/users": {
+            "title": "Utilisateurs",
+            "description": "Administrer les utilisateurs EARE lorsque votre rôle l'autorise.",
+            "topics": [{"id": "users", "question": "Où gérer les utilisateurs ?", "answer": "Les utilisateurs sont gérés depuis l'administration système, uniquement pour les rôles autorisés."}],
+        },
     }
     selected = pages.get(route)
     if selected is not None:

@@ -163,6 +163,31 @@ def campaign_summary(
     }
 
 
+def find_authorized_campaign(
+    repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
+) -> dict[str, Any]:
+    """Find campaigns by name without exposing campaigns outside the caller scope."""
+    query = _safe_text(args.get("query") or "").strip().casefold()
+    if not query:
+        return {"available": False, "matches": []}
+    stop_words = {
+        "ouvre", "ouvrir", "open", "la", "le", "les", "une", "un", "moi",
+        "campagne", "campaign", "please", "s'il", "vous", "plait",
+    }
+    terms = {term for term in query.split() if len(term) > 2 and term not in stop_words}
+    matches = []
+    for row in _visible_campaigns(repo, context):
+        name = _safe_text(row.get("name") or "Campaign")
+        haystack = f"{name} {row.get('id', '')}".casefold()
+        if query in haystack or (terms and terms <= set(haystack.replace("-", " ").split())):
+            matches.append({
+                "id": _safe_text(row.get("id")),
+                "name": name,
+                "status": _safe_text(row.get("status") or "unknown"),
+            })
+    return {"available": bool(matches), "matches": matches[:5]}
+
+
 def campaign_readiness(
     repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
 ) -> dict[str, Any]:
@@ -347,6 +372,10 @@ def guidance(
                     "/reports",
                     "/system/users",
                     "/campaigns/new",
+                    "/perimeters",
+                    "/identities",
+                    "/accesses",
+                    "/findings",
                 }
             ),
         )
@@ -373,6 +402,7 @@ def page_help(
 TOOL_FUNCTIONS: dict[str, Tool] = {
     "get_dashboard_summary": dashboard,
     "get_campaign_summary": campaign_summary,
+    "find_authorized_campaign": find_authorized_campaign,
     "get_campaign_readiness": campaign_readiness,
     "get_campaign_findings": campaign_findings,
     "get_golden_summary": golden_summary,
@@ -383,6 +413,18 @@ TOOL_FUNCTIONS: dict[str, Tool] = {
     "get_page_help": page_help,
 }
 TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "name": "find_authorized_campaign",
+        "description": "Find a campaign by name among campaigns visible to the current user",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 200}},
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
     {
         "type": "function",
         "name": "get_dashboard_summary",
@@ -525,7 +567,12 @@ def allowed_actions(context: AuthorizationContext) -> set[str]:
     if context.role in {"ADMIN", "OPERATOR", "GROUP_OWNER"}:
         actions.add("OPEN_PENDING_REVIEWS")
     if context.role in {"ADMIN", "OPERATOR"}:
-        actions |= {"OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_SOURCES", "OPEN_REPORTS"}
+        actions |= {
+            "OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_SOURCES", "OPEN_REPORTS",
+            "OPEN_PERIMETERS", "OPEN_IDENTITIES", "OPEN_ACCESSES", "CREATE_CAMPAIGN",
+        }
+    if context.role == "ADMIN":
+        actions.add("OPEN_USERS")
     if context.role in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
         actions.add("OPEN_ACTIONS")
     return actions

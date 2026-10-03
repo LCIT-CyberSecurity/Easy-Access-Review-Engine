@@ -755,6 +755,11 @@ def create_app(db_path: str | None = None) -> Any:
             "OPEN_ACTIONS": "Ouvrir les remédiations",
             "OPEN_SOURCES": "Ouvrir les sources",
             "OPEN_REPORTS": "Ouvrir les rapports",
+            "OPEN_PERIMETERS": "Ouvrir les périmètres",
+            "OPEN_IDENTITIES": "Ouvrir les identités",
+            "OPEN_ACCESSES": "Ouvrir les accès",
+            "CREATE_CAMPAIGN": "Créer une campagne",
+            "OPEN_USERS": "Ouvrir les utilisateurs",
         }
         context = AuthorizationContext(
             str(principal.subject), str(principal.username), str(principal.role), principal.scopes

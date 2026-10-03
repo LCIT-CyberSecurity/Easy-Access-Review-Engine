@@ -1,8 +1,20 @@
-# EARE Product Chatbot V1
+# EARE Access Review & Identity Governance Assistant
 
-The chatbot is a bounded, read-only EARE capability. It explains product screens,
-authorized dashboard/campaign/Golden/review/source data, deterministic Guidance
-recommendations, and safe internal navigation actions. It is not a general chatbot.
+The chatbot is a bounded, read-only EARE copilot. It explains product screens and
+the EARE model, answers access-review/IAM/IAG questions, analyzes authorized
+dashboard/campaign/Golden/review/source data, recommends safe next steps, and offers
+validated internal navigation actions. It is not a general-purpose chatbot and never
+performs business changes.
+
+There are three response modes:
+
+- product and domain knowledge, answered directly without private data when possible;
+- analysis of the user's authorized EARE projections through bounded read-only tools;
+- workflow and navigation guidance using server-validated semantic actions.
+
+When a provider returns no usable text, the backend and WebUI both return a visible,
+controlled message instead of rendering an empty assistant bubble. Provider failures,
+tool denials and empty provider responses remain distinct in server diagnostics.
 
 ## Architecture and authorization
 
@@ -100,7 +112,7 @@ Golden quality gaps, finding explanations, source filtering and prompt-injection
 classification. Assertions target structured facts and authorization outcomes rather than
 provider wording.
 
-Contextual UI suggestions are role-aware: operational campaign, Golden and source suggestions
+Contextual UI suggestions are role-aware: operational campaign, Golden, source and perimeter suggestions
 are shown to ADMIN/OPERATOR users, review suggestions are available to review users, and
 remediation suggestions are limited to roles that can view remediation.
 
@@ -117,6 +129,13 @@ heuristics, and secret redaction run before provider access. EARE payloads are w
 reject dangerous schemes/HTML and unknown actions. Conversation rows are scoped by user ID;
 retention cleanup applies to messages, traces and old orphan conversations. V1 has no business-
 data cache and no write tools.
+
+The assistant can explain `Identity`, `Access`, `AccessAssignment`, `Permission`,
+`Capability`, `Target`, `FunctionalRight`, `Golden Source`, `Snapshot`, `Campaign`,
+`ReviewItem`, `Decision`, `Organization` and `InformationSystem`. Organizations and
+information systems remain classification and targeting scopes, never permissions.
+Campaign lookup is limited to campaigns visible to the current principal and returns
+only bounded identifiers, names and statuses needed for a controlled link.
 
 Future extension points are `AnthropicProvider`, `MistralProvider`, `GeminiProvider`,
 private/BYO providers, and `OpenAIModerationProvider`; none are implemented in V1.
