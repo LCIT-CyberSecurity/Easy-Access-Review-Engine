@@ -365,12 +365,16 @@ def cell_text(value: Any) -> str:
 def apply_field_filters(
     rows: list[dict[str, Any]], filters: dict[str, str] | None
 ) -> list[dict[str, Any]]:
-    """Keep the rows whose column contains what was typed under that column."""
+    """Keep rows matching one of the selected values in each column."""
     for field, value in (filters or {}).items():
-        needle = str(value).strip().casefold()
-        if not needle:
+        needles = [part.strip().casefold() for part in str(value).split("|") if part.strip()]
+        if not needles:
             continue
-        rows = [row for row in rows if needle in cell_text(row.get(field)).casefold()]
+        rows = [
+            row
+            for row in rows
+            if any(needle in cell_text(row.get(field)).casefold() for needle in needles)
+        ]
     return rows
 
 

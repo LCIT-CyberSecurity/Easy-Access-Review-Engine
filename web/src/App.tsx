@@ -5251,7 +5251,7 @@ export function Golden({ principal }: { principal: Principal }) {
                 ]}
                 fields={[
                   "access_display_name",
-                  "access_target",
+                  "application",
                   "access_description",
                   "access_provider",
                   "expected_identities",
@@ -5260,7 +5260,7 @@ export function Golden({ principal }: { principal: Principal }) {
                   null,
                 ]}
                 sorting={sorting}
-                filtering={columns.filtering}
+                filtering={{ ...columns.filtering, options: accessesQuery.data?.filter_options as Record<string, FilterOption[]> | undefined }}
                 q={accessesQuery}
                 rowClassName={(index) => editingAccess?.key === `${s(expectedAccesses[index]?.access_provider)}:${s(expectedAccesses[index]?.access_name)}` ? "golden-access-row-editing" : ""}
                 rows={expectedAccesses.map((r) => {
@@ -5361,14 +5361,14 @@ export function Golden({ principal }: { principal: Principal }) {
                 fields={[
                   "identity_display_name",
                   "access_display_name",
-                  "business_context",
-                  "business_context",
+                  "application",
+                  "business_permission",
                   "golden_comment",
                   "access_provider",
                   null,
                 ]}
                 sorting={sorting}
-                filtering={columns.filtering}
+                filtering={{ ...columns.filtering, options: content.data?.filter_options as Record<string, FilterOption[]> | undefined }}
                 q={content}
                 rows={expected.map((r) => {
                   const key = `${s(r.access_provider)}:${s(r.access_name)}:${s(r.identity_provider)}:${s(r.identity_identifier)}`;

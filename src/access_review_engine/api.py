@@ -302,6 +302,23 @@ def _context_value(row: dict[str, Any], field: str, origin: str) -> Any:
     return entry.get("value") if isinstance(entry, dict) else None
 
 
+def _column_filter_options(rows: list[dict[str, Any]], fields: tuple[str, ...]) -> dict[str, list[str]]:
+    """Return stable distinct values for the WebUI column selectors."""
+    from access_review_engine.web_read_models import cell_text
+
+    options: dict[str, set[str]] = {field: set() for field in fields}
+    for row in rows:
+        for field in fields:
+            value = cell_text(row.get(field)).strip()
+            if value:
+                options[field].update(
+                    split_multi_value(value)
+                    if field in {"application", "business_permission"}
+                    else {value}
+                )
+    return {field: sorted(values, key=str.casefold) for field, values in options.items()}
+
+
 class _PerThreadConnection:
     """Hand each worker thread its own pooled database connection.
 
@@ -2048,6 +2065,17 @@ def create_app(db_path: str | None = None) -> Any:
                 row["access_owner"] = described.get("access_owner")
                 row["access_id"] = described.get("id")
                 row["business_context"] = access_context_for_payload(repo, described)
+                row["application"] = (
+                    _context_value(row, "application", "manual")
+                    or _context_value(row, "application", "source")
+                    or ""
+                )
+                row["business_permission"] = (
+                    _context_value(row, "business_permission", "manual")
+                    or _context_value(row, "business_permission", "source")
+                    or row.get("access_permission")
+                    or ""
+                )
                 annotation = annotation_for_assignment(repo, active.id, item)
                 row["golden_comment"] = annotation.get("comment") if annotation else None
                 if not row.get("access_permission"):
@@ -2125,6 +2153,17 @@ def create_app(db_path: str | None = None) -> Any:
                 "application_count": len(applications),
                 "collected_providers": collected,
                 "collected_at": snapshots[-1].get("created_at") if snapshots else None,
+                "filter_options": _column_filter_options(
+                    rows,
+                    (
+                        "identity_display_name",
+                        "access_display_name",
+                        "application",
+                        "business_permission",
+                        "golden_comment",
+                        "access_provider",
+                    ),
+                ),
                 "versions": [
                     {
                         "id": item.id,
@@ -2341,6 +2380,22 @@ def create_app(db_path: str | None = None) -> Any:
                         "expected_identities": 0,
                         "identities": [],
                     }
+                    row["application"] = (
+                        _context_value(row, "application", "manual")
+                        or _context_value(row, "application", "source")
+                        or ""
+                    )
+                    row["business_permission"] = (
+                        _context_value(row, "business_permission", "manual")
+                        or _context_value(row, "business_permission", "source")
+                        or row.get("access_permission")
+                        or ""
+                    )
+                    row["access_owner"] = (
+                        _context_value(row, "owner", "manual")
+                        or _context_value(row, "owner", "source")
+                        or row.get("access_owner")
+                    )
                 row["expected_identities"] += 1
                 row["identities"].append(
                     {
@@ -2435,6 +2490,18 @@ def create_app(db_path: str | None = None) -> Any:
                 "order": (order or "asc").lower(),
                 "application_options": application_options,
                 "permission_options": permission_options,
+                "filter_options": _column_filter_options(
+                    rows,
+                    (
+                        "access_display_name",
+                        "application",
+                        "access_description",
+                        "access_provider",
+                        "expected_identities",
+                        "access_comment",
+                        "access_owner",
+                    ),
+                ),
             }
 
     @app.post("/api/golden-sources/{name}/access-comment")

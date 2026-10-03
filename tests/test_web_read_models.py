@@ -14,7 +14,13 @@ from access_review_engine.domain import (
 )
 from access_review_engine.services import create_snapshot
 from access_review_engine.storage import Repository
-from access_review_engine.web_read_models import projected_rows, review_item_view
+from access_review_engine.web_read_models import apply_field_filters, projected_rows, review_item_view
+
+
+def test_column_filter_accepts_multiple_existing_values() -> None:
+    rows = [{"provider": "OpenLDAP"}, {"provider": "Keycloak"}, {"provider": "AD"}]
+
+    assert apply_field_filters(rows, {"provider": "OpenLDAP|Keycloak"}) == rows[:2]
 
 
 def test_review_item_view_joins_latest_decision_without_mutating_review_item(tmp_path):
