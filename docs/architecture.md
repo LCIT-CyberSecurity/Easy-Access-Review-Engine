@@ -37,7 +37,7 @@ Active Directory and OpenLDAP collectors do not create a second domain model and
 ## Module Boundaries
 
 - `domain`: domain objects, enums, fingerprints, and deterministic checksums.
-- `storage`: local SQLite MVP persistence.
+- `storage`: SQLAlchemy Core persistence over SQLite or PostgreSQL. Domain payloads remain canonical JSON text in the existing explicit tables; the repository exposes one synchronous API for both engines.
 - `importers`: translation from AD/OpenLDAP artifacts to the normalized model.
 - `application`: import orchestration and persistence boundaries.
 - `services`: comparison, Golden Source, campaign, effective-access, and remediation services.
