@@ -5,6 +5,7 @@ from access_review_engine.perimeters import (
     path,
     unassociate,
     update_perimeter,
+    validate_selection,
 )
 from access_review_engine.storage import Repository
 
@@ -33,3 +34,14 @@ def test_perimeters_reject_self_parent_and_cycles(tmp_path):
             assert "cycle" in str(exc).lower()
         else:
             raise AssertionError("cycle was accepted")
+
+
+def test_active_organization_requires_information_system_for_targeting(tmp_path):
+    with Repository(tmp_path / "perimeters.db") as repo:
+        organization = create_perimeter(repo, "organization", {"name": "ACGM"})
+        try:
+            validate_selection(repo, {"organizations": [organization["id"]]})
+        except ValueError as exc:
+            assert "associated information system" in str(exc)
+        else:
+            raise AssertionError("organization without an information system was targetable")

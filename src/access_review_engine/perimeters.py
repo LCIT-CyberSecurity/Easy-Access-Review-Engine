@@ -138,6 +138,48 @@ def unassociate(repo: Any, organization_id: str, information_system_id: str) -> 
     return False
 
 
+def validate_selection(repo: Any, scope: dict[str, Any] | None) -> None:
+    """Validate selected perimeter IDs before operational filtering or targeting."""
+    validate_selection_data(
+        scope,
+        [
+            *[dict(row, kind="organization") for row in _all(repo, "organization")],
+            *[dict(row, kind="information_system") for row in _all(repo, "information_system")],
+        ],
+        associations(repo),
+    )
+
+
+def validate_selection_data(
+    scope: dict[str, Any] | None,
+    nodes: list[dict[str, Any]],
+    links: list[dict[str, Any]],
+) -> None:
+    """Validate a scope from already loaded perimeter payloads."""
+    if not scope:
+        return
+    by_id = {str(row.get("id")): row for row in nodes}
+    associations_by_org: dict[str, set[str]] = {}
+    for row in links:
+        associations_by_org.setdefault(str(row.get("organization_id")), set()).add(
+            str(row.get("information_system_id"))
+        )
+    for kind, field in (("organization", "organizations"), ("information_system", "information_systems")):
+        selected = scope.get(field, [])
+        if not isinstance(selected, list):
+            raise ValueError(f"{field} must be a list of IDs")
+        for identifier in selected:
+            row = by_id.get(str(identifier))
+            if row is None or row.get("kind") not in (None, kind):
+                raise ValueError(f"{kind.replace('_', ' ').capitalize()} not found")
+            if not row.get("active", True):
+                raise ValueError(f"Cannot target inactive {kind.replace('_', ' ')}: {row.get('name')}")
+            if kind == "organization" and not associations_by_org.get(str(identifier)):
+                raise ValueError(
+                    f"Active organization '{row.get('name')}' must have at least one associated information system"
+                )
+
+
 def object_assignments(repo: Any, object_type: str, object_id: str) -> list[dict[str, Any]]:
     return [row for row in repo.list_payloads("scope_assignments") if row.get("object_type") == object_type and row.get("object_id") == object_id]
 
