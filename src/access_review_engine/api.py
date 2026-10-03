@@ -9,7 +9,6 @@ import io
 import json
 import os
 import secrets
-import sqlite3
 import tempfile
 import threading
 import time
@@ -47,9 +46,9 @@ from access_review_engine.campaign_authorization import (
     can_access_campaign,
     normalize_campaign_scope,
 )
-from access_review_engine.chatbot.context import AuthorizationContext, UIHints, resolve_ui_context
-from access_review_engine.chatbot.access import chatbot_access_status, can_use_chatbot
+from access_review_engine.chatbot.access import can_use_chatbot, chatbot_access_status
 from access_review_engine.chatbot.config import ChatbotConfig
+from access_review_engine.chatbot.context import AuthorizationContext, UIHints, resolve_ui_context
 from access_review_engine.chatbot.service import AssistantService
 from access_review_engine.chatbot.tools.registry import allowed_actions
 from access_review_engine.collector_runner import RunnerError, run_exporter
@@ -60,6 +59,12 @@ from access_review_engine.config_loader import (
     validate_connector,
 )
 from access_review_engine.connector_capabilities import connector_capabilities
+from access_review_engine.database import (
+    DatabaseConnection,
+    database_url,
+    make_engine,
+    sqlite_database_path,
+)
 from access_review_engine.directory_auth import (
     DirectoryError,
     test_directory,
@@ -155,10 +160,10 @@ from access_review_engine.system_admin import (
     reset_password,
     revoke_api_tokens,
     revoke_mcp_tokens,
+    set_chatbot_enabled,
     set_enabled,
     set_external_user_api_enabled,
     set_mcp_enabled,
-    set_chatbot_enabled,
     upsert_idp,
     upsert_user,
 )
@@ -298,49 +303,72 @@ def _context_value(row: dict[str, Any], field: str, origin: str) -> Any:
 
 
 class _PerThreadConnection:
-    """Hand each worker thread its own SQLite connection to the system database.
+    """Hand each worker thread its own pooled database connection.
 
     FastAPI runs synchronous endpoints in a thread pool. One connection shared by
-    those threads interleaves cursors, and a concurrent read then returns rows with
-    missing columns (seen as random 500s and sign-outs under parallel requests).
+    those threads interleaves cursors, and concurrent requests can observe invalid
+    cursor state. A shared engine safely pools independent connections.
     Attribute access is forwarded, so callers keep using it like a connection.
     """
 
     def __init__(self, db_path: str) -> None:
-        self._db_path = db_path
+        self._engine = make_engine(db_path)
         self._local = threading.local()
+        self._connections: list[tuple[threading.Thread, DatabaseConnection]] = []
+        self._connections_lock = threading.Lock()
 
-    def _connection(self) -> sqlite3.Connection:
+    def _connection(self) -> DatabaseConnection:
         connection = getattr(self._local, "connection", None)
         if connection is None:
-            connection = sqlite3.connect(self._db_path, timeout=30)
-            connection.row_factory = sqlite3.Row
+            connection = DatabaseConnection(self._engine.connect())
             self._local.connection = connection
+            with self._connections_lock:
+                # Test clients and short-lived worker pools can leave dead
+                # threads' thread-local connections checked out indefinitely.
+                active: list[tuple[threading.Thread, DatabaseConnection]] = []
+                for owner, previous in self._connections:
+                    if owner.is_alive():
+                        active.append((owner, previous))
+                    else:
+                        previous.close()
+                active.append((threading.current_thread(), connection))
+                self._connections = active
         return connection
+
+    def close_all(self) -> None:
+        """Release worker connections and the shared pool at application shutdown."""
+        with self._connections_lock:
+            connections, self._connections = self._connections, []
+        for _, connection in connections:
+            connection.close()
+        self._engine.dispose()
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._connection(), name)
 
-    def __enter__(self) -> sqlite3.Connection:
+    def __enter__(self) -> DatabaseConnection:
         return self._connection().__enter__()
 
     def __exit__(self, *exc_info: Any) -> Any:
         return self._connection().__exit__(*exc_info)
 
 
-def create_app(db_path: str | None = None):
+def create_app(db_path: str | None = None) -> Any:
     if FastAPI is None:
         raise RuntimeError("Install the 'app' extra to use the REST API")
-    db_path = db_path or os.environ.get("EARE_DB_PATH", "access-review.db")
+    db_path = database_url(db_path)
     mcp_holder: dict[str, Any] = {}
 
     @asynccontextmanager
     async def lifespan(_app: Any):
-        if mcp_holder:
-            async with mcp_holder["server"].session_manager.run():
+        try:
+            if mcp_holder:
+                async with mcp_holder["server"].session_manager.run():
+                    yield
+            else:
                 yield
-        else:
-            yield
+        finally:
+            system_conn.close_all()
 
     app = FastAPI(
         title="Easy Access Review Engine",
@@ -354,8 +382,8 @@ def create_app(db_path: str | None = None):
     # avoid a slash redirect that can discard an Authorization header in clients.
     app.router.redirect_slashes = False
     system_conn: Any = _PerThreadConnection(db_path)
-    init_system(system_conn)
-    ensure_bootstrap_user(system_conn)
+    init_system(system_conn._connection())
+    ensure_bootstrap_user(system_conn._connection())
     configured_session_secret = os.environ.get("EARE_SESSION_SECRET")
     if configured_session_secret is not None:
         if (
@@ -370,7 +398,17 @@ def create_app(db_path: str | None = None):
         session_secret = secrets.token_bytes(32)
     login_failures: dict[tuple[str, str], list[float]] = {}
     login_failures_lock = threading.Lock()
-    connector_directory = Path(db_path).resolve().parent / "connectors"
+    sqlite_path = sqlite_database_path(db_path)
+    connector_directory = (
+        sqlite_path.parent / "connectors"
+        if sqlite_path is not None
+        else Path(os.environ.get("EARE_CONNECTOR_DIR", "config/connectors")).resolve()
+    )
+    artifact_directory = (
+        sqlite_path.parent
+        if sqlite_path is not None
+        else Path(os.environ.get("EARE_ARTIFACT_DIR", tempfile.gettempdir())).resolve()
+    )
 
     def _load_web_connector(provider: str) -> dict[str, Any]:
         try:
@@ -5282,7 +5320,7 @@ def create_app(db_path: str | None = None):
                 config.setdefault("credentials", {})["password_file"] = secrets_config[
                     "password_file"
                 ]
-            artifact = Path(db_path).with_name(f".eare-{provider}-{job_id}.zip")
+            artifact = artifact_directory / f".eare-{provider}-{job_id}.zip"
             try:
                 update_progress(db_path, job_id, "Collecting read-only source data")
                 result = run_exporter(config, artifact)
@@ -5317,7 +5355,7 @@ def create_app(db_path: str | None = None):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
 
         def operation(job_id: str) -> dict[str, Any]:
-            artifact = Path(db_path).with_name(f".eare-preview-{provider}-{job_id}.zip")
+            artifact = artifact_directory / f".eare-preview-{provider}-{job_id}.zip"
             try:
                 update_progress(db_path, job_id, "Collecting read-only source data")
                 config = _load_web_connector(provider)
