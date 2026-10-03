@@ -1,4 +1,4 @@
-"""SQLite-backed worker queue for long-running Web operations."""
+"""Database-backed worker queue for long-running Web operations."""
 
 from __future__ import annotations
 
