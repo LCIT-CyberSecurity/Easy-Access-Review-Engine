@@ -69,6 +69,13 @@ const containsAll = (superset: unknown, subset: unknown): boolean => {
   return required.every((value) => values.has(value));
 };
 
+const additionalRights = (effective: unknown, direct: unknown): FunctionalRightLike[] => {
+  const directKeys = new Set(Array.isArray(direct) ? direct.filter((item): item is FunctionalRightLike => !!item && typeof item === "object").map(rightKey) : []);
+  return Array.isArray(effective)
+    ? effective.filter((item): item is FunctionalRightLike => !!item && typeof item === "object" && !directKeys.has(rightKey(item)))
+    : [];
+};
+
 export function goldenFunctionalPresentation(row: GoldenFunctionalRow): GoldenFunctionalPresentation {
   const expected = Array.isArray(row.direct_functional_rights) ? row.direct_functional_rights : row.functional_rights;
   const observed = row.observed_functional_rights;
@@ -92,7 +99,7 @@ export function goldenFunctionalPresentation(row: GoldenFunctionalRow): GoldenFu
       description: completeness === "partial" ? "Some expected functional rights are not fully defined." : "",
       action: completeness === "partial" ? "Complete functional rights" : "Edit rights",
       groups: functionalRightsGroups(expected),
-      inheritedGroups: functionalRightsGroups(row.effective_functional_rights && expected !== row.effective_functional_rights ? row.effective_functional_rights : []),
+      inheritedGroups: functionalRightsGroups(additionalRights(row.effective_functional_rights, expected)),
       origin,
     };
   }
