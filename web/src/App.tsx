@@ -1894,6 +1894,8 @@ function Table({
   emptyText = "No record matches the current search and filters.",
   className = "",
   rowClassName,
+  search,
+  headerTools,
 }: {
   cols: string[];
   rows: ReactNode[][];
@@ -1907,6 +1909,8 @@ function Table({
   emptyText?: string;
   className?: string;
   rowClassName?: (index: number) => string;
+  search?: { value: string; onChange: (value: string) => void; placeholder?: string };
+  headerTools?: ReactNode;
 }) {
   // Loading is shaped like the table it replaces, so the page never jumps when
   // the rows arrive.
@@ -1947,6 +1951,10 @@ function Table({
     <div className={`table-wrap ${className}`}>
       <table>
         <thead>
+          {search || headerTools ? <tr className="table-header-tools-row"><th colSpan={cols.length}><div className="table-header-tools">
+            {search ? <div className="search"><Search /><input placeholder={search.placeholder ?? ui("common.search")} value={search.value} onChange={(event) => search.onChange(event.target.value)} /></div> : null}
+            {headerTools}
+          </div></th></tr> : null}
           <tr>
             {cols.map((x, i) => {
               const field = fields ? fields[i] : null;
@@ -5475,18 +5483,6 @@ export function Golden({ principal }: { principal: Principal }) {
           </div>
           {tab === "accesses" && (
             <>
-              <Filter v={search} onChange={(value) => guardTableContextChange(() => setSearch(value))}>
-                <select value={scopeOrganization} onChange={(event) => { setScopeOrganization(event.target.value); setOffset(0); }} aria-label="Filter by organization">
-                  <option value="">All organizations</option>{arr(perimeterQuery.data?.organizations).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}
-                </select>
-                <select value={scopeInformationSystem} onChange={(event) => { setScopeInformationSystem(event.target.value); setOffset(0); }} aria-label="Filter by information system">
-                  <option value="">All information systems</option>{arr(perimeterQuery.data?.information_systems).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}
-                </select>
-                <label className="check-row"><input type="checkbox" checked={scopeDescendants} onChange={(event) => setScopeDescendants(event.target.checked)} /> Include descendants</label>
-                <button className="button subtle" onClick={() => setAdding(blankExpected())}>
-                  + Add expected access
-                </button>
-              </Filter>
               <datalist id="golden-access-owners">
                 {arr(ownerOptions.data?.items).map((row) => {
                   const owner = `${s(row.provider)}/${s(row.identifier, s(row.id))}`;
@@ -5495,6 +5491,17 @@ export function Golden({ principal }: { principal: Principal }) {
               </datalist>
               <Table
                 className="golden-access-table"
+                search={{ value: search, onChange: (value) => guardTableContextChange(() => setSearch(value)) }}
+                headerTools={<>
+                  <select value={scopeOrganization} onChange={(event) => { setScopeOrganization(event.target.value); setOffset(0); }} aria-label="Filter by organization">
+                    <option value="">All organizations</option>{arr(perimeterQuery.data?.organizations).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}
+                  </select>
+                  <select value={scopeInformationSystem} onChange={(event) => { setScopeInformationSystem(event.target.value); setOffset(0); }} aria-label="Filter by information system">
+                    <option value="">All information systems</option>{arr(perimeterQuery.data?.information_systems).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}
+                  </select>
+                  <label className="check-row"><input type="checkbox" checked={scopeDescendants} onChange={(event) => setScopeDescendants(event.target.checked)} /> Include descendants</label>
+                  <button className="button subtle" onClick={() => setAdding(blankExpected())}>+ Add expected access</button>
+                </>}
                 cols={[
                   "Access right",
                   "Application",

@@ -921,6 +921,10 @@ main > .panel + .panel { margin-top: var(--space-section); }
 /* --- Tables -------------------------------------------------------------- */
 
 .table-wrap { overflow: auto; }
+.table-header-tools-row > th { padding: 8px 10px; background: var(--surface-secondary); }
+.table-header-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.table-header-tools .search { min-width: 220px; flex: 1 1 260px; }
+.table-header-tools select { max-width: 230px; }
 /* No tabular figures here: Inter widens the hyphen with them, which splits
    identifiers such as "crm-sales" apart. Metrics keep them. */
 table { width: 100%; min-width: 720px; border-collapse: collapse; }
