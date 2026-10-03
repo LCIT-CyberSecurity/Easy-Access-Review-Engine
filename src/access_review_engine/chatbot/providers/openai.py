@@ -46,7 +46,7 @@ class OpenAIProvider(LLMProvider):
 
     def validate_configuration(self) -> None:
         if not self.config.api_key or not self.config.model:
-            raise ProviderError("Assistant provider is not configured")
+            raise ProviderError("Chatbot provider is not configured")
 
     def healthcheck(self) -> bool:
         try:
@@ -88,25 +88,25 @@ class OpenAIProvider(LLMProvider):
             ) as response:
                 body = json.load(response)
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
-            raise ProviderError("Assistant provider temporarily unavailable") from exc
+            raise ProviderError("Chatbot provider temporarily unavailable") from exc
         text = _extract_output_text(body)
         calls: list[ToolCall] = []
         output_items: list[dict[str, Any]] = []
         raw_output = body.get("output", [])
         if not isinstance(raw_output, list):
-            raise ProviderError("Assistant returned invalid output")
+            raise ProviderError("Chatbot returned invalid output")
         for item in raw_output:
             if not isinstance(item, dict):
-                raise ProviderError("Assistant returned invalid output")
+                raise ProviderError("Chatbot returned invalid output")
             output_items.append(item)
             if item.get("type") != "function_call":
                 continue
             try:
                 arguments = json.loads(item.get("arguments", "{}"))
             except (TypeError, json.JSONDecodeError) as exc:
-                raise ProviderError("Assistant returned invalid tool arguments") from exc
+                raise ProviderError("Chatbot returned invalid tool arguments") from exc
             if not isinstance(arguments, dict):
-                raise ProviderError("Assistant returned invalid tool arguments")
+                raise ProviderError("Chatbot returned invalid tool arguments")
             calls.append(
                 ToolCall(str(item.get("call_id", "")), str(item.get("name", "")), arguments)
             )

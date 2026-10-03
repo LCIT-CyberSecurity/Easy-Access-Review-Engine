@@ -17,6 +17,7 @@ import {
   KeyRound,
   Languages,
   LayoutDashboard,
+  Layers,
   LogOut,
   Menu,
   ChevronDown,
@@ -724,6 +725,7 @@ const navSections = [
   {
     heading: "ACCESS & REFERENCE",
     items: [
+      { to: "/perimeters", label: "Perimeters", icon: Layers, roles: ["ADMIN", "OPERATOR"] },
       { to: "/identities", label: "Identities", icon: Users, roles: ["ADMIN", "OPERATOR"] },
       { to: "/accesses", label: "Access", icon: KeyRound, roles: ["ADMIN", "OPERATOR"] },
       { to: "/golden", label: "Golden Source", icon: ShieldCheck, roles: ["ADMIN", "OPERATOR"] },
@@ -1039,8 +1041,8 @@ function Shell({ principal }: { principal: Principal }) {
               <HelpCircle size={16} /> <span>{ui("guide.title")}</span>
               {guidePending ? <span className="guide-badge" aria-hidden="true">{guidePending}</span> : null}
             </button>
-            {assistantAvailable ? <button className="guide-trigger" type="button" onClick={() => setAssistantOpen(true)} aria-label="Assistant EARE">
-              <HelpCircle size={16} /> <span>Assistant</span>
+            {assistantAvailable ? <button className="guide-trigger" type="button" onClick={() => setAssistantOpen(true)} aria-label="Chatbot EARE">
+              <HelpCircle size={16} /> <span>Chatbot</span>
             </button> : null}
             <UserMenu
               principal={principal}
@@ -1067,6 +1069,7 @@ function Shell({ principal }: { principal: Principal }) {
             <Route path="/identities" element={<Identities />} />
             <Route path="/accesses" element={<Accesses />} />
             <Route path="/golden" element={<Golden principal={principal} />} />
+            <Route path="/perimeters" element={<Perimeters principal={principal} />} />
             <Route path="/campaigns" element={<Campaigns principal={principal} />} />
             <Route path="/campaigns/new" element={<CampaignNew principal={principal} />} />
             <Route path="/campaigns/:id/edit" element={<CampaignNew principal={principal} />} />
@@ -1086,8 +1089,8 @@ function Shell({ principal }: { principal: Principal }) {
       {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} focus={(id) => setGuideFocus(GUIDE_FOCUS[id] ?? [])} /> : null}
       {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
       {paletteOpen ? <CommandPalette role={principal.role} close={() => setPaletteOpen(false)} /> : null}
-      {assistantAvailable ? <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Assistant">
-        <Sparkles size={17} /> <span>Assistant</span>
+      {assistantAvailable ? <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Chatbot">
+        <Sparkles size={17} /> <span>Chatbot</span>
       </button> : null}
       {assistantAvailable && assistantOpen ? <AssistantDrawer route={location.pathname} role={principal.role} close={() => setAssistantOpen(false)} /> : null}
     </div>
@@ -2436,6 +2439,68 @@ function PageGuide({ title, text, actions, total }: { title: string; text: strin
     </aside>
   );
 }
+function Perimeters({ principal }: { principal: Principal }) {
+  const client = useQueryClient();
+  const query = useQuery({ queryKey: ["perimeters"], queryFn: () => getJson("perimeters") });
+  const [organizationName, setOrganizationName] = useState("");
+  const [systemName, setSystemName] = useState("");
+  const [organizationParent, setOrganizationParent] = useState("");
+  const [systemParent, setSystemParent] = useState("");
+  const [selectedOrganization, setSelectedOrganization] = useState("");
+  const [selectedSystem, setSelectedSystem] = useState("");
+  const organizations = arr(query.data?.organizations);
+  const systems = arr(query.data?.information_systems);
+  const associations = arr(query.data?.associations);
+  const editable = principal.role === "ADMIN";
+  const refresh = () => client.invalidateQueries({ queryKey: ["perimeters"] });
+  const create = useMutation({
+    mutationFn: ({ kind, name, parent_id }: { kind: string; name: string; parent_id: string }) => postJson(`perimeters/${kind}`, { name, parent_id: parent_id || null }),
+    onSuccess: () => { setOrganizationName(""); setSystemName(""); void refresh(); },
+  });
+  const link = useMutation({
+    mutationFn: () => postJson("perimeters/associations", { organization_id: selectedOrganization, information_system_id: selectedSystem }),
+    onSuccess: () => void refresh(),
+  });
+  const deactivate = useMutation({
+    mutationFn: ({ kind, id }: { kind: string; id: string }) => putJson(`perimeters/${kind}/${id}`, { active: false }),
+    onSuccess: () => void refresh(),
+  });
+  if (query.isLoading) return <PageLoading label="Loading perimeters…" />;
+  if (query.isError) return <p className="form-error">Unable to load perimeters.</p>;
+  const label = (row: Row) => Array.isArray(row.path) ? row.path.join(" › ") : s(row.name);
+  const associatedSystems = (organizationId: string) => associations.filter((row) => row.organization_id === organizationId).map((row) => systems.find((item) => item.id === row.information_system_id)).filter(Boolean) as Row[];
+  const associatedOrganizations = (systemId: string) => associations.filter((row) => row.information_system_id === systemId).map((row) => organizations.find((item) => item.id === row.organization_id)).filter(Boolean) as Row[];
+  return (
+    <>
+      <Head title="Perimeters" subtitle="Classify and target EARE objects without changing access semantics." />
+      <div className="workspace-grid">
+        <section className="panel">
+          <div className="section-heading"><div><span className="eyebrow">ORGANIZATIONS</span><h2>Organizations</h2></div><span className="muted">{organizations.length}</span></div>
+          <div className="perimeter-list">
+            {organizations.map((row) => <div className="perimeter-row" key={s(row.id)}><div><strong>{label(row)}</strong>{!row.active ? <span className="muted"> · inactive</span> : null}<div className="chip-row">{associatedSystems(s(row.id)).map((system) => <span className="application-chip" key={s(system.id)} title={`Information system · ${label(system)}`}>{s(system.name)}</span>)}</div></div>{editable ? <button className="text-button" onClick={() => deactivate.mutate({ kind: "organizations", id: s(row.id) })} disabled={!row.active}>Deactivate</button> : null}</div>)}
+            {!organizations.length ? <p className="muted">No organization yet.</p> : null}
+          </div>
+          {editable ? <form className="inline-form" onSubmit={(event) => { event.preventDefault(); if (organizationName.trim()) create.mutate({ kind: "organizations", name: organizationName, parent_id: organizationParent }); }}><input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder="New organization" aria-label="New organization" /><select value={organizationParent} onChange={(event) => setOrganizationParent(event.target.value)} aria-label="Organization parent"><option value="">Root organization</option>{organizations.map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={create.isPending}>Add</button></form> : null}
+        </section>
+        <section className="panel">
+          <div className="section-heading"><div><span className="eyebrow">INFORMATION SYSTEMS</span><h2>Information systems</h2></div><span className="muted">{systems.length}</span></div>
+          <div className="perimeter-list">
+            {systems.map((row) => <div className="perimeter-row" key={s(row.id)}><div><strong>{label(row)}</strong>{!row.active ? <span className="muted"> · inactive</span> : null}<div className="chip-row">{associatedOrganizations(s(row.id)).map((organization) => <span className="application-chip" key={s(organization.id)} title={`Organization · ${label(organization)}`}>{s(organization.name)}</span>)}</div></div>{editable ? <button className="text-button" onClick={() => deactivate.mutate({ kind: "information-systems", id: s(row.id) })} disabled={!row.active}>Deactivate</button> : null}</div>)}
+            {!systems.length ? <p className="muted">No information system yet.</p> : null}
+          </div>
+          {editable ? <form className="inline-form" onSubmit={(event) => { event.preventDefault(); if (systemName.trim()) create.mutate({ kind: "information-systems", name: systemName, parent_id: systemParent }); }}><input value={systemName} onChange={(event) => setSystemName(event.target.value)} placeholder="New information system" aria-label="New information system" /><select value={systemParent} onChange={(event) => setSystemParent(event.target.value)} aria-label="Information system parent"><option value="">Root information system</option>{systems.map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={create.isPending}>Add</button></form> : null}
+        </section>
+      </div>
+      <section className="panel">
+        <div className="section-heading"><div><span className="eyebrow">EXPLICIT ASSOCIATIONS</span><h2>Organization · information system</h2></div></div>
+        {editable ? <div className="inline-form"><select value={selectedOrganization} onChange={(event) => setSelectedOrganization(event.target.value)} aria-label="Organization to associate"><option value="">Select organization</option>{organizations.filter((row) => row.active).map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><select value={selectedSystem} onChange={(event) => setSelectedSystem(event.target.value)} aria-label="Information system to associate"><option value="">Select information system</option>{systems.filter((row) => row.active).map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={!selectedOrganization || !selectedSystem || link.isPending} onClick={() => link.mutate()}>Associate</button></div> : null}
+        <div className="chip-row">{associations.map((row) => <span className="application-chip" key={s(row.id)} title={`${s(row.organization_id)} ↔ ${s(row.information_system_id)}`}>{s(organizations.find((item) => item.id === row.organization_id)?.name)} · {s(systems.find((item) => item.id === row.information_system_id)?.name)}</span>)}</div>
+        {!associations.length ? <p className="muted">No explicit associations yet. Active organizations should have at least one before operational targeting.</p> : null}
+      </section>
+    </>
+  );
+}
+
 function Identities() {
   const [provider, setProvider] = useState(""),
     [status, setStatus] = useState(""),
@@ -2643,7 +2708,7 @@ function Accesses() {
     </>
   );
 }
-function AccessDetail({ access }: { access: Row }) {
+function AccessDetail({ access, expectedHolders = [] }: { access: Row; expectedHolders?: Row[] }) {
   const client = useQueryClient(),
     toast = useToast(),
     // Same cache entry as the Golden Source page, so the catalogue loads once.
@@ -2683,6 +2748,10 @@ function AccessDetail({ access }: { access: Row }) {
     });
   const direct = arr(q.data?.holders),
     effective = arr(q.data?.effective_holders),
+    observedKeys = new Set([...direct, ...effective].map((row) => `${s(row.identity_provider, provider)}:${s(row.identity_identifier)}`)),
+    expected = expectedHolders
+      .filter((row) => !observedKeys.has(`${s(row.identity_provider, provider)}:${s(row.identity_identifier)}`))
+      .map((row) => ({ ...row, mode: "Expected (Golden)" })),
     holderLabel = (row: Row) => `${s(row.identity_provider, provider)} · ${s(row.identity_display_name, s(row.identity_identifier))}`,
     ownerReference = contextValue(currentAccess.business_context, "owner", "manual") || contextValue(currentAccess.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
     ownerDisplay = ownerReference ? ownerDisplayLabel(ownerReference, arr(ownerIdentities.data?.items), s((access.access_owner as Row | undefined)?.provider, provider)).replace(/^[^/]+\//, "") : "—",
@@ -2741,14 +2810,17 @@ function AccessDetail({ access }: { access: Row }) {
           rows={[
             ...direct.map((r) => ({ ...r, mode: "Direct" })),
             ...effective.map((r) => ({ ...r, mode: "Effective" })),
+            ...expected,
           ].map((r: Row) => [
             <strong>{holderLabel(r)}</strong>,
             s(r.mode),
-            <AccessPath
-              direct={r.mode === "Direct"}
-              identity={holderLabel(r)}
-              paths={arr(r.paths)}
-            />,
+            r.mode === "Expected (Golden)"
+              ? <span className="muted">Expected holder in this Golden version</span>
+              : <AccessPath
+                  direct={r.mode === "Direct"}
+                  identity={holderLabel(r)}
+                  paths={arr(r.paths)}
+                />,
           ])}
         />
       )}
@@ -3580,6 +3652,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
       queryFn: () => getPage("golden-source-versions", { limit: 100 }),
     }),
     providerQuery = useQuery({ queryKey: ["campaign-providers"], queryFn: () => getPage("providers", { limit: 500 }) }),
+    perimeterQuery = useQuery({ queryKey: ["perimeters"], queryFn: () => getJson("perimeters") }),
     [form, setForm] = useState<Row>({
       name: "",
       pilot: principal.username,
@@ -3587,6 +3660,10 @@ function CampaignNew({ principal }: { principal: Principal }) {
       golden_source_version_id: "",
       due_at: todayDateInputValue(),
       scope_type: "all",
+      perimeter_organizations: [],
+      perimeter_information_systems: [],
+      include_organization_descendants: false,
+      include_information_system_descendants: false,
     }),
     accessQuery = useQuery({
       queryKey: ["campaign-scope-accesses", form.snapshot_id, form.golden_source_version_id],
@@ -3608,6 +3685,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
             type: s(form.scope_type, "all"),
             ...(form.scope_type === "providers" ? { values: vals(form.providers) } : {}),
             ...(form.scope_type === "accesses" ? { values: arr(form.accesses).map((access) => ({ provider: s(access.provider, ""), name: s(access.name, "") })) } : {}),
+            perimeters: { organizations: vals(form.perimeter_organizations), information_systems: vals(form.perimeter_information_systems), include_organization_descendants: Boolean(form.include_organization_descendants), include_information_system_descendants: Boolean(form.include_information_system_descendants) },
           },
         }),
       onSuccess: (value) => {
@@ -3627,13 +3705,14 @@ function CampaignNew({ principal }: { principal: Principal }) {
     toast = useToast(),
     create = useMutation({
       mutationFn: async (open: boolean) => {
-        const { scope_type, providers, accesses, ...fields } = form;
+        const { scope_type, providers, accesses, perimeter_organizations, perimeter_information_systems, include_organization_descendants, include_information_system_descendants, ...fields } = form;
         const payload = {
           ...fields,
           scope: {
             type: s(scope_type, "all"),
             ...(scope_type === "providers" ? { values: vals(providers) } : {}),
             ...(scope_type === "accesses" ? { values: arr(accesses).map((access) => ({ provider: s(access.provider, ""), name: s(access.name, "") })) } : {}),
+            perimeters: { organizations: vals(perimeter_organizations), information_systems: vals(perimeter_information_systems), include_organization_descendants: Boolean(include_organization_descendants), include_information_system_descendants: Boolean(include_information_system_descendants) },
           },
           allow_unresolved_reviewers: allow,
         };
@@ -3694,6 +3773,10 @@ function CampaignNew({ principal }: { principal: Principal }) {
         scope_type: scopeType,
         providers: vals(scope.values),
         accesses: arr(scope.values),
+        perimeter_organizations: vals((scope.perimeters as Row | undefined)?.organizations),
+        perimeter_information_systems: vals((scope.perimeters as Row | undefined)?.information_systems),
+        include_organization_descendants: Boolean((scope.perimeters as Row | undefined)?.include_organization_descendants),
+        include_information_system_descendants: Boolean((scope.perimeters as Row | undefined)?.include_information_system_descendants),
       });
     }
     if (!draftId && !form.snapshot_id && snapshots.length)
@@ -3800,6 +3883,16 @@ function CampaignNew({ principal }: { principal: Principal }) {
               <span className="field-note">The selected technical Access references (provider, name) determine which expected and observed comparisons are reviewed.</span>
             </label>
           ) : null}
+          <div className="wide-field campaign-scope">
+            <span className="step-label">1b</span> Perimeter targeting
+            <div className="inline-form">
+              <label>Organizations<select multiple size={Math.min(5, Math.max(2, arr(perimeterQuery.data?.organizations).length))} value={vals(form.perimeter_organizations)} onChange={(event) => setForm({ ...form, perimeter_organizations: Array.from(event.currentTarget.selectedOptions, (option) => option.value) })}>{arr(perimeterQuery.data?.organizations).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}</select></label>
+              <label>Information systems<select multiple size={Math.min(5, Math.max(2, arr(perimeterQuery.data?.information_systems).length))} value={vals(form.perimeter_information_systems)} onChange={(event) => setForm({ ...form, perimeter_information_systems: Array.from(event.currentTarget.selectedOptions, (option) => option.value) })}>{arr(perimeterQuery.data?.information_systems).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}</select></label>
+            </div>
+            <label className="check-row"><input type="checkbox" checked={Boolean(form.include_organization_descendants)} onChange={(event) => setForm({ ...form, include_organization_descendants: event.target.checked })} /> Include sub-organizations</label>
+            <label className="check-row"><input type="checkbox" checked={Boolean(form.include_information_system_descendants)} onChange={(event) => setForm({ ...form, include_information_system_descendants: event.target.checked })} /> Include sub-information systems</label>
+            <span className="field-note">Multiple organizations are OR; multiple information systems are OR; the two categories combine with AND.</span>
+          </div>
           <label className="campaign-observed">
             <span className="step-label">2</span> Observed snapshot
             <select
@@ -4627,6 +4720,7 @@ export function Golden({ principal }: { principal: Principal }) {
       queryFn: () => getPage("identities", { limit: 500 }),
       retry: false,
     }),
+    perimeterQuery = useQuery({ queryKey: ["perimeters"], queryFn: () => getJson("perimeters"), retry: false }),
     applicationCatalog = useQuery({
       queryKey: ["golden-applications"],
       queryFn: () => getJson("golden-applications"),
@@ -4639,6 +4733,9 @@ export function Golden({ principal }: { principal: Principal }) {
     [editingVersionComment, setEditingVersionComment] = useState(false),
     [versionComment, setVersionComment] = useState(""),
     [search, setSearch] = useState(""),
+    [scopeOrganization, setScopeOrganization] = useState(""),
+    [scopeInformationSystem, setScopeInformationSystem] = useState(""),
+    [scopeDescendants, setScopeDescendants] = useState(false),
     selected = debounce(search),
     [offset, setOffset] = useState(0),
     [limit, setLimit] = useState(25),
@@ -4655,7 +4752,7 @@ export function Golden({ principal }: { principal: Principal }) {
       },
     },
     accessesQuery = useQuery({
-      queryKey: ["golden-accesses", sourceName, selected, limit, offset, sort, order, columns.key],
+      queryKey: ["golden-accesses", sourceName, selected, limit, offset, sort, order, columns.key, scopeOrganization, scopeInformationSystem, scopeDescendants],
       queryFn: () =>
         getJson(`golden-sources/${encoded}/accesses`, {
           search: selected,
@@ -4663,6 +4760,9 @@ export function Golden({ principal }: { principal: Principal }) {
           offset,
           sort,
           order,
+          organization: scopeOrganization,
+          information_system: scopeInformationSystem,
+          include_descendants: scopeDescendants,
           ...columns.params,
         }),
       enabled: Boolean(sourceName),
@@ -5227,6 +5327,13 @@ export function Golden({ principal }: { principal: Principal }) {
           {tab === "accesses" && (
             <>
               <Filter v={search} onChange={(value) => guardTableContextChange(() => setSearch(value))}>
+                <select value={scopeOrganization} onChange={(event) => { setScopeOrganization(event.target.value); setOffset(0); }} aria-label="Filter by organization">
+                  <option value="">All organizations</option>{arr(perimeterQuery.data?.organizations).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}
+                </select>
+                <select value={scopeInformationSystem} onChange={(event) => { setScopeInformationSystem(event.target.value); setOffset(0); }} aria-label="Filter by information system">
+                  <option value="">All information systems</option>{arr(perimeterQuery.data?.information_systems).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}
+                </select>
+                <label className="check-row"><input type="checkbox" checked={scopeDescendants} onChange={(event) => setScopeDescendants(event.target.checked)} /> Include descendants</label>
                 <button className="button subtle" onClick={() => setAdding(blankExpected())}>
                   + Add expected access
                 </button>
@@ -5292,6 +5399,7 @@ export function Golden({ principal }: { principal: Principal }) {
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.access_display_name, s(r.access_name))}
+                      {arr(r.perimeters).length ? <span className="chip-row">{arr(r.perimeters).slice(0, 4).map((tag) => <span className="application-chip" key={`${s(tag.type)}:${s(tag.id)}`} title={Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)}>{s(tag.name)}</span>)}{arr(r.perimeters).length > 4 ? <span className="muted">+{arr(r.perimeters).length - 4}</span> : null}</span> : null}
                     </button>,
                     applicationCell,
                     permissionCell,
@@ -5594,7 +5702,10 @@ export function Golden({ principal }: { principal: Principal }) {
             {targetText(holders.access_target) ? ` · ${targetText(holders.access_target)}` : ""}
             {s(holders.access_permission, "") ? ` · ${s(holders.access_permission)}` : ""}
           </p>
-          <AccessDetail access={{ ...holders, provider: holders.access_provider, name: holders.access_name, id: holders.access_id, permission: { identifier: holders.access_permission } }} />
+          <AccessDetail
+            access={{ ...holders, provider: holders.access_provider, name: holders.access_name, id: holders.access_id, permission: { identifier: holders.access_permission } }}
+            expectedHolders={arr(holders.identities)}
+          />
           <h4>DESCRIPTION</h4>
           <p>{s(holders.access_description, "No description was provided for this access.")}</p>
         </Drawer>
@@ -6727,18 +6838,18 @@ function McpDocumentation({ enabled, onToggle, pending = false }: { enabled: boo
   );
 }
 
-function AssistantAdministration({ enabled, deploymentEnabled, provider, model, configured, onToggle, pending = false }: { enabled: boolean; deploymentEnabled: boolean; provider: string; model: string; configured: boolean; onToggle?: (enabled: boolean) => void; pending?: boolean }) {
+function ChatbotAdministration({ enabled, deploymentEnabled, provider, model, configured, onToggle, pending = false }: { enabled: boolean; deploymentEnabled: boolean; provider: string; model: string; configured: boolean; onToggle?: (enabled: boolean) => void; pending?: boolean }) {
   const unavailable = !deploymentEnabled || !configured;
   return (
-    <section className="panel" aria-labelledby="assistant-admin-title">
+    <section className="panel" aria-labelledby="chatbot-admin-title">
       <div className="section-heading">
-        <div><span className="eyebrow">ASSISTANT</span><h2 id="assistant-admin-title">Assistant IA</h2><p className="muted">Provide authorized users with the EARE Assistant. The Assistant remains limited to each user's existing EARE permissions.</p></div>
+        <div><span className="eyebrow">CHATBOT</span><h2 id="chatbot-admin-title">Chatbot IA</h2><p className="muted">Provide authorized users with the EARE Chatbot. The Chatbot remains limited to each user's existing EARE permissions.</p></div>
         <strong>{enabled ? "Enabled" : "Disabled"}</strong>
       </div>
       <p className="field-note">Provider: {provider || "—"} · Model: {model || "—"} · Configuration: {configured ? "Ready" : "Not configured"}</p>
-      {unavailable ? <p className="field-note">{!deploymentEnabled ? "Assistant unavailable on this deployment" : "Assistant provider is not configured"}</p> : null}
+      {unavailable ? <p className="field-note">{!deploymentEnabled ? "Chatbot unavailable on this deployment" : "Chatbot provider is not configured"}</p> : null}
       <button className="button subtle" type="button" onClick={() => onToggle?.(!enabled)} disabled={!onToggle || pending || unavailable}>
-        {enabled ? "Disable Assistant" : "Enable Assistant"}
+        {enabled ? "Disable Chatbot" : "Enable Chatbot"}
       </button>
     </section>
   );
@@ -6797,8 +6908,8 @@ function UsersPage() {
     }),
     globalChatbot = useMutation({
       mutationFn: (enabled: boolean) => putJson("system/settings/chatbot", { enabled }),
-      onSuccess: async (d) => { setError(""); setNotice(`Assistant ${d.chatbot_enabled ? "enabled" : "disabled"}`); await c.invalidateQueries({ queryKey: ["system"] }); },
-      onError: (e) => setError(s(e, "Unable to update Assistant setting")),
+      onSuccess: async (d) => { setError(""); setNotice(`Chatbot ${d.chatbot_enabled ? "enabled" : "disabled"}`); await c.invalidateQueries({ queryKey: ["system"] }); },
+      onError: (e) => setError(s(e, "Unable to update Chatbot setting")),
     }),
     lifecycle = useMutation({
       mutationFn: ({ action, user }: { action: string; user: Row }) =>
@@ -6892,7 +7003,7 @@ function UsersPage() {
         pending={globalApi.isPending}
       />
       <McpDocumentation enabled={Boolean(q.data?.mcp_enabled)} onToggle={(enabled) => globalMcp.mutate(enabled)} pending={globalMcp.isPending} />
-      <AssistantAdministration
+      <ChatbotAdministration
         enabled={Boolean(q.data?.chatbot_enabled)}
         deploymentEnabled={Boolean(q.data?.chatbot_deployment_enabled)}
         provider={s(q.data?.chatbot_provider, "—")}
@@ -6911,7 +7022,7 @@ function UsersPage() {
       {error && !open && !confirming && <p className="form-error">{error}</p>}
       <Filter v={search} onChange={setSearch} />
       <Table
-        cols={["User", "Username", "Signs in with", "Role", "Authorized domains", "API access", "MCP access", "Assistant", "Pending reviews", "Status", "Actions"]}
+        cols={["User", "Username", "Signs in with", "Role", "Authorized domains", "API access", "MCP access", "Chatbot", "Pending reviews", "Status", "Actions"]}
         q={q}
         rows={users.map((r) => [
           s(r.display_name),
@@ -6925,7 +7036,7 @@ function UsersPage() {
             {r.api_token_active ? <small className="field-note">{s(r.api_token_prefix)} · last used {s(r.api_token_last_used_at, "never")}</small> : null}
           </div>,
           <div><Status v={r.mcp_access_enabled ? "enabled" : "disabled"} /><small className="field-note">Read-only reports</small>{r.mcp_token_active ? <small className="field-note">{s(r.mcp_token_prefix)} · last used {s(r.mcp_token_last_used_at, "never")}</small> : null}</div>,
-          <div><Status v={r.chatbot_access_enabled ? "enabled" : "disabled"} /><small className="field-note">AI assistant</small></div>,
+          <div><Status v={r.chatbot_access_enabled ? "enabled" : "disabled"} /><small className="field-note">AI chatbot</small></div>,
           Number(r.pending_reviews) > 0 ? s(r.pending_reviews) : "—",
           <>
             <Status v={r.enabled ? "enabled" : "disabled"} />
@@ -7177,9 +7288,9 @@ function UsersPage() {
             <h4>MCP REPORT ACCESS</h4>
             <label className="check-row"><input type="checkbox" checked={Boolean(form.mcp_access_enabled)} onChange={(e) => setForm({ ...form, mcp_access_enabled: e.target.checked })} /> MCP access enabled for this user</label>
             <p className="field-note">Allows this user to query authorized structured reports through MCP. MCP is read-only; disabling access revokes existing MCP keys.</p>
-            <h4>ASSISTANT</h4>
-            <label className="check-row"><input type="checkbox" checked={Boolean(form.chatbot_access_enabled)} onChange={(e) => setForm({ ...form, chatbot_access_enabled: e.target.checked })} /> Assistant access enabled for this user</label>
-            <p className="field-note">Allows this user to use the EARE Assistant when the Assistant is globally enabled. The Assistant inherits the user's existing EARE role and authorized domains.</p>
+            <h4>CHATBOT</h4>
+            <label className="check-row"><input type="checkbox" checked={Boolean(form.chatbot_access_enabled)} onChange={(e) => setForm({ ...form, chatbot_access_enabled: e.target.checked })} /> Chatbot access enabled for this user</label>
+            <p className="field-note">Allows this user to use the EARE Chatbot when the Chatbot is globally enabled. The Chatbot inherits the user's existing EARE role and authorized domains.</p>
             <h4>STATUS</h4>
             {form.id ? (
               <div className="status-row">

@@ -1,12 +1,12 @@
-# EARE Product Assistant V1
+# EARE Product Chatbot V1
 
-The assistant is a bounded, read-only EARE capability. It explains product screens,
+The chatbot is a bounded, read-only EARE capability. It explains product screens,
 authorized dashboard/campaign/Golden/review/source data, deterministic Guidance
 recommendations, and safe internal navigation actions. It is not a general chatbot.
 
 ## Architecture and authorization
 
-Assistant availability has three independent gates plus local provider readiness:
+Chatbot availability has three independent gates plus local provider readiness:
 
 ```text
 EARE_CHATBOT_ENABLED
@@ -17,7 +17,7 @@ EARE_CHATBOT_ENABLED
 
 The deployment switch is environment-only and is never changed by the WebUI. The
 global setting is ADMIN-only and defaults to false. Every user, including ADMIN,
-must have the per-user Assistant flag enabled. Revocation is evaluated from the
+must have the per-user Chatbot flag enabled. Revocation is evaluated from the
 current database state on every chatbot request and does not require logout.
 The API key is never stored in SQLite; the administration screen exposes only
 provider, model and a Ready/Not configured state.
@@ -66,7 +66,7 @@ same call order. The server derives bounded object context from routes such as
 
 The controlled endpoints `/api/chatbot/brief` and `/api/chatbot/report` expose a deterministic
 `AssistantBrief` with dashboard, review progress and Golden-quality projections. The Markdown
-report is generated server-side from authorized DTOs; the assistant cannot choose a filesystem
+report is generated server-side from authorized DTOs; the chatbot cannot choose a filesystem
 path or write an arbitrary file.
 
 The API key is server-side only and is never returned or logged. If the provider is
@@ -82,7 +82,7 @@ validated page help, deterministic Guidance and validated semantic action IDs. I
 receives ORM objects, provider credentials, connector configuration, raw database data or
 the full page payload.
 
-The assistant is business read-only. It can explain, summarize, guide and prepare a
+The chatbot is business read-only. It can explain, summarize, guide and prepare a
 controlled Markdown/JSON-style brief, but it cannot approve, revoke, edit Golden Source,
 change campaigns, launch remediation, import data or modify providers.
 

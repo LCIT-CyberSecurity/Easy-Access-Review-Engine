@@ -76,6 +76,10 @@ TABLES = {
     "chatbot_conversations",
     "chatbot_messages",
     "chatbot_traces",
+    "organizations",
+    "information_systems",
+    "organization_information_systems",
+    "scope_assignments",
 }
 
 

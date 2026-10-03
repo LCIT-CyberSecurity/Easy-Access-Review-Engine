@@ -5,7 +5,7 @@ MAX_JSON_CHARS = 12000
 
 
 def validate_tool_arguments(arguments: object, schema: dict[str, object]) -> bool:
-    """Validate the small JSON subset used by assistant tools before dispatch."""
+    """Validate the small JSON subset used by chatbot tools before dispatch."""
     if not isinstance(arguments, dict):
         return False
     parameters = schema.get("parameters")

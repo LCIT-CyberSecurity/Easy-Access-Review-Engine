@@ -16,8 +16,24 @@ def normalize_campaign_scope(value: object) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise CampaignScopeError("Campaign scope must be an object")
     scope_type = value.get("type", "all")
+    perimeter_value = value.get("perimeters", {})
+    if perimeter_value is None:
+        perimeter_value = {}
+    if not isinstance(perimeter_value, Mapping):
+        raise CampaignScopeError("Campaign perimeter scope must be an object")
+    perimeters: dict[str, Any] = {}
+    for field in ("organizations", "information_systems"):
+        values = perimeter_value.get(field, [])
+        if not isinstance(values, list) or any(not isinstance(item, str) or not item.strip() for item in values):
+            raise CampaignScopeError(f"Campaign perimeter {field} must be a list of IDs")
+        perimeters[field] = list(dict.fromkeys(item.strip() for item in values))
+    for field in ("include_organization_descendants", "include_information_system_descendants"):
+        if field in perimeter_value and not isinstance(perimeter_value[field], bool):
+            raise CampaignScopeError(f"Campaign perimeter flag {field} must be boolean")
+        perimeters[field] = bool(perimeter_value.get(field, False))
+    perimeter_scope = {"perimeters": perimeters} if any(perimeters[field] for field in ("organizations", "information_systems")) else {}
     if scope_type == "all":
-        return {"type": "all"}
+        return {"type": "all", **perimeter_scope}
     if scope_type == "providers":
         raw_values = value.get("values")
         if not isinstance(raw_values, list):
@@ -31,7 +47,7 @@ def normalize_campaign_scope(value: object) -> dict[str, Any]:
                 providers.append(provider)
         if not providers:
             raise CampaignScopeError("Select at least one provider for this campaign scope")
-        return {"type": "providers", "values": providers}
+        return {"type": "providers", "values": providers, **perimeter_scope}
     if scope_type == "accesses":
         raw_values = value.get("values")
         if not isinstance(raw_values, list) or not raw_values:
@@ -54,7 +70,7 @@ def normalize_campaign_scope(value: object) -> dict[str, Any]:
                 raise CampaignScopeError("Access scope contains a duplicate reference")
             seen.add(key)
             accesses.append({"provider": key[0], "name": key[1]})
-        return {"type": "accesses", "values": accesses}
+        return {"type": "accesses", "values": accesses, **perimeter_scope}
     raise CampaignScopeError("Campaign scope must be all, providers, or accesses")
 
 
