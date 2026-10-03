@@ -112,7 +112,7 @@ def test_server_enforcement_and_live_user_revocation(tmp_path: Path, monkeypatch
             else client.get(path)
         )
         assert response.status_code == 403
-        assert response.json()["detail"] == "Assistant access is disabled."
+        assert response.json()["detail"] == "Chatbot access is disabled."
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row

@@ -106,6 +106,8 @@ def prepare_campaign_review(
     snapshot: Snapshot,
     golden_version: GoldenSourceVersion | None,
     import_scope: dict[str, object] | None = None,
+    perimeter_assignments: list[dict[str, object]] | None = None,
+    perimeter_nodes: list[dict[str, object]] | None = None,
 ) -> CampaignPreparation:
     """Recompute campaign rows without changing the persisted snapshot."""
     rows = compare_snapshot(snapshot, golden_version, import_scope)
@@ -131,6 +133,30 @@ def prepare_campaign_review(
             for row in rows
             if (str(row.get("access_provider")), str(row.get("access_name"))) in selected
         ]
+    perimeter_scope = scope.get("perimeters", {})
+    if perimeter_scope and perimeter_assignments is not None and perimeter_nodes is not None:
+        nodes = {str(item.get("id")): item for item in perimeter_nodes}
+        selected: dict[str, set[str]] = {
+            "organization": set(str(item) for item in perimeter_scope.get("organizations", [])),
+            "information_system": set(str(item) for item in perimeter_scope.get("information_systems", [])),
+        }
+        for kind, flag in (("organization", "include_organization_descendants"), ("information_system", "include_information_system_descendants")):
+            if perimeter_scope.get(flag):
+                queue = list(selected[kind])
+                while queue:
+                    parent = queue.pop(0)
+                    for item in nodes.values():
+                        if item.get("kind") == kind and str(item.get("parent_id") or "") == parent and str(item.get("id")) not in selected[kind]:
+                            selected[kind].add(str(item["id"]))
+                            queue.append(str(item["id"]))
+        def matches(row: object) -> bool:
+            if not isinstance(row, dict):
+                return False
+            object_ids = {f"{row.get('access_provider')}:{row.get('access_name')}"}
+            object_ids.update(f"{row.get('identity_provider')}:{row.get('identity_identifier')}" for row in [row])
+            linked = [item for item in perimeter_assignments if str(item.get("object_id")) in object_ids]
+            return all(not selected[kind] or any(item.get("scope_type") == kind and str(item.get("scope_id")) in selected[kind] for item in linked) for kind in selected)
+        rows = [row for row in rows if matches(row)]
     prepared = deepcopy(snapshot)
     prepared.comparison_states = rows
     if golden_version is not None:

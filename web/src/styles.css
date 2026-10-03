@@ -331,6 +331,13 @@ td > a:hover, .link-button:hover { text-decoration: underline; text-underline-of
 .row-actions { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; }
 .inline-form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .inline-form input, .inline-form select { min-width: 220px; }
+.workspace-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.perimeter-list { display: grid; gap: 2px; margin: 16px 0; }
+.perimeter-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.perimeter-row:first-child { border-top: 0; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+@media (max-width: 900px) { .workspace-grid { grid-template-columns: 1fr; } }
 .check-row { display: flex; align-items: center; gap: 8px; }
 .status-row { display: flex; flex-basis: 100%; align-items: center; gap: 12px; }
 

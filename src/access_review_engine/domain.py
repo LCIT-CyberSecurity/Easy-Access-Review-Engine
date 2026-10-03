@@ -177,6 +177,42 @@ class Provider:
 
 
 @dataclass
+class Organization:
+    """A classification node independent from access and functional-right identity."""
+
+    name: str
+    parent_id: str | None = None
+    description: str | None = None
+    active: bool = True
+    id: str = field(default_factory=new_id)
+    created_at: str = field(default_factory=now_utc)
+    updated_at: str = field(default_factory=now_utc)
+
+
+@dataclass
+class InformationSystem:
+    """A hierarchical information-system classification node."""
+
+    name: str
+    parent_id: str | None = None
+    description: str | None = None
+    active: bool = True
+    id: str = field(default_factory=new_id)
+    created_at: str = field(default_factory=now_utc)
+    updated_at: str = field(default_factory=now_utc)
+
+
+@dataclass
+class ScopeAssignment:
+    scope_type: str
+    scope_id: str
+    object_type: str
+    object_id: str
+    id: str = field(default_factory=new_id)
+    created_at: str = field(default_factory=now_utc)
+
+
+@dataclass
 class OwnerRef:
     provider: str
     identity: str

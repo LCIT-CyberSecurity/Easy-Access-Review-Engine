@@ -103,6 +103,20 @@ from access_review_engine.reporting import (
     report_summary,
     write_reports,
 )
+from access_review_engine.perimeters import (
+    ENTITY_TABLES,
+    _all as perimeter_all,
+    _get as perimeter_get,
+    associate as associate_perimeter,
+    associations as perimeter_associations,
+    assign as assign_perimeter,
+    create_perimeter,
+    descendants as perimeter_descendants,
+    object_assignments,
+    path as perimeter_path,
+    unassociate as unassociate_perimeter,
+    update_perimeter,
+)
 from access_review_engine.services import (
     audit,
     calculate_effective_accesses,
@@ -531,6 +545,106 @@ def create_app(db_path: str | None = None) -> Any:
             None,
         )
 
+    def _perimeter_kind(value: str) -> str:
+        kind = value.rstrip("s").replace("-", "_")
+        if kind == "organization":
+            return kind
+        if kind in {"information_system", "information_syste"}:
+            return "information_system"
+        raise HTTPException(status_code=400, detail="Unknown perimeter type")
+
+    def _campaign_perimeter_data(repo: Repository) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        nodes = [dict(row, kind=kind) for kind in ("organization", "information_system") for row in perimeter_all(repo, kind)]
+        return repo.list_payloads("scope_assignments"), nodes
+
+    @app.get("/api/perimeters")
+    def list_perimeters(request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            organizations = perimeter_all(repo, "organization")
+            systems = perimeter_all(repo, "information_system")
+            links = perimeter_associations(repo)
+            for kind, rows in (("organization", organizations), ("information_system", systems)):
+                for row in rows:
+                    row["path"] = [item["name"] for item in perimeter_path(repo, kind, str(row["id"]))]
+            return {"organizations": organizations, "information_systems": systems, "associations": links}
+
+    @app.post("/api/perimeters/{kind}")
+    def create_perimeter_route(kind: str, request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if principal.role != "ADMIN":
+            raise HTTPException(status_code=403, detail="Only administrators can manage perimeters")
+        with Repository(db_path) as repo:
+            try:
+                return create_perimeter(repo, _perimeter_kind(kind), payload)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/api/perimeters/{kind}/{identifier}")
+    def update_perimeter_route(kind: str, identifier: str, request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if principal.role != "ADMIN":
+            raise HTTPException(status_code=403, detail="Only administrators can manage perimeters")
+        with Repository(db_path) as repo:
+            try:
+                return update_perimeter(repo, _perimeter_kind(kind), identifier, payload)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/perimeters/{kind}/{identifier}/descendants")
+    def perimeter_descendants_route(kind: str, identifier: str, request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            try:
+                return {"items": perimeter_descendants(repo, _perimeter_kind(kind), identifier)}
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/perimeters/{kind}/{identifier}/path")
+    def perimeter_path_route(kind: str, identifier: str, request: Request):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            try:
+                return {"items": perimeter_path(repo, _perimeter_kind(kind), identifier)}
+            except ValueError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/perimeters/associations")
+    def create_perimeter_association(request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if principal.role != "ADMIN":
+            raise HTTPException(status_code=403, detail="Only administrators can manage perimeters")
+        with Repository(db_path) as repo:
+            try:
+                return associate_perimeter(repo, str(payload.get("organization_id")), str(payload.get("information_system_id")))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/perimeters/associations/{organization_id}/{information_system_id}")
+    def delete_perimeter_association(organization_id: str, information_system_id: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if principal.role != "ADMIN":
+            raise HTTPException(status_code=403, detail="Only administrators can manage perimeters")
+        with Repository(db_path) as repo:
+            return {"removed": unassociate_perimeter(repo, organization_id, information_system_id)}
+
+    @app.post("/api/perimeters/assignments")
+    def create_perimeter_assignment(request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if principal.role != "ADMIN":
+            raise HTTPException(status_code=403, detail="Only administrators can manage perimeters")
+        with Repository(db_path) as repo:
+            try:
+                return assign_perimeter(repo, payload)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/perimeters/assignments")
+    def list_perimeter_assignments(request: Request, object_type: str, object_id: str):
+        _require(current_user(request), ("ADMIN", "OPERATOR"))
+        with Repository(db_path) as repo:
+            return {"items": object_assignments(repo, object_type, object_id)}
+
     def _chatbot_status(principal: WebPrincipal) -> dict[str, bool]:
         user = _stored_user(principal.username)
         return chatbot_access_status(ChatbotConfig.from_env(), chatbot_enabled(system_conn), user)
@@ -540,7 +654,7 @@ def create_app(db_path: str | None = None) -> Any:
         if not can_use_chatbot(
             ChatbotConfig.from_env(), chatbot_enabled(system_conn), _stored_user(principal.username)
         ):
-            raise HTTPException(status_code=403, detail="Assistant access is disabled.")
+            raise HTTPException(status_code=403, detail="Chatbot access is disabled.")
         return principal
 
     def record_audit(
@@ -573,7 +687,7 @@ def create_app(db_path: str | None = None) -> Any:
 
     @app.post("/api/chatbot/message")
     def chatbot_message(request: Request, payload: dict[str, Any] = Body(...)):
-        """Bounded EARE assistant endpoint; all identity and scope data comes from the session."""
+        """Bounded EARE chatbot endpoint; all identity and scope data comes from the session."""
         principal = _require_chatbot_access(request)
         question = payload.get("message")
         if not isinstance(question, str):
@@ -1997,6 +2111,9 @@ def create_app(db_path: str | None = None) -> Any:
         offset: int = 0,
         sort: str | None = None,
         order: str | None = None,
+        organization: str | None = None,
+        information_system: str | None = None,
+        include_descendants: bool = False,
     ):
         """Read what the Golden Source currently expects, so it can be reviewed in the WebUI."""
         _require(current_user(request), ("ADMIN", "OPERATOR"))
@@ -2370,6 +2487,40 @@ def create_app(db_path: str | None = None) -> Any:
                 row["identities"].sort(
                     key=lambda entry: str(entry["identity_display_name"]).casefold()
                 )
+            scope_assignments = repo.list_payloads("scope_assignments")
+            organizations = {str(item["id"]): item for item in perimeter_all(repo, "organization")}
+            information_systems = {str(item["id"]): item for item in perimeter_all(repo, "information_system")}
+            selected = {
+                "organization": {value for value in str(organization or "").split(",") if value},
+                "information_system": {value for value in str(information_system or "").split(",") if value},
+            }
+            if include_descendants:
+                for kind, values in selected.items():
+                    for value in tuple(values):
+                        values.update(str(item["id"]) for item in perimeter_descendants(repo, kind, value))
+            identity_ids = {
+                (str(item.get("provider")), str(item.get("identifier"))): str(item.get("id"))
+                for item in repo.list_payloads("identities")
+            }
+            for row in rows:
+                object_ids = {str(row.get("access_id") or ""), f"{row.get('access_provider')}:{row.get('access_name')}"}
+                object_ids.update(identity_ids.get((str(item.get("identity_provider")), str(item.get("identity_identifier"))), "") for item in row["identities"])
+                tags = []
+                for assignment in scope_assignments:
+                    if assignment.get("object_id") not in object_ids:
+                        continue
+                    scope_type = str(assignment.get("scope_type"))
+                    catalog = organizations if scope_type == "organization" else information_systems
+                    scope = catalog.get(str(assignment.get("scope_id")))
+                    if scope:
+                        tags.append({"id": scope["id"], "name": scope["name"], "type": scope_type, "path": [item["name"] for item in perimeter_path(repo, scope_type, str(scope["id"]))]})
+                row["perimeters"] = sorted({(tag["type"], tag["id"]): tag for tag in tags}.values(), key=lambda tag: (tag["type"], str(tag["name"]).casefold()))
+            if selected["organization"] or selected["information_system"]:
+                rows = [
+                    row for row in rows
+                    if (not selected["organization"] or any(tag["type"] == "organization" and tag["id"] in selected["organization"] for tag in row["perimeters"]))
+                    and (not selected["information_system"] or any(tag["type"] == "information_system" and tag["id"] in selected["information_system"] for tag in row["perimeters"]))
+                ]
             application_options = sorted(
                 {
                     application
@@ -3834,7 +3985,7 @@ def create_app(db_path: str | None = None) -> Any:
                         snapshot = _snapshot(repo, campaign.snapshot_id)
                         golden = _golden_version(repo, campaign.golden_source_version_id)
                         preparation = prepare_campaign_review(
-                            campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot)
+                            campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo)
                         )
                         preview = preview_campaign_review(
                             campaign, snapshot, golden, preparation=preparation
@@ -4002,7 +4153,7 @@ def create_app(db_path: str | None = None) -> Any:
         snapshot = _snapshot(repo, campaign.snapshot_id)
         golden = _golden_version(repo, campaign.golden_source_version_id)
         return prepare_campaign_review(
-            campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot)
+            campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo)
         )
 
     def _campaign_required_providers(campaign, repo: Repository, preparation=None) -> set[str]:
@@ -4190,7 +4341,7 @@ def create_app(db_path: str | None = None) -> Any:
             golden = _golden_version(repo, campaign.golden_source_version_id)
             try:
                 preparation = prepare_campaign_review(
-                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot)
+                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo)
                 )
                 _require_campaign_access(principal, campaign, repo, preparation)
                 return preview_campaign_review(campaign, snapshot, golden, preparation=preparation)
@@ -4208,7 +4359,7 @@ def create_app(db_path: str | None = None) -> Any:
             golden = _golden_version(repo, campaign.golden_source_version_id)
             try:
                 preparation = prepare_campaign_review(
-                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot)
+                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo)
                 )
                 _require_campaign_access(principal, campaign, repo, preparation)
             except HTTPException:
@@ -4245,7 +4396,7 @@ def create_app(db_path: str | None = None) -> Any:
                 snapshot = _snapshot(repo, campaign.snapshot_id)
                 golden = _golden_version(repo, campaign.golden_source_version_id)
                 preparation = prepare_campaign_review(
-                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot)
+                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo)
                 )
                 _require_campaign_access(principal, campaign, repo, preparation)
             except HTTPException:

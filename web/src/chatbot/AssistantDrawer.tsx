@@ -71,14 +71,14 @@ export function AssistantDrawer({ route, role = "ADMIN", close }: { route: strin
         }
       }
     } catch (error) {
-      setMessages((items) => [...items, { role: "assistant", content: error instanceof Error ? error.message : "Assistant indisponible." }]);
+      setMessages((items) => [...items, { role: "assistant", content: error instanceof Error ? error.message : "Chatbot indisponible." }]);
     } finally {
       setLoading(false);
     }
   };
   return (
-    <aside className="chatbot-drawer" aria-label="Assistant EARE">
-      <div className="chatbot-header"><strong>Assistant EARE</strong><button className="text-button" onClick={close}>×</button></div>
+    <aside className="chatbot-drawer" aria-label="Chatbot EARE">
+      <div className="chatbot-header"><strong>Chatbot EARE</strong><button className="text-button" onClick={close}>×</button></div>
       <div className="chatbot-messages">
         {!messages.length ? <p className="muted">Je peux vous aider à comprendre EARE, vos campagnes, vos revues et votre Golden Source.</p> : null}
         {messages.map((item, index) => {
@@ -93,7 +93,7 @@ export function AssistantDrawer({ route, role = "ADMIN", close }: { route: strin
         {assistantSuggestions(route, role).map((suggestion) => <button key={suggestion} onClick={() => void send(suggestion)}>{suggestion}</button>)}
       </div>
       <form className="chatbot-form" onSubmit={(event) => { event.preventDefault(); void send(); }}>
-        <input value={value} maxLength={8000} onChange={(event) => setValue(event.target.value)} placeholder="Posez une question sur EARE…" aria-label="Question à l'assistant" />
+        <input value={value} maxLength={8000} onChange={(event) => setValue(event.target.value)} placeholder="Posez une question au chatbot EARE…" aria-label="Question au chatbot" />
         <button className="button primary" disabled={loading || !value.trim()}>Envoyer</button>
       </form>
     </aside>

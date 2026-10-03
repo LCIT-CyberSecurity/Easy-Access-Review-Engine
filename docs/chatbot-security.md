@@ -1,4 +1,4 @@
-# EARE Assistant security model
+# EARE Chatbot security model
 
 The authorization layer is the security boundary. The LLM is untrusted and cannot authorize
 itself, change tool policy, construct URLs, or perform business writes.

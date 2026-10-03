@@ -16,7 +16,7 @@ from access_review_engine.chatbot.conversation import (
 from access_review_engine.chatbot.observability.audit import record as record_audit
 from access_review_engine.chatbot.observability.traces import record as record_trace
 from access_review_engine.chatbot.prompts import (
-    ASSISTANT_PROMPT_VERSION,
+    CHATBOT_PROMPT_VERSION,
     SCOPE_POLICY_VERSION,
     SECURITY_POLICY_VERSION,
     TOOL_POLICY_VERSION,
@@ -43,11 +43,11 @@ from access_review_engine.chatbot.tools.registry import (
 from access_review_engine.storage import Repository
 
 OUT_OF_SCOPE = (
-    "Je suis l'assistant EARE. Je peux vous aider à utiliser le produit, comprendre vos "
+    "Je suis le chatbot EARE. Je peux vous aider à utiliser le produit, comprendre vos "
     "campagnes, vos revues, votre Golden Source et vos résultats."
 )
 SUSPICIOUS = "Je peux uniquement aider à comprendre et utiliser EARE dans votre périmètre autorisé."
-UNAVAILABLE = "Assistant IA temporairement indisponible."
+UNAVAILABLE = "Chatbot IA temporairement indisponible."
 
 
 class AssistantService:
@@ -200,7 +200,7 @@ class AssistantService:
                     ),
                     "model": self.config.model,
                     "intent": intent,
-                    "prompt_version": ASSISTANT_PROMPT_VERSION,
+                    "prompt_version": CHATBOT_PROMPT_VERSION,
                     "scope_policy_version": SCOPE_POLICY_VERSION,
                     "tool_policy_version": TOOL_POLICY_VERSION,
                     "security_policy_version": SECURITY_POLICY_VERSION,
@@ -247,7 +247,7 @@ class AssistantService:
             "message_id": None, "user_id": context.subject,
             "question": question[:2000], "answer": answer[:4000],
             "provider": "none", "model": None, "intent": intent,
-            "prompt_version": ASSISTANT_PROMPT_VERSION,
+            "prompt_version": CHATBOT_PROMPT_VERSION,
             "scope_policy_version": SCOPE_POLICY_VERSION,
             "tool_policy_version": TOOL_POLICY_VERSION,
             "security_policy_version": SECURITY_POLICY_VERSION,
@@ -338,7 +338,7 @@ class AssistantService:
         principal_resolver: Callable[[], Any] | None,
     ) -> tuple[ProviderResult, AuthorizationContext]:
         if self.provider is None:
-            raise ProviderError("Assistant provider is unavailable")
+            raise ProviderError("Chatbot provider is unavailable")
         messages: list[dict[str, Any]] = [
             {"role": row["role"], "content": row["content"]}
             for row in store.history(conversation_id, self.config.max_history_messages)
@@ -352,7 +352,7 @@ class AssistantService:
         for _ in range(self.config.max_tool_rounds):
             context_size = len(json.dumps(messages, ensure_ascii=False, default=str))
             if context_size > self.config.max_context_chars:
-                raise ValueError("Assistant context limit exceeded")
+                raise ValueError("Chatbot context limit exceeded")
             result = self.provider.generate(messages, TOOL_SCHEMAS)
             input_tokens += int(result.usage.get("input_tokens", 0) or 0)
             output_tokens += int(result.usage.get("output_tokens", 0) or 0)
@@ -377,7 +377,7 @@ class AssistantService:
                     })
                     raise ValueError("Tool call limit exceeded")
                 if not call.call_id or call.call_id in call_ids:
-                    raise ProviderError("Assistant returned invalid tool call id")
+                    raise ProviderError("Chatbot returned invalid tool call id")
                 call_ids.add(call.call_id)
                 if principal_resolver is not None:
                     refreshed = principal_resolver()

@@ -1,1 +1,1 @@
-"""Input, output and data-firewall controls for the assistant."""
+"""Input, output and data-firewall controls for the chatbot."""
