@@ -3998,6 +3998,38 @@ def create_app(db_path: str | None = None) -> Any:
             allowed["id"] = draft_id
         return Campaign(**allowed)
 
+    def _campaign_reviewer_assignments(payload: dict[str, Any] | None) -> dict[tuple[str, str], OwnerRef]:
+        """Validate temporary campaign assignments for unresolved access groups."""
+        if not payload or payload.get("reviewer_assignments") is None:
+            return {}
+        raw_assignments = payload.get("reviewer_assignments")
+        if not isinstance(raw_assignments, list):
+            raise HTTPException(status_code=400, detail="reviewer_assignments must be a list")
+        assignments: dict[tuple[str, str], OwnerRef] = {}
+        for raw in raw_assignments:
+            if not isinstance(raw, dict):
+                raise HTTPException(status_code=400, detail="Invalid reviewer assignment")
+            provider = str(raw.get("access_provider") or "").strip()
+            access_name = str(raw.get("access_name") or "").strip()
+            username = str(raw.get("reviewer_username") or "").strip().lower()
+            if not provider or not access_name or not username:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Reviewer assignments require access_provider, access_name and reviewer_username",
+                )
+            user = _stored_user(username)
+            if (
+                user is None
+                or not user.get("enabled", True)
+                or user.get("role") not in {"ADMIN", "OPERATOR"}
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Reviewer must be an enabled ADMIN or OPERATOR account",
+                )
+            assignments[(provider, access_name)] = OwnerRef(LOCAL_SOURCE, username)
+        return assignments
+
     def _prepare_campaign(repo: Repository, campaign):
         snapshot = _snapshot(repo, campaign.snapshot_id)
         golden = _golden_version(repo, campaign.golden_source_version_id)
@@ -4287,6 +4319,7 @@ def create_app(db_path: str | None = None) -> Any:
                 )
             if payload and "allow_unresolved_reviewers" in payload:
                 campaign.allow_unresolved_reviewers = bool(payload["allow_unresolved_reviewers"])
+            reviewer_assignments = _campaign_reviewer_assignments(payload)
             snapshot = _snapshot(repo, campaign.snapshot_id)
             try:
                 preparation = _prepare_campaign(repo, campaign)
@@ -4299,7 +4332,12 @@ def create_app(db_path: str | None = None) -> Any:
                 fallback_reviewer = None
                 if campaign.allow_unresolved_reviewers:
                     fallback_reviewer = campaign.manager or OwnerRef(LOCAL_SOURCE, campaign.pilot)
-                opened, items = open_campaign(campaign, preparation.snapshot, fallback_reviewer)
+                opened, items = open_campaign(
+                    campaign,
+                    preparation.snapshot,
+                    fallback_reviewer,
+                    reviewer_assignments,
+                )
             except HTTPException:
                 raise
             except ValueError as exc:
