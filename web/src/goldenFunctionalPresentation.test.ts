@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { functionalRightsGroups, goldenFunctionalPresentation } from "./goldenFunctionalPresentation";
+import { capabilityPresentation, functionalRightsGroups, goldenFunctionalPresentation, originShortLabel } from "./goldenFunctionalPresentation";
 
 const right = (resource: string, capability: string, label = capability) => ({
   resource: { identifier: resource, display_name: resource },
@@ -9,6 +9,29 @@ const right = (resource: string, capability: string, label = capability) => ({
 });
 
 describe("goldenFunctionalPresentation", () => {
+  it("maps standard capabilities to compact labels without changing their full labels", () => {
+    expect(capabilityPresentation("read")).toEqual({ shortLabel: "R", fullLabel: "Read" });
+    expect(capabilityPresentation("write")).toEqual({ shortLabel: "W", fullLabel: "Write" });
+    expect(capabilityPresentation("delete")).toEqual({ shortLabel: "D", fullLabel: "Delete" });
+    expect(capabilityPresentation("execute")).toEqual({ shortLabel: "X", fullLabel: "Execute" });
+    expect(capabilityPresentation("approve")).toEqual({ shortLabel: "A", fullLabel: "Approve" });
+    expect(capabilityPresentation("grant")).toEqual({ shortLabel: "G", fullLabel: "Grant" });
+    expect(capabilityPresentation("admin")).toEqual({ shortLabel: "ADM", fullLabel: "Admin" });
+  });
+
+  it("keeps custom capabilities and their full tooltip label", () => {
+    expect(capabilityPresentation("Sign")).toEqual({ shortLabel: "SIGN", fullLabel: "Sign" });
+    expect(capabilityPresentation("impersonate")).toEqual({ shortLabel: "IMPE…", fullLabel: "impersonate" });
+  });
+
+  it("shortens provenance only for presentation", () => {
+    expect(originShortLabel("Manually defined in Golden")).toBe("Manual");
+    expect(originShortLabel("Validated in Golden")).toBe("Validated");
+    expect(originShortLabel("Golden extends source")).toBe("Extended");
+    expect(originShortLabel("Functional authorization changed")).toBe("Changed");
+    expect(originShortLabel("Observed from source")).toBe("Observed");
+  });
+
   it("renders complete expected rights and stable capability order", () => {
     const result = goldenFunctionalPresentation({
       application: "ERP",

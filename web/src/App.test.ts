@@ -180,11 +180,16 @@ describe("Campaign review labels", () => {
     }));
     expect(html).toContain('class="functional-rights-group"');
     expect(html).toContain("Invoices");
-    expect(html).toContain("Read · Approve");
+    expect(html).toContain('title="Read"');
+    expect(html).toContain('title="Approve"');
+    expect(html).toContain(">R</span>");
+    expect(html).toContain(">A</span>");
     expect(html).toContain("Suppliers");
     expect(html).toContain("Partial");
     expect(html).toContain("functional-status-partial");
-    expect(html).toContain('aria-label="Partial: Some expected functional rights are not fully defined. · Manually defined in Golden"');
+    expect(html).toContain('title="Some expected functional rights are not fully defined."');
+    expect(html).toContain('title="Manually defined in Golden"');
+    expect(html).toContain("Manual");
     expect(html).not.toContain("<small>Manually defined in Golden</small>");
   });
 });
