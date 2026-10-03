@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from sqlalchemy import Column, Index, Integer, MetaData, Table, Text, delete, insert, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+from access_review_engine.database import (
+    DatabaseConnection,
+    database_url,
+    make_engine,
+    safe_identifier,
+)
 from access_review_engine.domain import (
     SYSTEM_CAPABILITIES,
     Access,
@@ -70,104 +79,140 @@ TABLES = {
 }
 
 
+def repository_metadata() -> tuple[MetaData, dict[str, Table]]:
+    """Describe only the existing persistence tables; domain payloads stay opaque TEXT."""
+    metadata = MetaData()
+    tables = {
+        name: Table(
+            name,
+            metadata,
+            Column("id", Text, primary_key=True),
+            Column("payload", Text, nullable=False),
+            Column("created_at", Text),
+            Column("provider", Text),
+            Column("name", Text),
+            Column("version", Integer),
+        )
+        for name in TABLES
+    }
+    Index("uq_providers_name", tables["providers"].c.name, unique=True)
+    Index(
+        "uq_identity_ref", tables["identities"].c.provider, tables["identities"].c.name, unique=True
+    )
+    Index("uq_access_ref", tables["accesses"].c.provider, tables["accesses"].c.name, unique=True)
+    Index(
+        "ix_assignments_access",
+        tables["access_assignments"].c.provider,
+        tables["access_assignments"].c.name,
+    )
+    Index("ix_assignments_identity", tables["access_assignments"].c.provider)
+    Index(
+        "uq_access_relation_ref",
+        tables["access_relations"].c.provider,
+        tables["access_relations"].c.name,
+        unique=True,
+    )
+    Index(
+        "ix_access_relations_parent",
+        tables["access_relations"].c.provider,
+        tables["access_relations"].c.name,
+    )
+    Index("uq_golden_source_name", tables["golden_sources"].c.name, unique=True)
+    Index(
+        "uq_golden_version",
+        tables["golden_source_versions"].c.name,
+        tables["golden_source_versions"].c.version,
+        unique=True,
+    )
+    return metadata, tables
+
+
+def create_repository_schema(connection: Any) -> dict[str, Table]:
+    """Create the current schema and dialect-specific expression indexes."""
+    metadata, tables = repository_metadata()
+    metadata.create_all(connection)
+    if connection.dialect.name == "postgresql":
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_snapshot_functional_models_snapshot "
+            "ON snapshot_functional_access_models ((payload::json ->> 'snapshot_id'))"
+        )
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_access_relations_child "
+            "ON access_relations ((payload::json ->> 'child_provider'), "
+            "(payload::json ->> 'child_access_name'))"
+        )
+    else:
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_snapshot_functional_models_snapshot "
+            "ON snapshot_functional_access_models(json_extract(payload, '$.snapshot_id'))"
+        )
+        connection.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_access_relations_child "
+            "ON access_relations(json_extract(payload, '$.child_provider'), "
+            "json_extract(payload, '$.child_access_name'))"
+        )
+    return tables
+
+
 class Repository:
-    """Small SQLite repository for the MVP.
+    """Synchronous SQLAlchemy Core repository backed by SQLite or PostgreSQL.
 
     Rows are stored as canonical JSON payloads to keep the domain model independent while preserving
     explicit table boundaries expected by the later SQLAlchemy/Alembic implementation.
     """
 
-    def __init__(self, path: str | Path = "access-review.db") -> None:
-        self.path = str(path)
-        # WebUI requests initialize/read the same SQLite database concurrently.
-        # Wait briefly for a competing schema or job transaction instead of
-        # turning normal request overlap into a 500 response.
-        self.conn = sqlite3.connect(self.path, timeout=30)
-        self.conn.row_factory = sqlite3.Row
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.engine = make_engine(database_url(path))
+        self.path = self.engine.url.render_as_string(hide_password=True)
+        self.conn = DatabaseConnection(self.engine.connect())
+        self._tables: dict[str, Table] = {}
         self._transaction_depth = 0
         self.init_schema()
 
     def __enter__(self) -> Repository:
         return self
 
-    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> bool:
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> Literal[False]:
         self.close()
         return False
 
     def init_schema(self) -> None:
-        cur = self.conn.cursor()
-        for table in sorted(TABLES):
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {table} (
-                    id TEXT PRIMARY KEY,
-                    payload TEXT NOT NULL,
-                    created_at TEXT,
-                    provider TEXT,
-                    name TEXT,
-                    version INTEGER
-                )
-                """
-            )
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_providers_name ON providers(name)")
-        cur.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_identity_ref ON identities(provider, name)"
-        )
-        cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_access_ref ON accesses(provider, name)")
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS ix_assignments_access ON access_assignments(provider, name)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS ix_assignments_identity ON access_assignments(provider)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS ix_snapshot_functional_models_snapshot "
-            "ON snapshot_functional_access_models(json_extract(payload, '$.snapshot_id'))"
-        )
-        cur.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_access_relation_ref "
-            "ON access_relations(provider, name)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS ix_access_relations_parent "
-            "ON access_relations(provider, name)"
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS ix_access_relations_child "
-            "ON access_relations("
-            "json_extract(payload, '$.child_provider'), "
-            "json_extract(payload, '$.child_access_name'))"
-        )
-        cur.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_golden_source_name ON golden_sources(name)"
-        )
-        cur.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_golden_version "
-            "ON golden_source_versions(name, version)"
-        )
+        tables = create_repository_schema(self.conn.raw)
+        self._tables = tables
         for capability in SYSTEM_CAPABILITIES:
             payload = json.dumps(asdict(capability), sort_keys=True, separators=(",", ":"))
-            cur.execute(
-                "INSERT OR IGNORE INTO capabilities (id, payload, name) VALUES (?, ?, ?)",
-                (capability.id, payload, capability.id),
+            statement = (pg_insert if self.conn.dialect_name == "postgresql" else sqlite_insert)(
+                tables["capabilities"]
+            )
+            self.conn.raw.execute(
+                statement.values(
+                    id=capability.id, payload=payload, name=capability.id
+                ).on_conflict_do_nothing(index_elements=[tables["capabilities"].c.id])
             )
         self.conn.commit()
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
         outermost = self._transaction_depth == 0
-        if outermost:
-            self.conn.execute("BEGIN")
+        # SQLAlchemy autobegins a transaction even for SELECTs; the legacy sqlite3
+        # connection did not. Finish that read-only unit before the explicit scope.
+        if outermost and self.conn.raw.in_transaction():
+            self.conn.commit()
+        transaction = self.conn.raw.begin() if outermost else None
         self._transaction_depth += 1
         try:
             yield
         except Exception:
             if outermost:
-                self.conn.rollback()
+                assert transaction is not None
+                if transaction.is_active:
+                    transaction.rollback()
             raise
         else:
             if outermost:
-                self.conn.commit()
+                assert transaction is not None
+                if transaction.is_active:
+                    transaction.commit()
         finally:
             self._transaction_depth -= 1
 
@@ -177,55 +222,64 @@ class Repository:
 
     def close(self) -> None:
         self.conn.close()
+        self.engine.dispose()
+
+    def _table(self, name: str) -> Table:
+        return self._tables[safe_identifier(name, TABLES)]
 
     def upsert(self, table: str, obj: Any) -> None:
+        table_object = self._table(table)
         payload = self._payload(obj)
+        dialect_insert = pg_insert if self.conn.dialect_name == "postgresql" else sqlite_insert
+        statement = dialect_insert(table_object).values(**self._row(obj, payload))
         self.conn.execute(
-            f"""
-            INSERT INTO {table} (id, payload, created_at, provider, name, version)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              payload=excluded.payload,
-              created_at=excluded.created_at,
-              provider=excluded.provider,
-              name=excluded.name,
-              version=excluded.version
-            """,
-            self._row(obj, payload),
+            statement.on_conflict_do_update(
+                index_elements=[table_object.c.id],
+                set_={
+                    column: getattr(statement.excluded, column)
+                    for column in ("payload", "created_at", "provider", "name", "version")
+                },
+            )
         )
         self._commit_unless_in_transaction()
 
     def insert_append_only(self, table: str, obj: Any) -> None:
+        table_object = self._table(table)
         payload = self._payload(obj)
-        self.conn.execute(
-            f"INSERT INTO {table} (id, payload, created_at, provider, name, version) VALUES (?, ?, ?, ?, ?, ?)",
-            self._row(obj, payload),
-        )
+        self.conn.execute(insert(table_object).values(**self._row(obj, payload)))
         self._commit_unless_in_transaction()
 
     def delete_ids(self, table: str, object_ids: set[str]) -> None:
-        for object_id in object_ids:
-            self.conn.execute(f"DELETE FROM {table} WHERE id = ?", (object_id,))
+        table_object = self._table(table)
+        if object_ids:
+            self.conn.execute(delete(table_object).where(table_object.c.id.in_(object_ids)))
         self._commit_unless_in_transaction()
 
     def list_payloads(self, table: str) -> list[dict[str, Any]]:
-        return [
-            json.loads(row["payload"])
-            for row in self.conn.execute(f"SELECT payload FROM {table} ORDER BY created_at, id")
-        ]
-
-    def list_payloads_by_provider(self, table: str, provider: str) -> list[dict[str, Any]]:
+        table_object = self._table(table)
         return [
             json.loads(row["payload"])
             for row in self.conn.execute(
-                f"SELECT payload FROM {table} WHERE provider = ? ORDER BY created_at, id",
-                (provider,),
+                select(table_object.c.payload).order_by(
+                    table_object.c.created_at.asc().nulls_first(), table_object.c.id
+                )
+            )
+        ]
+
+    def list_payloads_by_provider(self, table: str, provider: str) -> list[dict[str, Any]]:
+        table_object = self._table(table)
+        return [
+            json.loads(row["payload"])
+            for row in self.conn.execute(
+                select(table_object.c.payload)
+                .where(table_object.c.provider == provider)
+                .order_by(table_object.c.created_at.asc().nulls_first(), table_object.c.id)
             )
         ]
 
     def get_payload(self, table: str, object_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
-            f"SELECT payload FROM {table} WHERE id = ?", (object_id,)
+            select(self._table(table).c.payload).where(self._table(table).c.id == object_id)
         ).fetchone()
         return None if row is None else json.loads(row["payload"])
 
@@ -258,30 +312,48 @@ class Repository:
 
     def load_snapshot_functional_models(self, snapshot_id: str) -> list[dict[str, Any]]:
         """Read only the immutable models attached to one snapshot."""
+        if self.conn.dialect_name == "postgresql":
+            query = text(
+                "SELECT payload FROM snapshot_functional_access_models "
+                "WHERE payload::json ->> 'snapshot_id' = :snapshot_id "
+                "ORDER BY provider NULLS FIRST, id"
+            )
+        else:
+            query = text(
+                "SELECT payload FROM snapshot_functional_access_models "
+                "WHERE json_extract(payload, '$.snapshot_id') = :snapshot_id "
+                "ORDER BY provider NULLS FIRST, id"
+            )
         return [
             json.loads(row["payload"])
             for row in self.conn.execute(
-                "SELECT payload FROM snapshot_functional_access_models "
-                "WHERE json_extract(payload, '$.snapshot_id') = ? ORDER BY provider, id",
-                (snapshot_id,),
+                query,
+                {"snapshot_id": snapshot_id},
             )
         ]
 
     def find_by_name(self, table: str, name: str) -> dict[str, Any] | None:
-        row = self.conn.execute(f"SELECT payload FROM {table} WHERE name = ?", (name,)).fetchone()
+        table_object = self._table(table)
+        row = self.conn.execute(
+            select(table_object.c.payload).where(table_object.c.name == name)
+        ).fetchone()
         return None if row is None else json.loads(row["payload"])
 
     def find_by_provider_name(self, table: str, provider: str, name: str) -> dict[str, Any] | None:
+        table_object = self._table(table)
         row = self.conn.execute(
-            f"SELECT payload FROM {table} WHERE provider = ? AND name = ?",
-            (provider, name),
+            select(table_object.c.payload).where(
+                table_object.c.provider == provider, table_object.c.name == name
+            )
         ).fetchone()
         return None if row is None else json.loads(row["payload"])
 
     def find_version(self, golden_source_id: str, version: int) -> dict[str, Any] | None:
+        table = self._tables["golden_source_versions"]
         row = self.conn.execute(
-            "SELECT payload FROM golden_source_versions WHERE name = ? AND version = ?",
-            (golden_source_id, version),
+            select(table.c.payload).where(
+                table.c.name == golden_source_id, table.c.version == version
+            )
         ).fetchone()
         return None if row is None else json.loads(row["payload"])
 
@@ -352,13 +424,12 @@ class Repository:
         scoped_providers = providers or {assignment.provider for assignment in assignments}
         if not scoped_providers:
             return
+        table = self._tables["access_assignments"]
         for provider in scoped_providers:
-            self.conn.execute("DELETE FROM access_assignments WHERE provider = ?", (provider,))
+            self.conn.execute(delete(table).where(table.c.provider == provider))
         for assignment in assignments:
             self.conn.execute(
-                "INSERT INTO access_assignments (id, payload, created_at, provider, name, version) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                self._row(assignment, self._payload(assignment)),
+                insert(table).values(**self._row(assignment, self._payload(assignment)))
             )
         self._commit_unless_in_transaction()
 
@@ -368,18 +439,15 @@ class Repository:
         scoped_providers = providers or {relation.parent_provider for relation in relations}
         if not scoped_providers:
             return
+        table = self._tables["access_relations"]
         seen: set[tuple[str, str, str, str, str, str]] = set()
         for provider in scoped_providers:
-            self.conn.execute("DELETE FROM access_relations WHERE provider = ?", (provider,))
+            self.conn.execute(delete(table).where(table.c.provider == provider))
         for relation in relations:
             if relation.key() in seen:
                 continue
             seen.add(relation.key())
-            self.conn.execute(
-                "INSERT INTO access_relations (id, payload, created_at, provider, name, version) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                self._row(relation, self._payload(relation)),
-            )
+            self.conn.execute(insert(table).values(**self._row(relation, self._payload(relation))))
         self._commit_unless_in_transaction()
 
     def _payload(self, obj: Any) -> str:
@@ -389,7 +457,7 @@ class Repository:
             data = asdict(obj)
         return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
-    def _row(self, obj: Any, payload: str) -> tuple[Any, ...]:
+    def _row(self, obj: Any, payload: str) -> dict[str, Any]:
         data = json.loads(payload)
         provider = (
             data.get("provider") or data.get("access_provider") or data.get("identity_provider")
@@ -404,14 +472,14 @@ class Repository:
         if isinstance(obj, AccessRelation):
             provider = obj.parent_provider
             name = ":".join(obj.key())
-        return (
-            data["id"],
-            payload,
-            data.get("created_at"),
-            provider,
-            name,
-            data.get("version"),
-        )
+        return {
+            "id": data["id"],
+            "payload": payload,
+            "created_at": data.get("created_at"),
+            "provider": provider,
+            "name": name,
+            "version": data.get("version"),
+        }
 
 
 def hydrate_provider(data: dict[str, Any]) -> Provider:
