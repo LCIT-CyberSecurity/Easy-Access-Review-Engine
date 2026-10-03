@@ -175,11 +175,6 @@ def validate_selection_data(
     if not scope:
         return
     by_id = {str(row.get("id")): row for row in nodes}
-    associations_by_org: dict[str, set[str]] = {}
-    for row in links:
-        associations_by_org.setdefault(str(row.get("organization_id")), set()).add(
-            str(row.get("information_system_id"))
-        )
     for kind, field in (("organization", "organizations"), ("information_system", "information_systems")):
         selected = scope.get(field, [])
         if not isinstance(selected, list):
@@ -190,10 +185,6 @@ def validate_selection_data(
                 raise ValueError(f"{kind.replace('_', ' ').capitalize()} not found")
             if not row.get("active", True):
                 raise ValueError(f"Cannot target inactive {kind.replace('_', ' ')}: {row.get('name')}")
-            if kind == "organization" and not associations_by_org.get(str(identifier)):
-                raise ValueError(
-                    f"Active organization '{row.get('name')}' must have at least one associated information system"
-                )
 
 
 def object_assignments(repo: Any, object_type: str, object_id: str) -> list[dict[str, Any]]:
