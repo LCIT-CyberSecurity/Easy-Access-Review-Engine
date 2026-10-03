@@ -109,6 +109,7 @@ from access_review_engine.perimeters import (
     associations as perimeter_associations,
     assign as assign_perimeter,
     create_perimeter,
+    delete_perimeter,
     descendants as perimeter_descendants,
     object_assignments,
     path as perimeter_path,
@@ -599,6 +600,17 @@ def create_app(db_path: str | None = None) -> Any:
                 return update_perimeter(repo, _perimeter_kind(kind), identifier, payload)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/perimeters/{kind}/{identifier}")
+    def delete_perimeter_route(kind: str, identifier: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if principal.role != "ADMIN":
+            raise HTTPException(status_code=403, detail="Only administrators can manage perimeters")
+        with Repository(db_path) as repo:
+            try:
+                return {"removed": delete_perimeter(repo, _perimeter_kind(kind), identifier)}
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/perimeters/{kind}/{identifier}/descendants")
     def perimeter_descendants_route(kind: str, identifier: str, request: Request):

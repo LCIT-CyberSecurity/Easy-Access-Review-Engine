@@ -2448,6 +2448,9 @@ function Perimeters({ principal }: { principal: Principal }) {
   const [systemParent, setSystemParent] = useState("");
   const [selectedOrganization, setSelectedOrganization] = useState("");
   const [selectedSystem, setSelectedSystem] = useState("");
+  const [organizationSearch, setOrganizationSearch] = useState("");
+  const [systemSearch, setSystemSearch] = useState("");
+  const [editing, setEditing] = useState<Row | null>(null);
   const organizations = arr(query.data?.organizations);
   const systems = arr(query.data?.information_systems);
   const associations = arr(query.data?.associations);
@@ -2465,27 +2468,45 @@ function Perimeters({ principal }: { principal: Principal }) {
     mutationFn: ({ kind, id }: { kind: string; id: string }) => putJson(`perimeters/${kind}/${id}`, { active: false }),
     onSuccess: () => void refresh(),
   });
+  const save = useMutation({
+    mutationFn: (row: Row) => putJson(`perimeters/${s(row.kind)}/${s(row.id)}`, { name: s(row.name), parent_id: row.parent_id || null, active: Boolean(row.active) }),
+    onSuccess: () => { setEditing(null); void refresh(); },
+  });
+  const remove = useMutation({
+    mutationFn: ({ kind, id }: { kind: string; id: string }) => deleteJson(`perimeters/${kind}/${id}`),
+    onSuccess: () => void refresh(),
+  });
+  const removeAssociation = useMutation({
+    mutationFn: ({ organization_id, information_system_id }: { organization_id: string; information_system_id: string }) => deleteJson(`perimeters/associations/${organization_id}/${information_system_id}`),
+    onSuccess: () => void refresh(),
+  });
   if (query.isLoading) return <PageLoading label="Loading perimeters…" />;
   if (query.isError) return <p className="form-error">Unable to load perimeters.</p>;
   const label = (row: Row) => Array.isArray(row.path) ? row.path.join(" › ") : s(row.name);
   const associatedSystems = (organizationId: string) => associations.filter((row) => row.organization_id === organizationId).map((row) => systems.find((item) => item.id === row.information_system_id)).filter(Boolean) as Row[];
   const associatedOrganizations = (systemId: string) => associations.filter((row) => row.information_system_id === systemId).map((row) => organizations.find((item) => item.id === row.organization_id)).filter(Boolean) as Row[];
+  const visibleOrganizations = organizations.filter((row) => label(row).toLowerCase().includes(organizationSearch.toLowerCase()));
+  const visibleSystems = systems.filter((row) => label(row).toLowerCase().includes(systemSearch.toLowerCase()));
+  const editor = editing ? <form className="panel perimeter-editor" onSubmit={(event) => { event.preventDefault(); save.mutate(editing); }}><strong>Edit {editing.kind === "organization" ? "organization" : "information system"}</strong><input value={s(editing.name)} onChange={(event) => setEditing({ ...editing, name: event.target.value })} aria-label="Perimeter name" required /><select value={s(editing.parent_id, "")} onChange={(event) => setEditing({ ...editing, parent_id: event.target.value || null })} aria-label="Perimeter parent"><option value="">Root</option>{(editing.kind === "organization" ? organizations : systems).filter((row) => row.id !== editing.id).map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={save.isPending}>Save</button><button type="button" className="button subtle" onClick={() => setEditing(null)}>Cancel</button></form> : null;
   return (
     <>
       <Head title="Perimeters" subtitle="Classify and target EARE objects without changing access semantics." />
+      {editor}
       <div className="workspace-grid">
         <section className="panel">
           <div className="section-heading"><div><span className="eyebrow">ORGANIZATIONS</span><h2>Organizations</h2></div><span className="muted">{organizations.length}</span></div>
+          <input className="filter-input" value={organizationSearch} onChange={(event) => setOrganizationSearch(event.target.value)} placeholder="Search organizations" aria-label="Search organizations" />
           <div className="perimeter-list">
-            {organizations.map((row) => <div className="perimeter-row" key={s(row.id)}><div><strong>{label(row)}</strong>{!row.active ? <span className="muted"> · inactive</span> : null}<div className="chip-row">{associatedSystems(s(row.id)).map((system) => <span className="application-chip" key={s(system.id)} title={`Information system · ${label(system)}`}>{s(system.name)}</span>)}</div></div>{editable ? <button className="text-button" onClick={() => deactivate.mutate({ kind: "organizations", id: s(row.id) })} disabled={!row.active}>Deactivate</button> : null}</div>)}
+            {visibleOrganizations.map((row) => <div className="perimeter-row" key={s(row.id)}><div><strong>{label(row)}</strong>{!row.active ? <span className="muted"> · inactive</span> : null}<div className="chip-row">{associatedSystems(s(row.id)).map((system) => <span className="application-chip" key={s(system.id)} title={`Information system · ${label(system)}`}>{s(system.name)}</span>)}</div></div>{editable ? <div className="row-actions"><button className="text-button" onClick={() => setEditing({ ...row, kind: "organization" })}>Edit</button><button className="text-button" onClick={() => deactivate.mutate({ kind: "organizations", id: s(row.id) })} disabled={!row.active}>Deactivate</button><button className="text-button" onClick={() => remove.mutate({ kind: "organizations", id: s(row.id) })}>Delete</button></div> : null}</div>)}
             {!organizations.length ? <p className="muted">No organization yet.</p> : null}
           </div>
           {editable ? <form className="inline-form" onSubmit={(event) => { event.preventDefault(); if (organizationName.trim()) create.mutate({ kind: "organizations", name: organizationName, parent_id: organizationParent }); }}><input value={organizationName} onChange={(event) => setOrganizationName(event.target.value)} placeholder="New organization" aria-label="New organization" /><select value={organizationParent} onChange={(event) => setOrganizationParent(event.target.value)} aria-label="Organization parent"><option value="">Root organization</option>{organizations.map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={create.isPending}>Add</button></form> : null}
         </section>
         <section className="panel">
           <div className="section-heading"><div><span className="eyebrow">INFORMATION SYSTEMS</span><h2>Information systems</h2></div><span className="muted">{systems.length}</span></div>
+          <input className="filter-input" value={systemSearch} onChange={(event) => setSystemSearch(event.target.value)} placeholder="Search information systems" aria-label="Search information systems" />
           <div className="perimeter-list">
-            {systems.map((row) => <div className="perimeter-row" key={s(row.id)}><div><strong>{label(row)}</strong>{!row.active ? <span className="muted"> · inactive</span> : null}<div className="chip-row">{associatedOrganizations(s(row.id)).map((organization) => <span className="application-chip" key={s(organization.id)} title={`Organization · ${label(organization)}`}>{s(organization.name)}</span>)}</div></div>{editable ? <button className="text-button" onClick={() => deactivate.mutate({ kind: "information-systems", id: s(row.id) })} disabled={!row.active}>Deactivate</button> : null}</div>)}
+            {visibleSystems.map((row) => <div className="perimeter-row" key={s(row.id)}><div><strong>{label(row)}</strong>{!row.active ? <span className="muted"> · inactive</span> : null}<div className="chip-row">{associatedOrganizations(s(row.id)).map((organization) => <span className="application-chip" key={s(organization.id)} title={`Organization · ${label(organization)}`}>{s(organization.name)}</span>)}</div></div>{editable ? <div className="row-actions"><button className="text-button" onClick={() => setEditing({ ...row, kind: "information_system" })}>Edit</button><button className="text-button" onClick={() => deactivate.mutate({ kind: "information-systems", id: s(row.id) })} disabled={!row.active}>Deactivate</button><button className="text-button" onClick={() => remove.mutate({ kind: "information-systems", id: s(row.id) })}>Delete</button></div> : null}</div>)}
             {!systems.length ? <p className="muted">No information system yet.</p> : null}
           </div>
           {editable ? <form className="inline-form" onSubmit={(event) => { event.preventDefault(); if (systemName.trim()) create.mutate({ kind: "information-systems", name: systemName, parent_id: systemParent }); }}><input value={systemName} onChange={(event) => setSystemName(event.target.value)} placeholder="New information system" aria-label="New information system" /><select value={systemParent} onChange={(event) => setSystemParent(event.target.value)} aria-label="Information system parent"><option value="">Root information system</option>{systems.map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={create.isPending}>Add</button></form> : null}
@@ -2494,7 +2515,7 @@ function Perimeters({ principal }: { principal: Principal }) {
       <section className="panel">
         <div className="section-heading"><div><span className="eyebrow">EXPLICIT ASSOCIATIONS</span><h2>Organization · information system</h2></div></div>
         {editable ? <div className="inline-form"><select value={selectedOrganization} onChange={(event) => setSelectedOrganization(event.target.value)} aria-label="Organization to associate"><option value="">Select organization</option>{organizations.filter((row) => row.active).map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><select value={selectedSystem} onChange={(event) => setSelectedSystem(event.target.value)} aria-label="Information system to associate"><option value="">Select information system</option>{systems.filter((row) => row.active).map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={!selectedOrganization || !selectedSystem || link.isPending} onClick={() => link.mutate()}>Associate</button></div> : null}
-        <div className="chip-row">{associations.map((row) => <span className="application-chip" key={s(row.id)} title={`${s(row.organization_id)} ↔ ${s(row.information_system_id)}`}>{s(organizations.find((item) => item.id === row.organization_id)?.name)} · {s(systems.find((item) => item.id === row.information_system_id)?.name)}</span>)}</div>
+        <div className="chip-row">{associations.map((row) => <span className="application-chip" key={s(row.id)} title={`${s(row.organization_id)} ↔ ${s(row.information_system_id)}`}>{s(organizations.find((item) => item.id === row.organization_id)?.name)} · {s(systems.find((item) => item.id === row.information_system_id)?.name)} {editable ? <button className="chip-remove" aria-label="Remove association" onClick={() => removeAssociation.mutate({ organization_id: s(row.organization_id), information_system_id: s(row.information_system_id) })}>×</button> : null}</span>)}</div>
         {!associations.length ? <p className="muted">No explicit associations yet. Active organizations should have at least one before operational targeting.</p> : null}
       </section>
     </>

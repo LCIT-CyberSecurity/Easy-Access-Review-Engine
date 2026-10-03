@@ -88,6 +88,22 @@ def update_perimeter(repo: Any, kind: str, identifier: str, payload: dict[str, A
     return row
 
 
+def delete_perimeter(repo: Any, kind: str, identifier: str) -> bool:
+    """Delete an unused node; referenced nodes must be deactivated instead."""
+    _get(repo, kind, identifier)
+    if any(str(row.get("parent_id") or "") == identifier for row in _all(repo, kind)):
+        raise ValueError("Cannot delete a perimeter that has children")
+    if any(
+        str(row.get("organization_id" if kind == "organization" else "information_system_id")) == identifier
+        for row in associations(repo)
+    ):
+        raise ValueError("Cannot delete a perimeter with organization/SI associations")
+    if any(str(row.get("scope_id")) == identifier for row in repo.list_payloads("scope_assignments")):
+        raise ValueError("Cannot delete a perimeter with object assignments")
+    repo.delete_ids(ENTITY_TABLES[kind], {identifier})
+    return True
+
+
 def descendants(repo: Any, kind: str, identifier: str) -> list[dict[str, Any]]:
     _get(repo, kind, identifier)
     rows = _all(repo, kind)
