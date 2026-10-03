@@ -162,9 +162,30 @@ describe("Campaign review labels", () => {
       onAction: () => undefined,
     }));
     expect(html).toContain("Not documented");
-    expect(html).toContain("Source does not expose functional permissions.");
+    expect(html).toContain('title="Source does not expose functional permissions."');
+    expect(html).not.toContain("<small>Source does not expose functional permissions.</small>");
     expect(html).toContain("Define functional rights");
     expect(html).toContain("type=\"button\"");
+  });
+  it("keeps resources prominent and renders completeness as a compact accessible status", () => {
+    const html = renderToStaticMarkup(createElement(FunctionalRightsSummary, {
+      row: {
+        completeness: "partial",
+        direct_functional_rights: [
+          { resource: { display_name: "Invoices" }, capability_id: "read", capability_label: "Read" },
+          { resource: { display_name: "Invoices" }, capability_id: "approve", capability_label: "Approve" },
+          { resource: { display_name: "Suppliers" }, capability_id: "read", capability_label: "Read" },
+        ],
+      },
+    }));
+    expect(html).toContain('class="functional-rights-group"');
+    expect(html).toContain("Invoices");
+    expect(html).toContain("Read · Approve");
+    expect(html).toContain("Suppliers");
+    expect(html).toContain("Partial");
+    expect(html).toContain("functional-status-partial");
+    expect(html).toContain('aria-label="Partial: Some expected functional rights are not fully defined. · Manually defined in Golden"');
+    expect(html).not.toContain("<small>Manually defined in Golden</small>");
   });
 });
 

@@ -1731,9 +1731,16 @@ p + .button-row { margin-top: 14px; }
 .functional-rights-summary { display: grid; gap: 5px; min-width: 180px; }
 .functional-rights-groups { display: grid; gap: 3px; }
 .functional-rights-group { display: grid; gap: 1px; }
-.functional-rights-group span { color: var(--text-primary); }
+.functional-rights-group strong { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.functional-rights-group span { color: var(--text-secondary); font-size: 12px; font-weight: 400; }
 .functional-rights-summary > small { color: var(--text-faint); }
-.functional-status { width: fit-content; color: var(--text-muted); font-size: 12px; font-weight: 650; }
+.functional-status { display: inline-flex; align-items: center; gap: 6px; width: fit-content; color: var(--text-muted); font-size: 12px; font-weight: 550; }
+.functional-status::before { content: ""; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--text-faint); }
+.functional-status-complete::before { background: var(--success); }
+.functional-status-partial::before { background: var(--warning); }
+.functional-status-not-documented::before, .functional-status-not-statically-resolved::before { background: var(--text-faint); }
+.functional-status-source-suggestion-available::before { background: var(--info); }
+.functional-status-system-access::before { background: var(--info); }
 /* The action column stays reachable while the grid scrolls sideways. */
 .golden-access-table th:last-child, .golden-access-table td:last-child {
   position: sticky;

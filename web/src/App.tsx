@@ -4484,6 +4484,8 @@ function GoldenFunctionalSuggestions({ rows, onEdit }: { rows: Row[]; onEdit: (r
 
 export function FunctionalRightsSummary({ row, onAction }: { row: Row; onAction?: (action: string) => void }) {
   const presentation = goldenFunctionalPresentation(row);
+  const statusTone = presentation.status.toLocaleLowerCase().replaceAll(" ", "-");
+  const statusHint = [presentation.description, presentation.origin].filter(Boolean).join(" · ");
   const groups = (items: FunctionalRightsGroup[], label?: string) => items.length ? (
     <div className="functional-rights-groups">
       {label ? <small className="muted">{label}</small> : null}
@@ -4494,9 +4496,14 @@ export function FunctionalRightsSummary({ row, onAction }: { row: Row; onAction?
     <div className="functional-rights-summary">
       {groups(presentation.groups)}
       {groups(presentation.inheritedGroups, "Inherited / effective rights")}
-      <span className="functional-status" role="status">{presentation.status}</span>
-      {presentation.description ? <small>{presentation.description}</small> : null}
-      {presentation.origin ? <small>{presentation.origin}</small> : null}
+      <span
+        className={`functional-status functional-status-${statusTone}`}
+        role="status"
+        title={statusHint || undefined}
+        aria-label={statusHint ? `${presentation.status}: ${statusHint}` : presentation.status}
+      >
+        {presentation.status}
+      </span>
       {onAction ? <button type="button" className={presentation.status === "System access" ? "link-button" : "button subtle"} onClick={() => onAction(presentation.action)}>{presentation.action}</button> : null}
     </div>
   );
