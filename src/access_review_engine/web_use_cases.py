@@ -18,6 +18,7 @@ from access_review_engine.application import import_file_to_repository, load_cla
 from access_review_engine.campaign_authorization import normalize_campaign_scope
 from access_review_engine.database import make_engine, sqlite_database_path
 from access_review_engine.domain import Campaign, Finding, GoldenSourceVersion, Snapshot
+from access_review_engine.perimeters import validate_selection_data
 from access_review_engine.services import (
     compare_snapshot,
     open_campaign,
@@ -135,6 +136,7 @@ def prepare_campaign_review(
         ]
     perimeter_scope = scope.get("perimeters", {})
     if perimeter_scope and perimeter_assignments is not None and perimeter_nodes is not None:
+        validate_selection_data(perimeter_scope, perimeter_nodes, perimeter_assignments)
         nodes = {str(item.get("id")): item for item in perimeter_nodes}
         selected: dict[str, set[str]] = {
             "organization": set(str(item) for item in perimeter_scope.get("organizations", [])),

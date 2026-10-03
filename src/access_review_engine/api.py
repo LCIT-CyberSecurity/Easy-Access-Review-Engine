@@ -104,9 +104,7 @@ from access_review_engine.reporting import (
     write_reports,
 )
 from access_review_engine.perimeters import (
-    ENTITY_TABLES,
     _all as perimeter_all,
-    _get as perimeter_get,
     associate as associate_perimeter,
     associations as perimeter_associations,
     assign as assign_perimeter,
@@ -116,6 +114,8 @@ from access_review_engine.perimeters import (
     path as perimeter_path,
     unassociate as unassociate_perimeter,
     update_perimeter,
+    validate_selection_data,
+    validate_selection_data,
 )
 from access_review_engine.services import (
     audit,
@@ -553,8 +553,17 @@ def create_app(db_path: str | None = None) -> Any:
             return "information_system"
         raise HTTPException(status_code=400, detail="Unknown perimeter type")
 
-    def _campaign_perimeter_data(repo: Repository) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        nodes = [dict(row, kind=kind) for kind in ("organization", "information_system") for row in perimeter_all(repo, kind)]
+    def _campaign_perimeter_data(
+        repo: Repository, campaign: Campaign | None = None
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        nodes = [
+            dict(row, kind=kind)
+            for kind in ("organization", "information_system")
+            for row in perimeter_all(repo, kind)
+        ]
+        links = perimeter_associations(repo)
+        if campaign is not None:
+            validate_selection_data(campaign.scope.get("perimeters"), nodes, links)
         return repo.list_payloads("scope_assignments"), nodes
 
     @app.get("/api/perimeters")
@@ -644,6 +653,18 @@ def create_app(db_path: str | None = None) -> Any:
         _require(current_user(request), ("ADMIN", "OPERATOR"))
         with Repository(db_path) as repo:
             return {"items": object_assignments(repo, object_type, object_id)}
+
+    @app.delete("/api/perimeters/assignments/{assignment_id}")
+    def delete_perimeter_assignment(assignment_id: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN", "OPERATOR"))
+        if principal.role != "ADMIN":
+            raise HTTPException(status_code=403, detail="Only administrators can manage perimeters")
+        with Repository(db_path) as repo:
+            existing = repo.get_payload("scope_assignments", assignment_id)
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Perimeter assignment not found")
+            repo.delete_ids("scope_assignments", {assignment_id})
+            return {"removed": True}
 
     def _chatbot_status(principal: WebPrincipal) -> dict[str, bool]:
         user = _stored_user(principal.username)
@@ -2494,6 +2515,17 @@ def create_app(db_path: str | None = None) -> Any:
                 "organization": {value for value in str(organization or "").split(",") if value},
                 "information_system": {value for value in str(information_system or "").split(",") if value},
             }
+            try:
+                validate_selection_data(
+                    {
+                        "organizations": sorted(selected["organization"]),
+                        "information_systems": sorted(selected["information_system"]),
+                    },
+                    [*organizations.values(), *information_systems.values()],
+                    repo.list_payloads("organization_information_systems"),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             if include_descendants:
                 for kind, values in selected.items():
                     for value in tuple(values):
@@ -3985,7 +4017,7 @@ def create_app(db_path: str | None = None) -> Any:
                         snapshot = _snapshot(repo, campaign.snapshot_id)
                         golden = _golden_version(repo, campaign.golden_source_version_id)
                         preparation = prepare_campaign_review(
-                            campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo)
+                            campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo, campaign)
                         )
                         preview = preview_campaign_review(
                             campaign, snapshot, golden, preparation=preparation
@@ -4153,7 +4185,7 @@ def create_app(db_path: str | None = None) -> Any:
         snapshot = _snapshot(repo, campaign.snapshot_id)
         golden = _golden_version(repo, campaign.golden_source_version_id)
         return prepare_campaign_review(
-            campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo)
+            campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo, campaign)
         )
 
     def _campaign_required_providers(campaign, repo: Repository, preparation=None) -> set[str]:
@@ -4341,7 +4373,7 @@ def create_app(db_path: str | None = None) -> Any:
             golden = _golden_version(repo, campaign.golden_source_version_id)
             try:
                 preparation = prepare_campaign_review(
-                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo)
+                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo, campaign)
                 )
                 _require_campaign_access(principal, campaign, repo, preparation)
                 return preview_campaign_review(campaign, snapshot, golden, preparation=preparation)
@@ -4359,7 +4391,7 @@ def create_app(db_path: str | None = None) -> Any:
             golden = _golden_version(repo, campaign.golden_source_version_id)
             try:
                 preparation = prepare_campaign_review(
-                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo)
+                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo, campaign)
                 )
                 _require_campaign_access(principal, campaign, repo, preparation)
             except HTTPException:
@@ -4396,7 +4428,7 @@ def create_app(db_path: str | None = None) -> Any:
                 snapshot = _snapshot(repo, campaign.snapshot_id)
                 golden = _golden_version(repo, campaign.golden_source_version_id)
                 preparation = prepare_campaign_review(
-                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo)
+                    campaign, snapshot, golden, snapshot_collection_scope(repo, snapshot), *_campaign_perimeter_data(repo, campaign)
                 )
                 _require_campaign_access(principal, campaign, repo, preparation)
             except HTTPException:

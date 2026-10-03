@@ -5344,7 +5344,19 @@ export function Golden({ principal }: { principal: Principal }) {
                   return [
                     <button className="link-button" onClick={() => setHolders(r)}>
                       {s(r.access_display_name, s(r.access_name))}
-                      {arr(r.perimeters).length ? <span className="chip-row">{arr(r.perimeters).slice(0, 4).map((tag) => <span className="application-chip" key={`${s(tag.type)}:${s(tag.id)}`} title={Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)}>{s(tag.name)}</span>)}{arr(r.perimeters).length > 4 ? <span className="muted">+{arr(r.perimeters).length - 4}</span> : null}</span> : null}
+                      {arr(r.perimeters).length ? <span className="chip-row">{arr(r.perimeters).slice(0, 4).map((tag) => {
+                        const pathLabel = Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name);
+                        const filterKey = s(tag.type) === "organization" ? "organization" : "information_system";
+                        return <span
+                          className="application-chip perimeter-chip"
+                          key={`${s(tag.type)}:${s(tag.id)}`}
+                          role="button"
+                          tabIndex={0}
+                          title={`${s(tag.type) === "organization" ? "Organization" : "Information system"} · ${pathLabel}`}
+                          onClick={(event) => { event.stopPropagation(); filterKey === "organization" ? setScopeOrganization(s(tag.id)) : setScopeInformationSystem(s(tag.id)); setOffset(0); }}
+                          onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); filterKey === "organization" ? setScopeOrganization(s(tag.id)) : setScopeInformationSystem(s(tag.id)); setOffset(0); } }}
+                        >{s(tag.name)}</span>;
+                      })}{arr(r.perimeters).length > 4 ? <span className="muted" title={arr(r.perimeters).slice(4).map((tag) => Array.isArray(tag.path) ? tag.path.join(" › ") : s(tag.name)).join("\n")}>+{arr(r.perimeters).length - 4}</span> : null}</span> : null}
                     </button>,
                     applicationCell,
                     permissionCell,
