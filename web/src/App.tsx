@@ -1372,11 +1372,15 @@ function ColumnMenu({
   field,
   sorting,
   filtering,
+  extra,
+  search,
 }: {
   label: string;
   field: string;
   sorting?: SortState;
   filtering?: FilterState;
+  extra?: ReactNode;
+  search?: { value: string; onChange: (value: string) => void; placeholder?: string };
 }) {
   const [open, setOpen] = useState(false),
     active = sorting?.sort === field,
@@ -1404,6 +1408,8 @@ function ColumnMenu({
         <>
           <div className="menu-backdrop" onClick={() => setOpen(false)} />
           <div className="menu-panel" onClick={(event) => event.stopPropagation()}>
+            {search ? <label className="column-menu-search"><span>Search table</span><input autoFocus placeholder={search.placeholder ?? ui("common.search")} value={search.value} onChange={(event) => search.onChange(event.target.value)} /></label> : null}
+            {extra}
             {sorting ? (
               <div className="menu-row">
                 <button className="text-button" onClick={() => sortAs("asc")}>
@@ -1895,7 +1901,7 @@ function Table({
   className = "",
   rowClassName,
   search,
-  headerTools,
+  columnExtras,
 }: {
   cols: string[];
   rows: ReactNode[][];
@@ -1910,7 +1916,7 @@ function Table({
   className?: string;
   rowClassName?: (index: number) => string;
   search?: { value: string; onChange: (value: string) => void; placeholder?: string };
-  headerTools?: ReactNode;
+  columnExtras?: Record<string, ReactNode>;
 }) {
   // Loading is shaped like the table it replaces, so the page never jumps when
   // the rows arrive.
@@ -1951,17 +1957,13 @@ function Table({
     <div className={`table-wrap ${className}`}>
       <table>
         <thead>
-          {search || headerTools ? <tr className="table-header-tools-row"><th colSpan={cols.length}><div className="table-header-tools">
-            {search ? <div className="search"><Search /><input placeholder={search.placeholder ?? ui("common.search")} value={search.value} onChange={(event) => search.onChange(event.target.value)} /></div> : null}
-            {headerTools}
-          </div></th></tr> : null}
           <tr>
             {cols.map((x, i) => {
               const field = fields ? fields[i] : null;
               if (!field || (!sorting && !filtering)) return <th key={x}>{uiLabel(x)}</th>;
               return (
                 <th key={x}>
-                  <ColumnMenu label={uiLabel(x)} field={field} sorting={sorting} filtering={filtering} />
+                  <ColumnMenu label={uiLabel(x)} field={field} sorting={sorting} filtering={filtering} extra={columnExtras?.[field]} search={i === 0 ? search : undefined} />
                 </th>
               );
             })}
@@ -5492,16 +5494,18 @@ export function Golden({ principal }: { principal: Principal }) {
               <Table
                 className="golden-access-table"
                 search={{ value: search, onChange: (value) => guardTableContextChange(() => setSearch(value)) }}
-                headerTools={<>
-                  <select value={scopeOrganization} onChange={(event) => { setScopeOrganization(event.target.value); setOffset(0); }} aria-label="Filter by organization">
-                    <option value="">All organizations</option>{arr(perimeterQuery.data?.organizations).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}
-                  </select>
-                  <select value={scopeInformationSystem} onChange={(event) => { setScopeInformationSystem(event.target.value); setOffset(0); }} aria-label="Filter by information system">
-                    <option value="">All information systems</option>{arr(perimeterQuery.data?.information_systems).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}
-                  </select>
-                  <label className="check-row"><input type="checkbox" checked={scopeDescendants} onChange={(event) => setScopeDescendants(event.target.checked)} /> Include descendants</label>
-                  <button className="button subtle" onClick={() => setAdding(blankExpected())}>+ Add expected access</button>
-                </>}
+                columnExtras={{
+                  perimeters: <>
+                    <label>Organization<select value={scopeOrganization} onChange={(event) => { setScopeOrganization(event.target.value); setOffset(0); }} aria-label="Filter by organization">
+                      <option value="">All organizations</option>{arr(perimeterQuery.data?.organizations).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}
+                    </select></label>
+                    <label>Information system<select value={scopeInformationSystem} onChange={(event) => { setScopeInformationSystem(event.target.value); setOffset(0); }} aria-label="Filter by information system">
+                      <option value="">All information systems</option>{arr(perimeterQuery.data?.information_systems).map((row) => <option key={s(row.id)} value={s(row.id)}>{Array.isArray(row.path) ? row.path.join(" › ") : s(row.name)}</option>)}
+                    </select></label>
+                    <label className="check-row"><input type="checkbox" checked={scopeDescendants} onChange={(event) => setScopeDescendants(event.target.checked)} /> Include descendants</label>
+                  </>,
+                  access_display_name: <button className="button subtle" onClick={() => setAdding(blankExpected())}>+ Add expected access</button>,
+                }}
                 cols={[
                   "Access right",
                   "Application",
@@ -5518,7 +5522,7 @@ export function Golden({ principal }: { principal: Principal }) {
                   "access_target",
                   "access_description",
                   "access_provider",
-                  null,
+                  "perimeters",
                   "expected_identities",
                   "access_comment",
                   "access_owner",

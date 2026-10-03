@@ -895,6 +895,8 @@ main > .panel + .panel { margin-top: var(--space-section); }
   text-transform: none;
 }
 .menu-panel input { min-height: var(--control-height-sm); font-size: 15.5px; }
+.column-menu-search, .column-menu .menu-panel > label:not(.setting-option) { display: grid; gap: 4px; margin-bottom: 8px; color: var(--text-secondary); font-size: 12px; }
+.column-menu-search input, .column-menu .menu-panel > label:not(.setting-option) select { width: 100%; }
 .menu-row { display: flex; justify-content: space-between; gap: 12px; }
 .menu-row .text-button { font-size: 14.5px; }
 
