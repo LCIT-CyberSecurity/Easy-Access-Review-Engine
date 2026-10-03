@@ -138,6 +138,10 @@ def _add_review_provenance(repo: Repository, rows: list[dict[str, Any]]) -> None
         str(payload.get("id")): hydrate_golden_version(payload)
         for payload in repo.list_payloads("golden_source_versions")
     }
+    golden_source_names = {
+        str(payload.get("id")): str(payload.get("display_name") or payload.get("name") or "Golden Source")
+        for payload in repo.list_payloads("golden_sources")
+    }
     campaign_access_contexts = repo.list_payloads("campaign_access_contexts")
     contexts_by_access_id = {
         (str(item.get("campaign_id")), str(item.get("access_id"))): item
@@ -330,6 +334,14 @@ def _add_review_provenance(repo: Repository, rows: list[dict[str, Any]]) -> None
                 annotation_for_assignment(repo, version.id, assignment) if assignment else None
             )
             row["golden_comment"] = annotation.get("comment") if annotation else None
+            row["golden_reference"] = {
+                "source_id": version.golden_source_id,
+                "source_name": golden_source_names.get(version.golden_source_id, "Golden Source"),
+                "version_id": version.id,
+                "version": version.version,
+                "matched": assignment is not None,
+                "assignment": asdict(assignment) if assignment else None,
+            }
 
 
 def _is_empty(value: Any) -> bool:

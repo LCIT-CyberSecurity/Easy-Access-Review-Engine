@@ -3038,6 +3038,8 @@ export function ReviewDrawer({
     what = s(item.access_display_name, s(item.access_name)),
     latest = (item.latest_decision ?? null) as Row | null,
     functionalRights = arr(item.functional_rights),
+    goldenReference = (item.golden_reference ?? null) as Row | null,
+    goldenAssignment = (goldenReference?.assignment ?? null) as Row | null,
     evidenceGroups = [...functionalRights.reduce((groups, right) => {
       const rightEvidence = (right.source_evidence as Row | undefined) ?? {};
       const key = `${s(right.resource, "resource")}\0${s(rightEvidence.permission_id, "permission")}`;
@@ -3062,6 +3064,22 @@ export function ReviewDrawer({
         <p>Source: {s(item.access_provider)}</p>
         <p>Granted via: {s(item.technical_grant, "Direct assignment")} · Technical permission: {s(item.technical_permission, "—")}</p>
       </section>
+      {goldenReference ? (
+        <section className="drawer-section">
+          <h4>GOLDEN SOURCE REFERENCE</h4>
+          <p><strong>{s(goldenReference.source_name, "Golden Source")}</strong> · Version {s(goldenReference.version)}</p>
+          <details className="functional-evidence">
+            <summary>{goldenReference.matched ? "View matching Golden line" : "View Golden reference status"}</summary>
+            {goldenAssignment ? (
+              <dl>
+                <dt>Identity</dt><dd>{s(goldenAssignment.identity_identifier)} · {s(goldenAssignment.identity_provider)}</dd>
+                <dt>Access</dt><dd>{s(goldenAssignment.access_name)} · {s(goldenAssignment.access_provider)}</dd>
+                {goldenAssignment.access_permission ? <><dt>Permission</dt><dd>{s(goldenAssignment.access_permission)}</dd></> : null}
+              </dl>
+            ) : <p className="muted">No exact Golden assignment matches this review item.</p>}
+          </details>
+        </section>
+      ) : null}
       <section className="drawer-section">
         <h4>WHAT THIS ACCESS ALLOWS</h4>
         {functionalRights.length ? <p className="drawer-functional-rights">{functionalRightsText(item)}</p> : <p>{functionalRightsText(item)}</p>}

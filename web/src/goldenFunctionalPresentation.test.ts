@@ -41,6 +41,28 @@ describe("goldenFunctionalPresentation", () => {
     expect(result.inheritedGroups).toEqual([{ resource: "Invoices", capabilities: ["Read"] }]);
   });
 
+  it("does not repeat direct rights when effective rights contain the same entries", () => {
+    const result = goldenFunctionalPresentation({
+      completeness: "partial",
+      direct_functional_rights: [right("Invoices", "read", "Read"), right("Suppliers", "read", "Read")],
+      effective_functional_rights: [right("Invoices", "read", "Read"), right("Suppliers", "read", "Read")],
+    });
+    expect(result.groups).toEqual([
+      { resource: "Invoices", capabilities: ["Read"] },
+      { resource: "Suppliers", capabilities: ["Read"] },
+    ]);
+    expect(result.inheritedGroups).toEqual([]);
+  });
+
+  it("shows only the additional inherited rights", () => {
+    const result = goldenFunctionalPresentation({
+      completeness: "complete",
+      direct_functional_rights: [right("Invoices", "read", "Read")],
+      effective_functional_rights: [right("Invoices", "read", "Read"), right("Invoices", "approve", "Approve")],
+    });
+    expect(result.inheritedGroups).toEqual([{ resource: "Invoices", capabilities: ["Approve"] }]);
+  });
+
   it("groups resources and sorts custom capabilities alphabetically", () => {
     expect(functionalRightsGroups([right("Suppliers", "z", "Reconcile"), right("Suppliers", "a", "Export")])).toEqual([
       { resource: "Suppliers", capabilities: ["Export", "Reconcile"] },
