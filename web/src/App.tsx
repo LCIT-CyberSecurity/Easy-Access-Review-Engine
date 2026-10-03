@@ -76,7 +76,7 @@ import {
   validProviderScope,
 } from "./projections";
 import { goldenFunctionalRightsAreValid } from "./goldenFunctionalValidation";
-import { goldenFunctionalPresentation, type FunctionalRightsGroup } from "./goldenFunctionalPresentation";
+import { capabilityPresentation, goldenFunctionalPresentation, originShortLabel, type FunctionalRightsGroup } from "./goldenFunctionalPresentation";
 import { BUSINESS_CONTEXT_FIELDS, conflictFields, provenanceLabel } from "./businessContextPresentation";
 import { AssistantDrawer } from "./chatbot/AssistantDrawer";
 const s = (v: unknown, f = "—") =>
@@ -4485,26 +4485,37 @@ function GoldenFunctionalSuggestions({ rows, onEdit }: { rows: Row[]; onEdit: (r
 export function FunctionalRightsSummary({ row, onAction }: { row: Row; onAction?: (action: string) => void }) {
   const presentation = goldenFunctionalPresentation(row);
   const statusTone = presentation.status.toLocaleLowerCase().replaceAll(" ", "-");
-  const statusHint = [presentation.description, presentation.origin].filter(Boolean).join(" · ");
+  const actionLabel = presentation.action === "Complete functional rights" ? "Complete rights" : presentation.action;
   const groups = (items: FunctionalRightsGroup[], label?: string) => items.length ? (
     <div className="functional-rights-groups">
       {label ? <small className="muted">{label}</small> : null}
-      {items.map((group) => <div className="functional-rights-group" key={`${label ?? "direct"}:${group.resource}`}><strong>{group.resource}</strong><span>{group.capabilities.join(" · ")}</span></div>)}
+      {items.map((group) => <div className="functional-rights-group" key={`${label ?? "direct"}:${group.resource}`}>
+        <strong>{group.resource}</strong>
+        <span className="capability-tokens">
+          {group.capabilities.map((capability) => {
+            const token = capabilityPresentation(capability);
+            return <span className="capability-token" key={`${group.resource}:${capability}`} title={token.fullLabel} aria-label={token.fullLabel}>{token.shortLabel}</span>;
+          })}
+        </span>
+      </div>)}
     </div>
   ) : null;
   return (
     <div className="functional-rights-summary">
       {groups(presentation.groups)}
       {groups(presentation.inheritedGroups, "Inherited / effective rights")}
-      <span
-        className={`functional-status functional-status-${statusTone}`}
-        role="status"
-        title={statusHint || undefined}
-        aria-label={statusHint ? `${presentation.status}: ${statusHint}` : presentation.status}
-      >
-        {presentation.status}
-      </span>
-      {onAction ? <button type="button" className={presentation.status === "System access" ? "link-button" : "button subtle"} onClick={() => onAction(presentation.action)}>{presentation.action}</button> : null}
+      <div className="functional-status-line">
+        <span
+          className={`functional-status functional-status-${statusTone}`}
+          role="status"
+          title={presentation.description || undefined}
+          aria-label={presentation.description ? `${presentation.status}: ${presentation.description}` : presentation.status}
+        >
+          {presentation.status}
+        </span>
+        {presentation.origin ? <span className="functional-origin" title={presentation.origin}>{originShortLabel(presentation.origin)}</span> : null}
+      </div>
+      {onAction ? <button type="button" className={presentation.status === "System access" ? "link-button" : "link-button functional-rights-action"} onClick={() => onAction(presentation.action)}>{actionLabel}</button> : null}
     </div>
   );
 }

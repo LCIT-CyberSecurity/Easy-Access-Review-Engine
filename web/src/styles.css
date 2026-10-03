@@ -1728,12 +1728,14 @@ p + .button-row { margin-top: 14px; }
 .golden-access-table td:first-child, .golden-access-table td:nth-child(6) { white-space: nowrap; }
 .golden-access-table select { width: 100%; min-width: 145px; }
 .golden-access-table textarea { min-width: 180px; min-height: 90px; }
-.functional-rights-summary { display: grid; gap: 5px; min-width: 180px; }
+.functional-rights-summary { display: grid; gap: 4px; min-width: 180px; }
 .functional-rights-groups { display: grid; gap: 3px; }
-.functional-rights-group { display: grid; gap: 1px; }
+.functional-rights-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
 .functional-rights-group strong { color: var(--text-primary); font-size: 13px; font-weight: 600; }
-.functional-rights-group span { color: var(--text-secondary); font-size: 12px; font-weight: 400; }
+.capability-tokens { display: inline-flex; flex-wrap: wrap; gap: 3px; min-width: 0; }
+.capability-token { display: inline-flex; align-items: center; justify-content: center; min-height: 20px; max-width: 78px; padding: 0 5px; overflow: hidden; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-secondary); color: var(--text-secondary); font-size: 11px; font-weight: 650; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
 .functional-rights-summary > small { color: var(--text-faint); }
+.functional-status-line { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .functional-status { display: inline-flex; align-items: center; gap: 6px; width: fit-content; color: var(--text-muted); font-size: 12px; font-weight: 550; }
 .functional-status::before { content: ""; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--text-faint); }
 .functional-status-complete::before { background: var(--success); }
@@ -1741,6 +1743,9 @@ p + .button-row { margin-top: 14px; }
 .functional-status-not-documented::before, .functional-status-not-statically-resolved::before { background: var(--text-faint); }
 .functional-status-source-suggestion-available::before { background: var(--info); }
 .functional-status-system-access::before { background: var(--info); }
+.functional-origin { color: var(--text-faint); font-size: 11px; }
+.functional-origin::before { content: "·"; margin-right: 6px; }
+.functional-rights-action { padding: 0; font-size: 12px; }
 /* The action column stays reachable while the grid scrolls sideways. */
 .golden-access-table th:last-child, .golden-access-table td:last-child {
   position: sticky;

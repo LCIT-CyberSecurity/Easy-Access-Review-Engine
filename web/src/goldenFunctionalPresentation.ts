@@ -16,7 +16,41 @@ export type GoldenFunctionalPresentation = {
 };
 
 const CAPABILITY_ORDER = ["read", "write", "approve", "execute", "delete", "grant", "admin"];
+const STANDARD_CAPABILITY_LABELS: Record<string, { shortLabel: string; fullLabel: string }> = {
+  read: { shortLabel: "R", fullLabel: "Read" },
+  write: { shortLabel: "W", fullLabel: "Write" },
+  delete: { shortLabel: "D", fullLabel: "Delete" },
+  execute: { shortLabel: "X", fullLabel: "Execute" },
+  approve: { shortLabel: "A", fullLabel: "Approve" },
+  grant: { shortLabel: "G", fullLabel: "Grant" },
+  admin: { shortLabel: "ADM", fullLabel: "Admin" },
+};
 const text = (value: unknown): string => typeof value === "string" ? value.trim() : value == null ? "" : String(value);
+
+export type CapabilityPresentation = { shortLabel: string; fullLabel: string };
+
+export function capabilityPresentation(capability: string): CapabilityPresentation {
+  const fullLabel = text(capability) || "Unknown capability";
+  const standard = STANDARD_CAPABILITY_LABELS[fullLabel.toLocaleLowerCase()];
+  if (standard) return standard;
+  const characters = [...fullLabel];
+  return {
+    shortLabel: characters.length > 5 ? `${characters.slice(0, 4).join("").toLocaleUpperCase()}…` : fullLabel.toLocaleUpperCase(),
+    fullLabel,
+  };
+}
+
+const ORIGIN_SHORT_LABELS: Record<string, string> = {
+  "Manually defined in Golden": "Manual",
+  "Validated in Golden": "Validated",
+  "Golden extends source": "Extended",
+  "Functional authorization changed": "Changed",
+  "Observed from source": "Observed",
+};
+
+export function originShortLabel(origin: string): string {
+  return ORIGIN_SHORT_LABELS[origin] ?? origin;
+}
 
 const rightResource = (right: FunctionalRightLike): string => {
   const resource: unknown = right.resource ?? (right.target as FunctionalRightLike | undefined)?.resource;
