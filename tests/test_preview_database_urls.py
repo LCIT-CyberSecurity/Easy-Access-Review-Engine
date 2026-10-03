@@ -117,4 +117,4 @@ def postgres_source() -> Generator[str, None, None]:
 
 @pytest.mark.postgres
 def test_preview_import_with_postgresql_url(postgres_source: str, tmp_path: Path) -> None:
-    _assert_preview_isolated(postgres_source, tmp_path)
+    _assert_preview_isolated(postgres_source)
