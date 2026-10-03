@@ -316,9 +316,16 @@ reviewer saw.
 
 ## 8. Persistence and compatibility
 
-The repository uses SQLite with canonical JSON payloads and explicit tables for providers,
-identities, accesses, assignments, relations, imports, snapshots, Golden versions, campaigns,
-review items, decisions and remediation actions.
+The repository uses SQLAlchemy Core over SQLite or PostgreSQL, with canonical JSON `TEXT`
+payloads and the existing explicit tables for providers, identities, accesses, assignments,
+relations, imports, snapshots, Golden versions, campaigns, review items, decisions and
+remediation actions. `EARE_DATABASE_URL` selects the backend; a plain path and `EARE_DB_PATH`
+remain compatible with existing SQLite installations. Alembic revision `0001_repository_schema`
+creates the repository schema; application initialization remains idempotent for development.
+
+Storage roadmap: V1 adds PostgreSQL support and backend parity without changing the EARE model;
+V2 covers copying existing SQLite data and production cutover; V3 may add PostgreSQL-specific
+optimizations only when justified. V1 does not convert data or use JSONB.
 
 Compatibility rules:
 
