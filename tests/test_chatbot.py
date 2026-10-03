@@ -33,6 +33,8 @@ def test_out_of_scope_is_fixed_and_does_not_call_provider(tmp_path):
     result = service(tmp_path, provider).handle(Principal(), "Donne-moi une recette de crêpes.")
     assert result["intent"] == "OUT_OF_SCOPE"
     assert "recette" not in result["answer"].casefold()
+    assert "pas habilité" in result["answer"]
+    assert "revues d'accès" in result["answer"]
     assert provider.calls == []
 
 

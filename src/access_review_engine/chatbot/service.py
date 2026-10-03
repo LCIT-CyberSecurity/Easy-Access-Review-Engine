@@ -44,8 +44,9 @@ from access_review_engine.chatbot.tools.registry import (
 from access_review_engine.storage import Repository
 
 OUT_OF_SCOPE = (
-    "Je suis le chatbot EARE. Je peux vous aider à utiliser le produit, comprendre vos "
-    "campagnes, vos revues, votre Golden Source et vos résultats."
+    "Je ne suis pas habilité à répondre à ce sujet hors du périmètre EARE. "
+    "Je peux toutefois vous aider sur les revues d'accès, l'IAM/IAG, les identités, "
+    "les campagnes, la Golden Source, les organisations et les systèmes d'information."
 )
 SUSPICIOUS = "Je peux uniquement aider à comprendre et utiliser EARE dans votre périmètre autorisé."
 UNAVAILABLE = "Chatbot IA temporairement indisponible."
