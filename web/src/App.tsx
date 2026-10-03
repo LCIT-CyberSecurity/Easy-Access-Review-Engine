@@ -3597,6 +3597,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
       enabled: Boolean(form.snapshot_id),
     }),
     [preview, setPreview] = useState<Row | null>(null),
+    [reviewerAssignments, setReviewerAssignments] = useState<Record<string, string>>({}),
     [allow, setAllow] = useState(false),
     previewM = useMutation({
       onError: (e: unknown) => toast("error", s(e, "Unable to preview the campaign")),
@@ -3609,7 +3610,10 @@ function CampaignNew({ principal }: { principal: Principal }) {
             ...(form.scope_type === "accesses" ? { values: arr(form.accesses).map((access) => ({ provider: s(access.provider, ""), name: s(access.name, "") })) } : {}),
           },
         }),
-      onSuccess: setPreview,
+      onSuccess: (value) => {
+        setPreview(value);
+        setReviewerAssignments({});
+      },
     }),
     compose = useMutation({
       mutationFn: () => postJson("snapshots/compose", { providers: vals(form.providers) }),
@@ -3636,8 +3640,20 @@ function CampaignNew({ principal }: { principal: Principal }) {
         const d = draftId
           ? await putJson("campaigns/" + s(draftId), payload)
           : await postJson("campaigns", payload);
-        if (open && d.id)
-          await postJson("campaigns/" + s(d.id) + "/open", { allow_unresolved_reviewers: allow });
+        if (open && d.id) {
+          const assignments = Object.entries(reviewerAssignments).map(([key, reviewer_username]) => {
+            const [access_provider, access_name] = JSON.parse(key) as [string, string];
+            return {
+              access_provider,
+              access_name,
+              reviewer_username,
+            };
+          });
+          await postJson("campaigns/" + s(d.id) + "/open", {
+            allow_unresolved_reviewers: allow,
+            reviewer_assignments: assignments,
+          });
+        }
         return { ...d, opened: open } as Row & { opened: boolean };
       },
       onSuccess: (d: Row & { opened?: boolean }) => {
@@ -3653,7 +3669,17 @@ function CampaignNew({ principal }: { principal: Principal }) {
     accessOptions = arr(accessQuery.data?.items),
     selectedAccesses = arr(form.accesses),
     scopeType = s(form.scope_type, "all"),
-    campaignScopeValid = validProviderScope(scopeType, vals(form.providers)) && (scopeType !== "accesses" || selectedAccesses.length > 0);
+    campaignScopeValid = validProviderScope(scopeType, vals(form.providers)) && (scopeType !== "accesses" || selectedAccesses.length > 0),
+    unresolvedRows = arr(preview?.unresolved),
+    unresolvedGroups = Array.from(
+      unresolvedRows.reduce((groups, item) => {
+        const key = JSON.stringify([s(item.access_provider, ""), s(item.access, "")]);
+        const current = groups.get(key) ?? [];
+        current.push(item);
+        groups.set(key, current);
+        return groups;
+      }, new Map<string, Row[]>()).entries(),
+    );
   useEffect(() => {
     const campaign = campaignQuery.data?.campaign as Row | undefined;
     if (campaign && s(form.name, "") === "") {
@@ -3860,13 +3886,24 @@ function CampaignNew({ principal }: { principal: Principal }) {
                 <p>{ui("campaign.unresolvedReviewers.description")}</p>
               </div>
               <div className="campaign-unresolved-list">
-                {arr(preview.unresolved).map((item) => (
-                  <div key={`${s(item.identity_provider)}:${s(item.identity)}:${s(item.access_provider)}:${s(item.access)}`}>
-                    <strong>{s(item.identity_display_name, s(item.identity))}</strong>
-                    <span>{s(item.identity_type, "identity")} · {s(item.identity_provider)} · accès {s(item.access)} ({s(item.access_provider)})</span>
-                    <small>{s(item.application, ui("campaign.unresolvedReviewers.applicationMissing"))} · {s(item.what_it_allows, ui("campaign.unresolvedReviewers.descriptionMissing"))}</small>
-                  </div>
-                ))}
+                {unresolvedGroups.map(([key, items]) => {
+                  const first = items[0];
+                  return (
+                    <div key={key}>
+                      <strong>{s(first.access)} · {s(first.access_provider)}</strong>
+                      <span>{items.length} group/role review item{items.length === 1 ? "" : "s"} without a responsible reviewer</span>
+                      <small>{s(first.application, ui("campaign.unresolvedReviewers.applicationMissing"))} · {s(first.what_it_allows, ui("campaign.unresolvedReviewers.descriptionMissing"))}</small>
+                      <select
+                        aria-label={`Assign reviewer for ${s(first.access)}`}
+                        value={reviewerAssignments[key] ?? ""}
+                        onChange={(event) => setReviewerAssignments((current) => ({ ...current, [key]: event.target.value }))}
+                      >
+                        <option value="">Assign a reviewer…</option>
+                        {pilots.map((pilot) => <option key={s(pilot.username)} value={s(pilot.username)}>{s(pilot.display_name, s(pilot.username))} · {s(pilot.role)}</option>)}
+                      </select>
+                    </div>
+                  );
+                })}
               </div>
               <label className="campaign-bypass">
                 <input type="checkbox" checked={allow} onChange={(e) => setAllow(e.target.checked)} />
@@ -3884,7 +3921,7 @@ function CampaignNew({ principal }: { principal: Principal }) {
             </button>
             <button
               className="button primary"
-              disabled={!campaignScopeValid || (!allow && Number(preview.unresolved_reviewers) > 0) || create.isPending}
+              disabled={!campaignScopeValid || (!allow && unresolvedGroups.some(([key]) => !reviewerAssignments[key])) || create.isPending}
               onClick={() => create.mutate(true)}
             >
               Open campaign

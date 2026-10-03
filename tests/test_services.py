@@ -62,6 +62,27 @@ def test_golden_owner_routes_campaign_without_mutating_snapshot() -> None:
     assert observed_access.access_owner is None
 
 
+def test_campaign_reviewer_assignment_routes_unresolved_access_group() -> None:
+    identity = Identity("corp-ad", "bob", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)
+    observed_access = _access("erp")
+    snapshot = create_snapshot(
+        [Provider("corp-ad", "active_directory")],
+        [identity],
+        [],
+        [observed_access],
+        [AccessAssignment("corp-ad", "erp", "corp-ad", "bob", Origin("group", True, False))],
+        ["import-1"],
+    )
+    campaign = Campaign("review", snapshot.id)
+    prepared = prepare_campaign_review(campaign, snapshot, None)
+    _, items = open_campaign(
+        campaign,
+        prepared.snapshot,
+        reviewer_assignments={("corp-ad", "erp"): OwnerRef("eare", "operator")},
+    )
+    assert items[0].reviewer == OwnerRef("eare", "operator")
+
+
 def test_comparison_findings_and_scope() -> None:
     owner = Identity("corp-ad", "owner", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE)
     disabled = Identity(
