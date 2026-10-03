@@ -7,9 +7,15 @@ on:
       - "src/access_review_engine/storage.py"
       - "src/access_review_engine/system_admin.py"
       - "src/access_review_engine/web_jobs.py"
+      - "src/access_review_engine/web_read_models.py"
       - "src/access_review_engine/web_use_cases.py"
+      - "src/access_review_engine/api.py"
+      - "src/access_review_engine/cli/main.py"
       - "tests/test_storage_backend_parity.py"
+      - "tests/test_preview_database_urls.py"
+      - "tests/test_alembic_postgres.py"
       - "migrations/**"
+      - "alembic.ini"
       - "docker-compose.postgres-test.yml"
       - "pyproject.toml"
       - ".github/workflows/storage-postgres.yml"
@@ -19,9 +25,15 @@ on:
       - "src/access_review_engine/storage.py"
       - "src/access_review_engine/system_admin.py"
       - "src/access_review_engine/web_jobs.py"
+      - "src/access_review_engine/web_read_models.py"
       - "src/access_review_engine/web_use_cases.py"
+      - "src/access_review_engine/api.py"
+      - "src/access_review_engine/cli/main.py"
       - "tests/test_storage_backend_parity.py"
+      - "tests/test_preview_database_urls.py"
+      - "tests/test_alembic_postgres.py"
       - "migrations/**"
+      - "alembic.ini"
       - "docker-compose.postgres-test.yml"
       - "pyproject.toml"
       - ".github/workflows/storage-postgres.yml"
@@ -52,8 +64,22 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[app,dev]"
-      - run: pytest -q
-      - run: pytest -q -m postgres tests/test_storage_backend_parity.py
-      - run: alembic upgrade head && alembic current
+      - name: SQLite repository and Preview contracts
+        run: >-
+          pytest -q
+          tests/test_storage_backend_parity.py
+          tests/test_preview_database_urls.py
+          -m "not postgres"
+      - name: PostgreSQL repository, parity, Preview and Alembic contracts
+        run: >-
+          pytest -q
+          -m postgres
+          tests/test_storage_backend_parity.py
+          tests/test_preview_database_urls.py
+          tests/test_alembic_postgres.py
+      - name: Alembic current on the test database
+        run: alembic current
         env:
           EARE_DATABASE_URL: ${{ env.EARE_TEST_POSTGRES_URL }}
+      - name: Full regression suite
+        run: pytest -q
