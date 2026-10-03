@@ -1039,8 +1039,8 @@ function Shell({ principal }: { principal: Principal }) {
               <HelpCircle size={16} /> <span>{ui("guide.title")}</span>
               {guidePending ? <span className="guide-badge" aria-hidden="true">{guidePending}</span> : null}
             </button>
-            {assistantAvailable ? <button className="guide-trigger" type="button" onClick={() => setAssistantOpen(true)} aria-label="Assistant EARE">
-              <HelpCircle size={16} /> <span>Assistant</span>
+            {assistantAvailable ? <button className="guide-trigger" type="button" onClick={() => setAssistantOpen(true)} aria-label="Chatbot EARE">
+              <HelpCircle size={16} /> <span>Chatbot</span>
             </button> : null}
             <UserMenu
               principal={principal}
@@ -1086,8 +1086,8 @@ function Shell({ principal }: { principal: Principal }) {
       {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} focus={(id) => setGuideFocus(GUIDE_FOCUS[id] ?? [])} /> : null}
       {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
       {paletteOpen ? <CommandPalette role={principal.role} close={() => setPaletteOpen(false)} /> : null}
-      {assistantAvailable ? <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Assistant">
-        <Sparkles size={17} /> <span>Assistant</span>
+      {assistantAvailable ? <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Chatbot">
+        <Sparkles size={17} /> <span>Chatbot</span>
       </button> : null}
       {assistantAvailable && assistantOpen ? <AssistantDrawer route={location.pathname} role={principal.role} close={() => setAssistantOpen(false)} /> : null}
     </div>
@@ -2643,7 +2643,7 @@ function Accesses() {
     </>
   );
 }
-function AccessDetail({ access }: { access: Row }) {
+function AccessDetail({ access, expectedHolders = [] }: { access: Row; expectedHolders?: Row[] }) {
   const client = useQueryClient(),
     toast = useToast(),
     // Same cache entry as the Golden Source page, so the catalogue loads once.
@@ -2683,6 +2683,10 @@ function AccessDetail({ access }: { access: Row }) {
     });
   const direct = arr(q.data?.holders),
     effective = arr(q.data?.effective_holders),
+    observedKeys = new Set([...direct, ...effective].map((row) => `${s(row.identity_provider, provider)}:${s(row.identity_identifier)}`)),
+    expected = expectedHolders
+      .filter((row) => !observedKeys.has(`${s(row.identity_provider, provider)}:${s(row.identity_identifier)}`))
+      .map((row) => ({ ...row, mode: "Expected (Golden)" })),
     holderLabel = (row: Row) => `${s(row.identity_provider, provider)} · ${s(row.identity_display_name, s(row.identity_identifier))}`,
     ownerReference = contextValue(currentAccess.business_context, "owner", "manual") || contextValue(currentAccess.business_context, "owner", "source") || refText(access.access_owner) || s((access.access_owner as Row | undefined)?.identity, ""),
     ownerDisplay = ownerReference ? ownerDisplayLabel(ownerReference, arr(ownerIdentities.data?.items), s((access.access_owner as Row | undefined)?.provider, provider)).replace(/^[^/]+\//, "") : "—",
@@ -2741,14 +2745,17 @@ function AccessDetail({ access }: { access: Row }) {
           rows={[
             ...direct.map((r) => ({ ...r, mode: "Direct" })),
             ...effective.map((r) => ({ ...r, mode: "Effective" })),
+            ...expected,
           ].map((r: Row) => [
             <strong>{holderLabel(r)}</strong>,
             s(r.mode),
-            <AccessPath
-              direct={r.mode === "Direct"}
-              identity={holderLabel(r)}
-              paths={arr(r.paths)}
-            />,
+            r.mode === "Expected (Golden)"
+              ? <span className="muted">Expected holder in this Golden version</span>
+              : <AccessPath
+                  direct={r.mode === "Direct"}
+                  identity={holderLabel(r)}
+                  paths={arr(r.paths)}
+                />,
           ])}
         />
       )}
@@ -5539,7 +5546,10 @@ export function Golden({ principal }: { principal: Principal }) {
             {targetText(holders.access_target) ? ` · ${targetText(holders.access_target)}` : ""}
             {s(holders.access_permission, "") ? ` · ${s(holders.access_permission)}` : ""}
           </p>
-          <AccessDetail access={{ ...holders, provider: holders.access_provider, name: holders.access_name, id: holders.access_id, permission: { identifier: holders.access_permission } }} />
+          <AccessDetail
+            access={{ ...holders, provider: holders.access_provider, name: holders.access_name, id: holders.access_id, permission: { identifier: holders.access_permission } }}
+            expectedHolders={arr(holders.identities)}
+          />
           <h4>DESCRIPTION</h4>
           <p>{s(holders.access_description, "No description was provided for this access.")}</p>
         </Drawer>
