@@ -889,16 +889,17 @@ def _search_text(value: Any) -> str:
 
 def _latest_provider_jobs(db_path: str) -> dict[str, dict[str, Any]]:
     """Return the latest web job for each provider without creating job rows."""
-    import sqlite3
+    from access_review_engine.database import connect_database
 
-    try:
-        with sqlite3.connect(db_path, timeout=30) as conn:
-            rows = conn.execute(
-                "SELECT id, status, progress, created_at, result FROM web_jobs "
-                "WHERE kind = 'sync' ORDER BY created_at, id"
-            ).fetchall()
-    except sqlite3.OperationalError:
-        return {}
+    with connect_database(db_path) as conn:
+        from sqlalchemy import inspect
+
+        if not inspect(conn.raw).has_table("web_jobs"):
+            return {}
+        rows = conn.execute(
+            "SELECT id, status, progress, created_at, result FROM web_jobs "
+            "WHERE kind = 'sync' ORDER BY created_at, id"
+        ).fetchall()
     latest: dict[str, dict[str, Any]] = {}
     for job_id, status, progress, created_at, result in rows:
         provider = None

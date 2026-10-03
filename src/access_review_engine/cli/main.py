@@ -1,39 +1,77 @@
 from __future__ import annotations
+
 import argparse
 import csv
 import getpass
 import json
+import os
 import shutil
-import sqlite3
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
-from access_review_engine.application import import_file_to_repository, load_classification_rules, _zip_source_type
-from access_review_engine.config_loader import ConfigError, connector_path, load_connector, secret_environment, template, validate_connector, validate_no_plaintext_secrets
-from access_review_engine.collector_runner import RunnerError, run_exporter
+
+from access_review_engine.application import (
+    _zip_source_type,
+    import_file_to_repository,
+    load_classification_rules,
+)
 from access_review_engine.cli.campaign_ui import run_campaign_review
 from access_review_engine.cli.golden_ui import run_golden_editor
 from access_review_engine.cli.menu import run_global_menu
 from access_review_engine.cli.output import build_export_filename, export_timestamp
+from access_review_engine.collector_runner import RunnerError, run_exporter
+from access_review_engine.config_loader import (
+    ConfigError,
+    connector_path,
+    load_connector,
+    secret_environment,
+    template,
+    validate_connector,
+    validate_no_plaintext_secrets,
+)
+from access_review_engine.database import connect_database
 from access_review_engine.domain import Campaign, Finding, GoldenSourceAssignment
 from access_review_engine.importers.ad import import_ad_zip
 from access_review_engine.importers.openldap import import_openldap_ldif, import_openldap_zip
-from access_review_engine.reporting import access_names_from_snapshot, identity_names_from_snapshot, write_reports
-from access_review_engine.services import calculate_effective_accesses, close_campaign, create_decision, create_golden_source, create_golden_version, golden_diff, open_campaign, promote_snapshot, remediation_from_decisions
-from access_review_engine.system_admin import init_system, reset_password
-from access_review_engine.storage import (
-    Repository, hydrate_access, hydrate_access_relation, hydrate_assignment,
-    hydrate_campaign, hydrate_decision, hydrate_golden_source, hydrate_golden_version,
-    hydrate_review_item, hydrate_snapshot,
+from access_review_engine.reporting import (
+    access_names_from_snapshot,
+    identity_names_from_snapshot,
+    write_reports,
 )
-from access_review_engine.web_use_cases import object_deltas as shared_object_deltas, preview_import, table_counts as shared_table_counts
+from access_review_engine.services import (
+    calculate_effective_accesses,
+    close_campaign,
+    create_decision,
+    create_golden_source,
+    create_golden_version,
+    golden_diff,
+    open_campaign,
+    promote_snapshot,
+    remediation_from_decisions,
+)
+from access_review_engine.storage import (
+    Repository,
+    hydrate_access,
+    hydrate_access_relation,
+    hydrate_assignment,
+    hydrate_campaign,
+    hydrate_decision,
+    hydrate_golden_source,
+    hydrate_golden_version,
+    hydrate_review_item,
+    hydrate_snapshot,
+)
+from access_review_engine.system_admin import init_system, reset_password
+from access_review_engine.web_use_cases import object_deltas as shared_object_deltas
+from access_review_engine.web_use_cases import preview_import
+from access_review_engine.web_use_cases import table_counts as shared_table_counts
 
 CONFIG_CODE, COLLECTION_CODE, IMPORT_CODE = 2, 5, 6
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="eare", description="Universal IDP-agnostic access review engine")
-    p.add_argument("--db", default="access-review.db")
+    p.add_argument("--db", default=os.environ.get("EARE_DATABASE_URL") or os.environ.get("EARE_DB_PATH", "access-review.db"))
     p.add_argument("--config", dest="config_path")
     p.add_argument("--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
@@ -214,8 +252,7 @@ def system_command(a: argparse.Namespace) -> int:
     confirmation = getpass.getpass("Confirm new password: ")
     if password != confirmation:
         raise ValueError("passwords do not match")
-    with sqlite3.connect(a.db) as conn:
-        conn.row_factory = sqlite3.Row
+    with connect_database(a.db) as conn:
         init_system(conn)
         result = reset_password(conn, a.username, password)
     print(f"Password reset for {result['username']}; change it at next sign-in.")
@@ -450,10 +487,6 @@ def backup_if_present(source: str | Path, target: Path) -> None:
     shared_backup_if_present(source, target)
 
 def local_command(a: argparse.Namespace) -> int:
-    if not Path(a.db).exists():
-        if a.command == "analyze":
-            print("No snapshot available.\n\nRun:\n  eare sync <provider>\nor:\n  eare import <file>")
-        return 0
     with repository(a.db) as repo:
         if a.command == "identities-list":
             for row in repo.list_payloads("identities"):
