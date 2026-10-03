@@ -2,6 +2,7 @@ from access_review_engine.perimeters import (
     associate,
     create_perimeter,
     descendants,
+    delete_perimeter,
     path,
     unassociate,
     update_perimeter,
@@ -45,3 +46,16 @@ def test_active_organization_requires_information_system_for_targeting(tmp_path)
             assert "associated information system" in str(exc)
         else:
             raise AssertionError("organization without an information system was targetable")
+
+
+def test_perimeter_delete_is_safe_for_references(tmp_path):
+    with Repository(tmp_path / "perimeters.db") as repo:
+        parent = create_perimeter(repo, "organization", {"name": "Parent"})
+        child = create_perimeter(repo, "organization", {"name": "Child", "parent_id": parent["id"]})
+        try:
+            delete_perimeter(repo, "organization", parent["id"])
+        except ValueError as exc:
+            assert "children" in str(exc)
+        else:
+            raise AssertionError("referenced parent was deleted")
+        assert delete_perimeter(repo, "organization", child["id"])

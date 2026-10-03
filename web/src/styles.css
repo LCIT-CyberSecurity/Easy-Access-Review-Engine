@@ -337,6 +337,10 @@ td > a:hover, .link-button:hover { text-decoration: underline; text-underline-of
 .perimeter-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
 .perimeter-row:first-child { border-top: 0; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.filter-input { width: 100%; margin-top: 12px; }
+.perimeter-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
+.perimeter-editor input, .perimeter-editor select { min-width: 220px; }
+.chip-remove { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 0 0 0 4px; }
 .perimeter-chip { cursor: pointer; }
 .perimeter-chip:focus-visible { outline: 2px solid var(--primary, #4267b2); outline-offset: 2px; }
 @media (max-width: 900px) { .workspace-grid { grid-template-columns: 1fr; } }
