@@ -66,6 +66,14 @@ EVALUATIONS = (
         "Le snapshot est-il exploitable ?", "EARE_SOURCE", ("snapshot",),
     ),
     AssistantEvaluation(
+        "access_governance_guidance", "ADMIN", frozenset({"*"}), "/",
+        "Quelles bonnes pratiques pour les comptes techniques ?", "EARE_ACCESS_GUIDANCE",
+    ),
+    AssistantEvaluation(
+        "perimeter_navigation", "ADMIN", frozenset({"*"}), "/dashboard",
+        "Où gérer les SI ?", "EARE_NAVIGATION", allowed_actions=("OPEN_PERIMETERS",),
+    ),
+    AssistantEvaluation(
         "out_of_scope", "ADMIN", frozenset({"*"}), "/",
         "Quel temps fait-il demain ?", "OUT_OF_SCOPE",
     ),

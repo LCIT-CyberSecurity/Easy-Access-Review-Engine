@@ -1086,8 +1086,8 @@ function Shell({ principal }: { principal: Principal }) {
       {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} focus={(id) => setGuideFocus(GUIDE_FOCUS[id] ?? [])} /> : null}
       {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
       {paletteOpen ? <CommandPalette role={principal.role} close={() => setPaletteOpen(false)} /> : null}
-      {assistantAvailable ? <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Chatbot">
-        <Sparkles size={17} /> <span>Chatbot</span>
+      {assistantAvailable ? <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Ouvrir le Chatbot EARE">
+        <Sparkles size={22} aria-hidden="true" /> <span>Chatbot</span>
       </button> : null}
       {assistantAvailable ? <AssistantDrawer route={location.pathname} role={principal.role} open={assistantOpen} close={() => setAssistantOpen(false)} /> : null}
     </div>
@@ -7036,19 +7036,76 @@ function McpDocumentation({ enabled, onToggle, pending = false }: { enabled: boo
 
 function ChatbotAdministration({ enabled, deploymentEnabled, provider, model, configured, onToggle, pending = false }: { enabled: boolean; deploymentEnabled: boolean; provider: string; model: string; configured: boolean; onToggle?: (enabled: boolean) => void; pending?: boolean }) {
   const unavailable = !deploymentEnabled || !configured;
+  const [testResult, setTestResult] = useState("");
+  const providerTest = useMutation({
+    mutationFn: () => postJson("chatbot/provider-test"),
+    onSuccess: (data) => {
+      const labels: Record<string, string> = {
+        authentication_error: "clé OpenAI invalide ou refusée",
+        permission_denied: "permission OpenAI refusée",
+        insufficient_quota: "crédits OpenAI épuisés",
+        rate_limited: "limite de requêtes OpenAI atteinte",
+        timeout: "délai d’attente dépassé",
+        network_error: "connexion réseau vers OpenAI impossible",
+        invalid_response: "réponse OpenAI invalide",
+      };
+      setTestResult(
+        data.ok
+          ? "Connexion OpenAI fonctionnelle"
+          : `Échec OpenAI : ${labels[s(data.category)] || s(data.category, "erreur provider")}`,
+      );
+    },
+    onError: (error) => setTestResult(s(error, "Connection test failed")),
+  });
   return (
     <section className="panel" aria-labelledby="chatbot-admin-title">
       <div className="section-heading">
-        <div><span className="eyebrow">CHATBOT</span><h2 id="chatbot-admin-title">Chatbot IA</h2><p className="muted">Provide authorized users with the EARE Chatbot. The Chatbot remains limited to each user's existing EARE permissions.</p></div>
+        <div><span className="eyebrow">CHATBOT</span><h2 id="chatbot-admin-title">Chatbot</h2><p className="muted">Provide authorized users with the EARE Chatbot. The Chatbot remains limited to each user's existing EARE permissions.</p></div>
         <strong>{enabled ? "Enabled" : "Disabled"}</strong>
       </div>
       <p className="field-note">Provider: {provider || "—"} · Model: {model || "—"} · Configuration: {configured ? "Ready" : "Not configured"}</p>
       {unavailable ? <p className="field-note">{!deploymentEnabled ? "Chatbot unavailable on this deployment" : "Chatbot provider is not configured"}</p> : null}
-      <button className="button subtle" type="button" onClick={() => onToggle?.(!enabled)} disabled={!onToggle || pending || unavailable}>
-        {enabled ? "Disable Chatbot" : "Enable Chatbot"}
-      </button>
+      <div className="button-row">
+        <button className="button subtle" type="button" onClick={() => onToggle?.(!enabled)} disabled={!onToggle || pending || unavailable}>
+          {enabled ? "Disable Chatbot" : "Enable Chatbot"}
+        </button>
+        <button className="button subtle" type="button" onClick={() => providerTest.mutate()} disabled={!deploymentEnabled || providerTest.isPending}>
+          {providerTest.isPending ? "Testing…" : "Test connection"}
+        </button>
+      </div>
+      {testResult ? <p className="field-note" role="status">{testResult}</p> : null}
     </section>
   );
+}
+
+export function ChatbotGuardrailsAdministration({ value, onSave, pending = false }: { value: Row; onSave?: (value: Row) => void; pending?: boolean }) {
+  const [draft, setDraft] = useState<Row>(value);
+  useEffect(() => setDraft(value), [value]);
+  const locked = (draft.locked_security && typeof draft.locked_security === "object" ? draft.locked_security : {}) as Row;
+  const domains = (draft.domains && typeof draft.domains === "object" ? draft.domains : {}) as Row;
+  const sources = (draft.knowledge_sources && typeof draft.knowledge_sources === "object" ? draft.knowledge_sources : {}) as Row;
+  const limits = (draft.limits && typeof draft.limits === "object" ? draft.limits : {}) as Row;
+  const logging = (draft.logging && typeof draft.logging === "object" ? draft.logging : {}) as Row;
+  const updateSection = (section: string, current: Row, key: string, next: unknown) => setDraft({ ...draft, [section]: { ...current, [key]: next } });
+  return <section className="panel" aria-labelledby="chatbot-guardrails-title">
+    <div className="section-heading"><div><span className="eyebrow">CHATBOT</span><h2 id="chatbot-guardrails-title">Guardrails</h2><p className="muted">Fundamental controls are locked. Policy limits and enabled domains can be tuned without weakening authorization.</p></div></div>
+    <h3>Locked security</h3>
+    <div className="chatbot-guardrail-grid">{Object.entries(locked).map(([key, enabled]) => <label className="check-row" key={key}><input type="checkbox" checked={Boolean(enabled)} disabled /> {key.replaceAll("_", " ")}</label>)}</div>
+    <h3>Functional domains</h3>
+    <div className="chatbot-guardrail-grid">{Object.entries(domains).map(([key, enabled]) => <label className="check-row" key={key}><input type="checkbox" checked={Boolean(enabled)} onChange={(event) => updateSection("domains", domains, key, event.target.checked)} /> {key.replaceAll("_", " ")}</label>)}</div>
+    <h3>Verified knowledge sources</h3>
+    <div className="form-grid two">
+      <label>Mode<select value={s(sources.mode, "all_verified")} onChange={(event) => updateSection("knowledge_sources", sources, "mode", event.target.value)}><option value="all_verified">All verified sources</option><option value="selected">Selected publishers</option></select></label>
+      <label>Publishers<input value={vals(sources.publishers).join(", ")} disabled={sources.mode !== "selected"} onChange={(event) => updateSection("knowledge_sources", sources, "publishers", event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} placeholder="ANSSI, CNIL, NIST" /></label>
+    </div>
+    <h3>Bounds and retention</h3>
+    <div className="form-grid">{[
+      ["max_tool_calls", 1, 20], ["max_tool_rounds", 1, 5], ["max_results", 1, 100], ["history_messages", 2, 30], ["retention_days", 1, 3650],
+    ].map(([key, minimum, maximum]) => <label key={String(key)}>{String(key).replaceAll("_", " ")}<input type="number" min={Number(minimum)} max={Number(maximum)} value={Number(limits[String(key)] ?? minimum)} onChange={(event) => updateSection("limits", limits, String(key), Number(event.target.value))} /></label>)}</div>
+    <h3>Logging</h3>
+    <div className="chatbot-guardrail-grid">{Object.entries(logging).map(([key, enabled]) => <label className="check-row" key={key}><input type="checkbox" checked={Boolean(enabled)} onChange={(event) => updateSection("logging", logging, key, event.target.checked)} /> {key.replaceAll("_", " ")}</label>)}</div>
+    <button className="button primary" type="button" disabled={!onSave || pending} onClick={() => onSave?.(draft)}>{pending ? "Saving…" : "Save Guardrails"}</button>
+  </section>;
 }
 
 function UsersPage() {
@@ -7106,6 +7163,11 @@ function UsersPage() {
       mutationFn: (enabled: boolean) => putJson("system/settings/chatbot", { enabled }),
       onSuccess: async (d) => { setError(""); setNotice(`Chatbot ${d.chatbot_enabled ? "enabled" : "disabled"}`); await c.invalidateQueries({ queryKey: ["system"] }); },
       onError: (e) => setError(s(e, "Unable to update Chatbot setting")),
+    }),
+    chatbotGuardrails = useMutation({
+      mutationFn: (value: Row) => putJson("system/settings/chatbot/guardrails", value),
+      onSuccess: async () => { setError(""); setNotice("Chatbot Guardrails saved"); await c.invalidateQueries({ queryKey: ["system"] }); },
+      onError: (e) => setError(s(e, "Unable to update Chatbot Guardrails")),
     }),
     lifecycle = useMutation({
       mutationFn: ({ action, user }: { action: string; user: Row }) =>
@@ -7207,6 +7269,11 @@ function UsersPage() {
         configured={Boolean(q.data?.chatbot_configured)}
         onToggle={(enabled) => globalChatbot.mutate(enabled)}
         pending={globalChatbot.isPending}
+      />
+      <ChatbotGuardrailsAdministration
+        value={(q.data?.chatbot_guardrails && typeof q.data.chatbot_guardrails === "object" ? q.data.chatbot_guardrails : {}) as Row}
+        onSave={(value) => chatbotGuardrails.mutate(value)}
+        pending={chatbotGuardrails.isPending}
       />
       {!directories.length && (
         <p className="muted">

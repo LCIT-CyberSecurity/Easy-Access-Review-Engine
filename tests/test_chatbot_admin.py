@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from access_review_engine.api import create_app
 from access_review_engine.chatbot.access import chatbot_access_status
 from access_review_engine.chatbot.config import ChatbotConfig
+from access_review_engine.chatbot.providers.base import ProviderHealth
 from access_review_engine.storage import Repository
 from access_review_engine.system_admin import (
     chatbot_enabled,
@@ -50,9 +51,10 @@ def test_effective_access_matrix(monkeypatch):
     monkeypatch.setenv("EARE_CHATBOT_ENABLED", "true")
     config = ChatbotConfig.from_env()
     assert chatbot_access_status(config, False, user)["available"] is False
-    assert chatbot_access_status(
-        config, True, {**user, "chatbot_access_enabled": False}
-    )["available"] is False
+    assert (
+        chatbot_access_status(config, True, {**user, "chatbot_access_enabled": False})["available"]
+        is False
+    )
     monkeypatch.delenv("EARE_OPENAI_API_KEY")
     assert chatbot_access_status(ChatbotConfig.from_env(), True, user)["available"] is False
     monkeypatch.setenv("EARE_OPENAI_API_KEY", "test-key")
@@ -96,9 +98,12 @@ def _admin_client(tmp_path: Path, monkeypatch) -> tuple[TestClient, Path]:
 
 def test_server_enforcement_and_live_user_revocation(tmp_path: Path, monkeypatch):
     client, db = _admin_client(tmp_path, monkeypatch)
-    assert client.post(
-        "/api/auth/login", json={"username": "alice", "password": "alice-password"}
-    ).status_code == 200
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": "alice", "password": "alice-password"}
+        ).status_code
+        == 200
+    )
     assert client.get("/api/chatbot/status").json()["available"] is False
     for method, path in (
         ("post", "/api/chatbot/message"),
@@ -119,22 +124,29 @@ def test_server_enforcement_and_live_user_revocation(tmp_path: Path, monkeypatch
     upsert_user(
         conn,
         {
-            "username": "alice", "role": "OPERATOR", "scopes": ["provider-a"],
+            "username": "alice",
+            "role": "OPERATOR",
+            "scopes": ["provider-a"],
             "chatbot_access_enabled": True,
         },
     )
     conn.close()
     assert client.get("/api/chatbot/status").json()["available"] is True
-    assert client.post(
-        "/api/chatbot/message", json={"message": "Quelle est la capitale du Japon ?"}
-    ).status_code == 200
+    assert (
+        client.post(
+            "/api/chatbot/message", json={"message": "Quelle est la capitale du Japon ?"}
+        ).status_code
+        == 200
+    )
 
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
     upsert_user(
         conn,
         {
-            "username": "alice", "role": "OPERATOR", "scopes": ["provider-a"],
+            "username": "alice",
+            "role": "OPERATOR",
+            "scopes": ["provider-a"],
             "chatbot_access_enabled": False,
         },
     )
@@ -145,13 +157,19 @@ def test_server_enforcement_and_live_user_revocation(tmp_path: Path, monkeypatch
 
 def test_admin_global_toggle_audit_and_non_admin_denied(tmp_path: Path, monkeypatch):
     client, db = _admin_client(tmp_path, monkeypatch)
-    assert client.post(
-        "/api/auth/login", json={"username": "alice", "password": "alice-password"}
-    ).status_code == 200
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": "alice", "password": "alice-password"}
+        ).status_code
+        == 200
+    )
     assert client.put("/api/system/settings/chatbot", json={"enabled": True}).status_code == 403
-    assert client.post(
-        "/api/auth/login", json={"username": "admin", "password": "admin-password"}
-    ).status_code == 200
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": "admin", "password": "admin-password"}
+        ).status_code
+        == 200
+    )
     assert client.put("/api/system/settings/chatbot", json={"enabled": "true"}).status_code == 400
     assert client.put("/api/system/settings/chatbot", json={"enabled": False}).status_code == 200
     assert client.put("/api/system/settings/chatbot", json={"enabled": True}).status_code == 200
@@ -164,11 +182,16 @@ def test_admin_global_toggle_audit_and_non_admin_denied(tmp_path: Path, monkeypa
 
 def test_admin_user_toggle_audits_only_real_transitions(tmp_path: Path, monkeypatch):
     client, db = _admin_client(tmp_path, monkeypatch)
-    assert client.post(
-        "/api/auth/login", json={"username": "admin", "password": "admin-password"}
-    ).status_code == 200
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": "admin", "password": "admin-password"}
+        ).status_code
+        == 200
+    )
     payload = {
-        "username": "alice", "role": "OPERATOR", "scopes": [],
+        "username": "alice",
+        "role": "OPERATOR",
+        "scopes": [],
         "chatbot_access_enabled": True,
     }
     assert client.post("/api/system/users", json=payload).status_code == 200
@@ -184,8 +207,67 @@ def test_admin_user_toggle_audits_only_real_transitions(tmp_path: Path, monkeypa
 def test_system_overview_never_returns_openai_key(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("EARE_OPENAI_API_KEY", "super-secret-test-key")
     client, _ = _admin_client(tmp_path, monkeypatch)
-    assert client.post(
-        "/api/auth/login", json={"username": "admin", "password": "admin-password"}
-    ).status_code == 200
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": "admin", "password": "admin-password"}
+        ).status_code
+        == 200
+    )
     body = client.get("/api/system").json()
     assert "super-secret-test-key" not in str(body)
+
+
+def test_admin_can_run_real_provider_test_without_secret_disclosure(tmp_path: Path, monkeypatch):
+    client, _ = _admin_client(tmp_path, monkeypatch)
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": "alice", "password": "alice-password"}
+        ).status_code
+        == 200
+    )
+    assert client.post("/api/chatbot/provider-test").status_code == 403
+
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": "admin", "password": "admin-password"}
+        ).status_code
+        == 200
+    )
+    monkeypatch.setattr(
+        "access_review_engine.chatbot.providers.openai.OpenAIProvider.healthcheck",
+        lambda self: ProviderHealth(False, "permission_denied"),
+    )
+    response = client.post("/api/chatbot/provider-test")
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": False,
+        "provider": "openai",
+        "model": "test-model",
+        "category": "permission_denied",
+        "tested_by": "admin",
+    }
+    assert "test-key" not in response.text
+
+
+def test_admin_can_manage_guardrails_but_cannot_disable_locked_security(
+    tmp_path: Path, monkeypatch
+):
+    client, _ = _admin_client(tmp_path, monkeypatch)
+    assert (
+        client.post(
+            "/api/auth/login", json={"username": "admin", "password": "admin-password"}
+        ).status_code
+        == 200
+    )
+    current = client.get("/api/system/settings/chatbot/guardrails")
+    assert current.status_code == 200
+    payload = current.json()
+    assert payload["locked_security"]["read_only"] is True
+    payload["domains"]["authentication"] = False
+    payload["knowledge_sources"] = {"mode": "selected", "publishers": ["CNIL"]}
+    saved = client.put("/api/system/settings/chatbot/guardrails", json=payload)
+    assert saved.status_code == 200
+    assert saved.json()["domains"]["authentication"] is False
+    payload["locked_security"]["read_only"] = False
+    rejected = client.put("/api/system/settings/chatbot/guardrails", json=payload)
+    assert rejected.status_code == 400

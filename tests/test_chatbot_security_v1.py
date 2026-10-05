@@ -17,6 +17,7 @@ from access_review_engine.chatbot.tools.registry import (
     bound_tool_output,
     campaign_summary,
     dashboard,
+    find_authorized_campaign,
     golden_gaps,
 )
 from access_review_engine.golden_authorization import can_access_golden
@@ -24,11 +25,13 @@ from access_review_engine.storage import Repository
 
 
 def test_chatbot_prompt_defines_courteous_security_consultant_behavior() -> None:
-    assert CHATBOT_PROMPT_VERSION == "eare-chatbot-v2"
+    assert CHATBOT_PROMPT_VERSION == "eare-chatbot-v3"
     assert "expert security consultant" in SYSTEM_PROMPT
     assert "courteous" in SYSTEM_PROMPT
     assert "polite" in SYSTEM_PROMPT
     assert "professional" in SYSTEM_PROMPT
+    assert "general EARE" in SYSTEM_PROMPT
+    assert "read-only" in SYSTEM_PROMPT
 
 
 def _context(role: str, scopes: frozenset[str], username: str = "alice") -> AuthorizationContext:
@@ -98,15 +101,34 @@ def test_shared_golden_authorization_includes_identity_provider() -> None:
 def test_allowed_actions_match_role_contract() -> None:
     assert allowed_actions(_context("ADMIN", frozenset())) == {
         "OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_PENDING_REVIEWS", "OPEN_ACTIONS",
-        "OPEN_SOURCES", "OPEN_REPORTS",
+        "OPEN_SOURCES", "OPEN_REPORTS", "OPEN_PERIMETERS", "OPEN_IDENTITIES",
+        "OPEN_ACCESSES", "CREATE_CAMPAIGN", "OPEN_USERS",
     }
     assert allowed_actions(_context("OPERATOR", frozenset({"A"}))) == {
         "OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_PENDING_REVIEWS", "OPEN_ACTIONS",
-        "OPEN_SOURCES", "OPEN_REPORTS",
+        "OPEN_SOURCES", "OPEN_REPORTS", "OPEN_PERIMETERS", "OPEN_IDENTITIES",
+        "OPEN_ACCESSES", "CREATE_CAMPAIGN",
     }
     assert allowed_actions(_context("GROUP_OWNER", frozenset())) == {"OPEN_PENDING_REVIEWS"}
     assert allowed_actions(_context("BUSINESS_ADMIN", frozenset())) == {"OPEN_ACTIONS"}
     assert allowed_actions(_context("REMEDIATION_MANAGER", frozenset())) == {"OPEN_ACTIONS"}
+
+
+def test_campaign_lookup_returns_only_authorized_bounded_matches(tmp_path) -> None:
+    with Repository(tmp_path / "eare.db") as repo:
+        repo.upsert("campaigns", {
+            "id": "finance-q4", "name": "Finance Q4",
+            "scope": {"type": "providers", "values": ["A"]}, "status": "open",
+        })
+        repo.upsert("campaigns", {
+            "id": "secret", "name": "Finance Secret",
+            "scope": {"type": "providers", "values": ["B"]}, "status": "open",
+        })
+        result = find_authorized_campaign(
+            repo, {"query": "ouvre la campagne Finance Q4"},
+            _context("OPERATOR", frozenset({"A"})), UIHints(),
+        )
+    assert result["matches"] == [{"id": "finance-q4", "name": "Finance Q4", "status": "open"}]
 
 
 def test_contextual_route_derives_object_and_unauthorized_campaign_is_hidden(tmp_path) -> None:

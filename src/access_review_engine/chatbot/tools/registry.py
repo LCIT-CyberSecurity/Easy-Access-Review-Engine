@@ -21,12 +21,27 @@ from access_review_engine.chatbot.security.tool_policy import (
     MAX_RESULT_COUNT,
     MAX_STRING_CHARS,
 )
+from access_review_engine.chatbot.tools.knowledge import (
+    KNOWLEDGE_TOOL_FUNCTIONS,
+    KNOWLEDGE_TOOL_SCHEMAS,
+)
+from access_review_engine.chatbot.tools.semantic import (
+    SEMANTIC_TOOL_FUNCTIONS,
+    SEMANTIC_TOOL_SCHEMAS,
+)
+from access_review_engine.chatbot.tools.ui import UI_TOOL_FUNCTIONS, UI_TOOL_SCHEMAS
 from access_review_engine.golden_authorization import can_access_golden
 from access_review_engine.golden_functional import functional_access_rows
 from access_review_engine.guidance import GuidanceContext, build_guidance
 from access_review_engine.storage import Repository, hydrate_golden_version
 
 Tool = Callable[[Repository, dict[str, Any], AuthorizationContext, UIHints], dict[str, Any]]
+
+
+def select_used_knowledge_sources(
+    repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
+) -> dict[str, Any]:
+    return {"source_ids": [str(item) for item in args.get("source_ids", [])]}
 
 
 def _campaign_providers(
@@ -161,6 +176,31 @@ def campaign_summary(
         ][:MAX_RESULT_COUNT],
         "due_at": _safe_text(row.get("due_at")) if row.get("due_at") else None,
     }
+
+
+def find_authorized_campaign(
+    repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
+) -> dict[str, Any]:
+    """Find campaigns by name without exposing campaigns outside the caller scope."""
+    query = _safe_text(args.get("query") or "").strip().casefold()
+    if not query:
+        return {"available": False, "matches": []}
+    stop_words = {
+        "ouvre", "ouvrir", "open", "la", "le", "les", "une", "un", "moi",
+        "campagne", "campaign", "please", "s'il", "vous", "plait",
+    }
+    terms = {term for term in query.split() if len(term) > 2 and term not in stop_words}
+    matches = []
+    for row in _visible_campaigns(repo, context):
+        name = _safe_text(row.get("name") or "Campaign")
+        haystack = f"{name} {row.get('id', '')}".casefold()
+        if query in haystack or (terms and terms <= set(haystack.replace("-", " ").split())):
+            matches.append({
+                "id": _safe_text(row.get("id")),
+                "name": name,
+                "status": _safe_text(row.get("status") or "unknown"),
+            })
+    return {"available": bool(matches), "matches": matches[:5]}
 
 
 def campaign_readiness(
@@ -347,6 +387,10 @@ def guidance(
                     "/reports",
                     "/system/users",
                     "/campaigns/new",
+                    "/perimeters",
+                    "/identities",
+                    "/accesses",
+                    "/findings",
                 }
             ),
         )
@@ -373,6 +417,7 @@ def page_help(
 TOOL_FUNCTIONS: dict[str, Tool] = {
     "get_dashboard_summary": dashboard,
     "get_campaign_summary": campaign_summary,
+    "find_authorized_campaign": find_authorized_campaign,
     "get_campaign_readiness": campaign_readiness,
     "get_campaign_findings": campaign_findings,
     "get_golden_summary": golden_summary,
@@ -381,104 +426,150 @@ TOOL_FUNCTIONS: dict[str, Tool] = {
     "get_source_status": source_status,
     "get_guidance": guidance,
     "get_page_help": page_help,
+    **SEMANTIC_TOOL_FUNCTIONS,
+    **KNOWLEDGE_TOOL_FUNCTIONS,
+    "select_used_knowledge_sources": select_used_knowledge_sources,
+    **UI_TOOL_FUNCTIONS,
 }
-TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "name": "get_dashboard_summary",
-        "description": "Read-only authorized EARE dashboard projection",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+TOOL_SCHEMAS = (
+    [
+        {
+            "type": "function",
+            "name": "find_authorized_campaign",
+            "description": "Find a campaign by name among campaigns visible to the current user",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 200}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function", "name": "get_campaign_readiness",
-        "description": "Read-only deterministic campaign launch readiness",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {"campaign_id": {"type": ["string", "null"]}},
-            "required": ["campaign_id"], "additionalProperties": False,
+        {
+            "type": "function",
+            "name": "get_dashboard_summary",
+            "description": "Read-only authorized EARE dashboard projection",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function", "name": "get_campaign_findings",
-        "description": "Read-only authorized campaign finding summary",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {"campaign_id": {"type": ["string", "null"]}},
-            "required": ["campaign_id"], "additionalProperties": False,
+        {
+            "type": "function",
+            "name": "get_campaign_readiness",
+            "description": "Read-only deterministic campaign launch readiness",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_id": {"type": ["string", "null"]}},
+                "required": ["campaign_id"],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function", "name": "get_golden_summary",
-        "description": "Read-only deterministic Golden quality summary",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_campaign_findings",
+            "description": "Read-only authorized campaign finding summary",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_id": {"type": ["string", "null"]}},
+                "required": ["campaign_id"],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function", "name": "get_source_status",
-        "description": "Read-only authorized source and snapshot status",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {"provider": {"type": ["string", "null"]}},
-            "required": ["provider"], "additionalProperties": False,
+        {
+            "type": "function",
+            "name": "get_golden_summary",
+            "description": "Read-only deterministic Golden quality summary",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_campaign_summary",
-        "description": "Read-only authorized EARE campaign projection",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {"campaign_id": {"type": ["string", "null"]}},
-            "required": ["campaign_id"],
-            "additionalProperties": False,
+        {
+            "type": "function",
+            "name": "get_source_status",
+            "description": "Read-only authorized source and snapshot status",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"provider": {"type": ["string", "null"]}},
+                "required": ["provider"],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_golden_gaps",
-        "description": "Read-only authorized Golden quality projection",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_campaign_summary",
+            "description": "Read-only authorized EARE campaign projection",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_id": {"type": ["string", "null"]}},
+                "required": ["campaign_id"],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_review_progress",
-        "description": "Read-only authorized review progress projection",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_golden_gaps",
+            "description": "Read-only authorized Golden quality projection",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_guidance",
-        "description": "Read-only deterministic EARE guidance",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_review_progress",
+            "description": "Read-only authorized review progress projection",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_page_help",
-        "description": "Read-only deterministic help for the validated current page",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_guidance",
+            "description": "Read-only deterministic EARE guidance",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-]
+        {
+            "type": "function",
+            "name": "get_page_help",
+            "description": "Read-only deterministic help for the validated current page",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+    ]
+    + SEMANTIC_TOOL_SCHEMAS
+    + KNOWLEDGE_TOOL_SCHEMAS
+    + UI_TOOL_SCHEMAS
+)
 
 
 def _safe_text(value: Any) -> str:
@@ -525,7 +616,12 @@ def allowed_actions(context: AuthorizationContext) -> set[str]:
     if context.role in {"ADMIN", "OPERATOR", "GROUP_OWNER"}:
         actions.add("OPEN_PENDING_REVIEWS")
     if context.role in {"ADMIN", "OPERATOR"}:
-        actions |= {"OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_SOURCES", "OPEN_REPORTS"}
+        actions |= {
+            "OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_SOURCES", "OPEN_REPORTS",
+            "OPEN_PERIMETERS", "OPEN_IDENTITIES", "OPEN_ACCESSES", "CREATE_CAMPAIGN",
+        }
+    if context.role == "ADMIN":
+        actions.add("OPEN_USERS")
     if context.role in {"ADMIN", "OPERATOR", "BUSINESS_ADMIN", "REMEDIATION_MANAGER"}:
         actions.add("OPEN_ACTIONS")
     return actions

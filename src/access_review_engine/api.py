@@ -49,6 +49,14 @@ from access_review_engine.campaign_authorization import (
 from access_review_engine.chatbot.access import can_use_chatbot, chatbot_access_status
 from access_review_engine.chatbot.config import ChatbotConfig
 from access_review_engine.chatbot.context import AuthorizationContext, UIHints, resolve_ui_context
+from access_review_engine.chatbot.guardrails import (
+    apply_policy,
+    load_policy,
+    save_policy,
+    validate_policy,
+)
+from access_review_engine.chatbot.providers.openai import ProviderError
+from access_review_engine.chatbot.providers.registry import build_provider
 from access_review_engine.chatbot.service import AssistantService
 from access_review_engine.chatbot.tools.registry import allowed_actions
 from access_review_engine.collector_runner import RunnerError, run_exporter
@@ -732,15 +740,24 @@ def create_app(db_path: str | None = None) -> Any:
         if not isinstance(object_id, str) or len(object_id) > 200:
             object_id = None
         try:
-            result = AssistantService(lambda: Repository(db_path)).handle(
+            policy = load_policy(system_conn)
+            result = AssistantService(
+                lambda: Repository(db_path),
+                apply_policy(ChatbotConfig.from_env(), policy),
+                policy=policy,
+            ).handle(
                 principal,
                 question,
-                payload.get("conversation_id") if isinstance(payload.get("conversation_id"), str) else None,
+                payload.get("conversation_id")
+                if isinstance(payload.get("conversation_id"), str)
+                else None,
                 UIHints(route, object_id),
                 principal_resolver=lambda: current_user(request),
             )
         except PermissionError as exc:
-            raise HTTPException(status_code=404, detail="Conversation is not available in your scope") from exc
+            raise HTTPException(
+                status_code=404, detail="Conversation is not available in your scope"
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return result
@@ -755,6 +772,11 @@ def create_app(db_path: str | None = None) -> Any:
             "OPEN_ACTIONS": "Ouvrir les remédiations",
             "OPEN_SOURCES": "Ouvrir les sources",
             "OPEN_REPORTS": "Ouvrir les rapports",
+            "OPEN_PERIMETERS": "Ouvrir les périmètres",
+            "OPEN_IDENTITIES": "Ouvrir les identités",
+            "OPEN_ACCESSES": "Ouvrir les accès",
+            "CREATE_CAMPAIGN": "Créer une campagne",
+            "OPEN_USERS": "Ouvrir les utilisateurs",
         }
         context = AuthorizationContext(
             str(principal.subject), str(principal.username), str(principal.role), principal.scopes
@@ -774,6 +796,33 @@ def create_app(db_path: str | None = None) -> Any:
         status = _chatbot_status(principal)
         return {key: status[key] for key in ("available", "global_enabled", "user_enabled", "configured")}
 
+    @app.post("/api/chatbot/provider-test")
+    def chatbot_provider_test(request: Request):
+        """Perform a tiny real provider call without returning credentials or raw errors."""
+        principal = _require(current_user(request), ("ADMIN",))
+        config = ChatbotConfig.from_env()
+        try:
+            health = build_provider(config).healthcheck()
+        except ProviderError as exc:
+            health_payload = {"ok": False, "category": exc.category}
+        else:
+            health_payload = {"ok": health.ok, "category": health.category}
+        with Repository(db_path) as repo:
+            record_audit(
+                repo,
+                request,
+                "chatbot.provider_test",
+                "provider",
+                config.provider,
+                {"category": health_payload["category"], "ok": health_payload["ok"]},
+            )
+        return {
+            **health_payload,
+            "provider": config.provider,
+            "model": config.model,
+            "tested_by": principal.username,
+        }
+
     def _chatbot_hints(route: str, object_id: str | None) -> UIHints:
         return resolve_ui_context(route, object_id)
 
@@ -782,9 +831,12 @@ def create_app(db_path: str | None = None) -> Any:
         principal = _require_chatbot_access(request)
         hints = _chatbot_hints(route, object_id)
         with Repository(db_path) as repo:
-            brief = AssistantService(lambda: Repository(db_path)).build_brief(
-                repo, AssistantService._context(principal), hints
-            )
+            policy = load_policy(system_conn)
+            brief = AssistantService(
+                lambda: Repository(db_path),
+                apply_policy(ChatbotConfig.from_env(), policy),
+                policy=policy,
+            ).build_brief(repo, AssistantService._context(principal), hints)
         return asdict(brief)
 
     @app.get("/api/chatbot/report")
@@ -792,7 +844,12 @@ def create_app(db_path: str | None = None) -> Any:
         principal = _require_chatbot_access(request)
         hints = _chatbot_hints(route, object_id)
         with Repository(db_path) as repo:
-            service = AssistantService(lambda: Repository(db_path))
+            policy = load_policy(system_conn)
+            service = AssistantService(
+                lambda: Repository(db_path),
+                apply_policy(ChatbotConfig.from_env(), policy),
+                policy=policy,
+            )
             brief = service.build_brief(repo, service._context(principal), hints)
             content = service.render_brief_markdown(brief)
         return Response(content=content, media_type="text/markdown")
@@ -1216,6 +1273,30 @@ def create_app(db_path: str | None = None) -> Any:
                 )
         return {"chatbot_enabled": enabled}
 
+    @app.get("/api/system/settings/chatbot/guardrails")
+    def system_chatbot_guardrails(request: Request):
+        _require(current_user(request), ("ADMIN",))
+        return load_policy(system_conn).as_dict()
+
+    @app.put("/api/system/settings/chatbot/guardrails")
+    def system_chatbot_guardrails_update(request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN",))
+        try:
+            policy = validate_policy(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        save_policy(system_conn, policy)
+        with Repository(db_path) as repo:
+            record_audit(
+                repo,
+                request,
+                "chatbot.guardrails_updated",
+                "system_setting",
+                "chatbot_guardrails",
+                {"actor": principal.username},
+            )
+        return policy.as_dict()
+
     @app.get("/api/me/mcp-token")
     def me_mcp_token(request: Request):
         principal = _require(
@@ -1344,6 +1425,7 @@ def create_app(db_path: str | None = None) -> Any:
             "chatbot_configured": chatbot_access_status(
                 ChatbotConfig.from_env(), chatbot_enabled(system_conn), None
             )["configured"],
+            "chatbot_guardrails": load_policy(system_conn).as_dict(),
         }
 
     @app.get("/api/campaign-pilots")

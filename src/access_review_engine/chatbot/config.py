@@ -47,7 +47,7 @@ class ChatbotConfig:
             max_message_chars=integer("EARE_CHATBOT_MAX_MESSAGE_CHARS", 8000, 100, 20000),
             max_history_messages=integer("EARE_CHATBOT_MAX_HISTORY_MESSAGES", 12, 2, 30),
             max_context_chars=integer("EARE_CHATBOT_MAX_CONTEXT_CHARS", 24000, 4000, 100000),
-            max_result_items=integer("EARE_CHATBOT_MAX_RESULT_ITEMS", 100, 1, 500),
+            max_result_items=integer("EARE_CHATBOT_MAX_RESULT_ITEMS", 100, 1, 100),
             store_message_content=(
                 os.environ.get("EARE_CHATBOT_STORE_MESSAGE_CONTENT", "true").casefold() == "true"
             ),

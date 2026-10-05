@@ -13,6 +13,7 @@ INTENTS = (
     "EARE_SOURCE",
     "EARE_REPORT",
     "EARE_SECURITY_GUIDANCE",
+    "EARE_ACCESS_GUIDANCE",
     "OUT_OF_SCOPE",
     "SUSPICIOUS",
 )
@@ -26,6 +27,16 @@ class AssistantAction:
 
 
 @dataclass(frozen=True)
+class AssistantSource:
+    id: str
+    publisher: str
+    title: str
+    reference: str | None = None
+    version: str | None = None
+    url: str | None = None
+
+
+@dataclass(frozen=True)
 class AssistantBrief:
     title: str
     generated_at: str
@@ -34,6 +45,8 @@ class AssistantBrief:
     metrics: dict[str, int | float | str | None] = field(default_factory=dict)
     findings: tuple[str, ...] = ()
     recommendations: tuple[str, ...] = ()
+    sources: tuple[AssistantSource, ...] = ()
+    sections: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -41,6 +54,7 @@ class AssistantResponse:
     answer: str
     intent: str
     actions: tuple[AssistantAction, ...] = ()
+    sources: tuple[AssistantSource, ...] = ()
     optional_document: AssistantBrief | None = None
     security_state: str = "ok"
 
@@ -56,8 +70,14 @@ class AssistantResponse:
                 }
                 for a in self.actions
             ],
-            "optional_document": self.optional_document.__dict__
-            if self.optional_document
-            else None,
+            "sources": [source.__dict__ for source in self.sources],
+            "optional_document": (
+                {
+                    **self.optional_document.__dict__,
+                    "sources": [source.__dict__ for source in self.optional_document.sources],
+                }
+                if self.optional_document
+                else None
+            ),
             "security_state": self.security_state,
         }

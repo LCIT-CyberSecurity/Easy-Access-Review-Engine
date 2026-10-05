@@ -92,7 +92,8 @@ def test_chatbot_actions_follow_the_shared_role_contract(tmp_path: Path, monkeyp
     expected = {
         "OPERATOR": {
             "OPEN_GOLDEN", "OPEN_CAMPAIGN", "OPEN_PENDING_REVIEWS",
-            "OPEN_ACTIONS", "OPEN_SOURCES", "OPEN_REPORTS",
+            "OPEN_ACTIONS", "OPEN_SOURCES", "OPEN_REPORTS", "OPEN_PERIMETERS",
+            "OPEN_IDENTITIES", "OPEN_ACCESSES", "CREATE_CAMPAIGN",
         },
         "GROUP_OWNER": {"OPEN_PENDING_REVIEWS"},
         "BUSINESS_ADMIN": {"OPEN_ACTIONS"},
