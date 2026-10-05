@@ -7039,7 +7039,22 @@ function ChatbotAdministration({ enabled, deploymentEnabled, provider, model, co
   const [testResult, setTestResult] = useState("");
   const providerTest = useMutation({
     mutationFn: () => postJson("chatbot/provider-test"),
-    onSuccess: (data) => setTestResult(data.ok ? "Connection successful" : `Connection failed: ${s(data.category, "provider_error")}`),
+    onSuccess: (data) => {
+      const labels: Record<string, string> = {
+        authentication_error: "clé OpenAI invalide ou refusée",
+        permission_denied: "permission OpenAI refusée",
+        insufficient_quota: "crédits OpenAI épuisés",
+        rate_limited: "limite de requêtes OpenAI atteinte",
+        timeout: "délai d’attente dépassé",
+        network_error: "connexion réseau vers OpenAI impossible",
+        invalid_response: "réponse OpenAI invalide",
+      };
+      setTestResult(
+        data.ok
+          ? "Connexion OpenAI fonctionnelle"
+          : `Échec OpenAI : ${labels[s(data.category)] || s(data.category, "erreur provider")}`,
+      );
+    },
     onError: (error) => setTestResult(s(error, "Connection test failed")),
   });
   return (

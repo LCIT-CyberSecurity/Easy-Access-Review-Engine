@@ -172,6 +172,19 @@ class OpenAIProvider(LLMProvider):
                 403: "permission_denied",
                 429: "rate_limited",
             }.get(exc.code, "provider_error")
+            if exc.code == 429:
+                try:
+                    error_body = json.load(exc)
+                except (TypeError, json.JSONDecodeError, UnicodeDecodeError):
+                    error_body = {}
+                error = error_body.get("error") if isinstance(error_body, dict) else None
+                error_code = error.get("code") if isinstance(error, dict) else None
+                error_type = error.get("type") if isinstance(error, dict) else None
+                if (
+                    error_code in {"credit_balance_exhausted", "insufficient_quota"}
+                    or error_type == "insufficient_quota"
+                ):
+                    category = "insufficient_quota"
             raise ProviderError("Chatbot provider request failed", category=category) from exc
         except TimeoutError as exc:
             raise ProviderError("Chatbot provider timed out", category="timeout") from exc

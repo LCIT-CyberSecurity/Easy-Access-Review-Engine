@@ -43,6 +43,25 @@ def test_openai_provider_categorizes_http_errors(monkeypatch, status, category):
     assert "test-key" not in str(caught.value)
 
 
+def test_openai_provider_identifies_exhausted_quota(monkeypatch):
+    def fail(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "provider failure",
+            {},
+            io.BytesIO(
+                b'{"error":{"type":"insufficient_quota",'
+                b'"code":"credit_balance_exhausted"}}'
+            ),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+    with pytest.raises(ProviderError) as caught:
+        _provider().generate([], [])
+    assert caught.value.category == "insufficient_quota"
+
+
 @pytest.mark.parametrize(
     ("error", "category"),
     [
