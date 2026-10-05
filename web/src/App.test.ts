@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
-import { assistantSuggestions, safeAssistantActionRoute } from "./chatbot/AssistantDrawer";
+import { assistantSuggestions, safeAssistantActionRoute, safeAssistantSourceUrl } from "./chatbot/AssistantDrawer";
 import { isAssistantAvailable } from "./App";
 
 import { ActionMenu, ApplicationPicker, BusinessContext, BusinessContextWarning, BusinessFeedbackRow, ExternalApiDocumentation, FunctionalRightsSummary, Golden, GUIDE_FOCUS, Head, PageLoading, guidePendingCount, applicationSummary, accessDrawerBusinessContextOrder, accessDrawerTechnicalIdentifier, accessDrawerTitle, functionalRightsText, goldenAccessEditIsDirty, goldenAccessEditPayload, GuideChecklist, guideChecklistLabelKey, guideTranslation, joinPermissions, McpTokenOnce, mcpAccessStatus, reportBarPercent, ReviewDrawer, reviewDerivedAccessText, reviewPermissionText, reviewTargetText, sourceSupportsAttributeMapping, splitPermissions, todayDateInputValue } from "./App";
@@ -104,6 +104,12 @@ describe("EARE Assistant launcher contracts", () => {
     expect(safeAssistantActionRoute("data:text/html,x")).toBeNull();
     expect(safeAssistantActionRoute("//example.test/path")).toBeNull();
     expect(safeAssistantActionRoute("/campaigns\\\\secret")).toBeNull();
+  });
+  it("accepts only credential-free HTTPS source links", () => {
+    expect(safeAssistantSourceUrl("https://www.cnil.fr/example")).toBe("https://www.cnil.fr/example");
+    expect(safeAssistantSourceUrl("http://example.test")).toBeNull();
+    expect(safeAssistantSourceUrl("javascript:alert(1)")).toBeNull();
+    expect(safeAssistantSourceUrl("https://user:password@example.test")).toBeNull();
   });
 });
 
