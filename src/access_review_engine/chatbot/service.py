@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
+from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 from access_review_engine.chatbot.config import ChatbotConfig
 from access_review_engine.chatbot.context import AuthorizationContext, UIHints, resolve_ui_context
@@ -13,6 +16,7 @@ from access_review_engine.chatbot.conversation import (
     ConversationStore,
     cleanup_expired_chatbot_data_periodically,
 )
+from access_review_engine.chatbot.guardrails import GuardrailPolicy
 from access_review_engine.chatbot.observability.audit import record as record_audit
 from access_review_engine.chatbot.observability.traces import record as record_trace
 from access_review_engine.chatbot.prompts import (
@@ -21,32 +25,54 @@ from access_review_engine.chatbot.prompts import (
     SECURITY_POLICY_VERSION,
     TOOL_POLICY_VERSION,
 )
-from access_review_engine.chatbot.providers.base import LLMProvider, ProviderResult, ToolCall
+from access_review_engine.chatbot.providers.base import (
+    LLMProvider,
+    ProviderHealth,
+    ProviderResult,
+    ToolCall,
+)
 from access_review_engine.chatbot.providers.openai import ProviderError
 from access_review_engine.chatbot.providers.registry import build_provider
 from access_review_engine.chatbot.safety.builtin import BuiltInSafetyProvider
-from access_review_engine.chatbot.schemas import AssistantAction, AssistantBrief, AssistantResponse
+from access_review_engine.chatbot.schemas import (
+    AssistantAction,
+    AssistantBrief,
+    AssistantResponse,
+    AssistantSource,
+)
 from access_review_engine.chatbot.scope import classify
 from access_review_engine.chatbot.security.output_guard import validate_action
 from access_review_engine.chatbot.security.tool_policy import validate_tool_arguments
+from access_review_engine.chatbot.tools.knowledge import search_access_control_knowledge
 from access_review_engine.chatbot.tools.registry import (
     TOOL_FUNCTIONS,
     TOOL_SCHEMAS,
     allowed_actions,
     bound_tool_output,
     campaign_summary,
-    find_authorized_campaign,
     dashboard,
+    find_authorized_campaign,
     golden_gaps,
     guidance,
     review_progress,
 )
+from access_review_engine.chatbot.tools.semantic import (
+    aggregate_authorized_data,
+    get_authentication_posture_summary,
+    search_authorized_accesses,
+    search_authorized_campaigns,
+    search_authorized_identities,
+    search_authorized_remediations,
+    search_authorized_reviews,
+)
 from access_review_engine.storage import Repository
 
 OUT_OF_SCOPE = (
-    "Je ne suis pas habilité à répondre à ce sujet hors du périmètre EARE. "
-    "Je peux toutefois vous aider sur les revues d'accès, l'IAM/IAG, les identités, "
-    "les campagnes, la Golden Source, les organisations et les systèmes d'information."
+    "Hors périmètre du Chatbot EARE\n\n"
+    "Cette question n'est pas directement liée à EARE ou au contrôle d'accès.\n\n"
+    "Je peux vous aider sur les identités, habilitations, revues d'accès, accès privilégiés, "
+    "comptes techniques, authentification, MFA, moindre privilège, IAM/IAG et les bonnes "
+    "pratiques associées."
 )
 SUSPICIOUS = "Je peux uniquement aider à comprendre et utiliser EARE dans votre périmètre autorisé."
 UNAVAILABLE = "Chatbot IA temporairement indisponible."
@@ -61,9 +87,11 @@ class AssistantService:
         repo_factory: Callable[[], Repository],
         config: ChatbotConfig | None = None,
         provider: LLMProvider | None = None,
+        policy: GuardrailPolicy | None = None,
     ) -> None:
         self.repo_factory = repo_factory
         self.config = config or ChatbotConfig.from_env()
+        self.policy = policy or GuardrailPolicy.defaults()
         self.safety = BuiltInSafetyProvider(self.config)
         self.provider: LLMProvider | None
         self.provider_error: ProviderError | None = None
@@ -76,6 +104,7 @@ class AssistantService:
                 self.provider = None
                 self.provider_error = exc
         self._tool_events: list[dict[str, str]] = []
+        self._sources_used: list[AssistantSource] = []
 
     @staticmethod
     def _context(principal: Any) -> AuthorizationContext:
@@ -96,6 +125,7 @@ class AssistantService:
     ) -> dict[str, Any]:
         started = time.monotonic()
         self._tool_events = []
+        self._sources_used = []
         hints = resolve_ui_context((hints or UIHints()).route, (hints or UIHints()).object_id)
         safe_question, intent, secret_redacted = self.safety.check_input(question, hints.route)
         context = self._context(principal)
@@ -117,33 +147,76 @@ class AssistantService:
                 )
             if intent == "OUT_OF_SCOPE":
                 record_audit(repo, "chatbot.out_of_scope", context.username, {})
-                self._record_trace(repo, self._early_trace(
-                    context, conversation_id, safe_question, OUT_OF_SCOPE, intent, "out_of_scope"
-                ))
+                self._record_trace(
+                    repo,
+                    self._early_trace(
+                        context,
+                        conversation_id,
+                        safe_question,
+                        OUT_OF_SCOPE,
+                        intent,
+                        "out_of_scope",
+                    ),
+                )
                 return AssistantResponse(
                     OUT_OF_SCOPE, intent, security_state="out_of_scope"
                 ).as_dict()
             if intent == "SUSPICIOUS":
                 record_audit(repo, "chatbot.prompt_injection_suspected", context.username, {})
-                self._record_trace(repo, self._early_trace(
-                    context, conversation_id, safe_question, SUSPICIOUS, intent, "suspicious"
-                ))
+                self._record_trace(
+                    repo,
+                    self._early_trace(
+                        context, conversation_id, safe_question, SUSPICIOUS, intent, "suspicious"
+                    ),
+                )
                 return AssistantResponse(SUSPICIOUS, intent, security_state="suspicious").as_dict()
+            guardrail_allowed, guardrail_reason = self.policy.allows(intent, safe_question)
+            if not guardrail_allowed:
+                record_audit(
+                    repo,
+                    "chatbot.guardrail_denied",
+                    context.username,
+                    {
+                        "reason": guardrail_reason,
+                    },
+                )
+                self._record_trace(
+                    repo,
+                    {
+                        **self._early_trace(
+                            context,
+                            conversation_id,
+                            safe_question,
+                            OUT_OF_SCOPE,
+                            intent,
+                            "out_of_scope",
+                        ),
+                        "guardrail_state": "out_of_scope",
+                        "guardrail_reason": guardrail_reason,
+                    },
+                )
+                return AssistantResponse(
+                    OUT_OF_SCOPE, "OUT_OF_SCOPE", security_state="out_of_scope"
+                ).as_dict()
             conversation_id = store.get_or_create(conversation_id)
             store.append(conversation_id, "user", safe_question)
-            brief = self.build_brief(repo, context, hints) if intent == "EARE_REPORT" else None
+            brief = (
+                self.build_brief(repo, context, hints, safe_question)
+                if intent == "EARE_REPORT"
+                else None
+            )
             if not self.config.enabled or self.provider is None:
                 record_audit(
                     repo, "chatbot.provider_error", context.username, {"reason": "disabled"}
                 )
                 return {
                     **AssistantResponse(
-                        UNAVAILABLE, intent, optional_document=brief,
-                        security_state="unavailable"
+                        UNAVAILABLE, intent, optional_document=brief, security_state="unavailable"
                     ).as_dict(),
                     "conversation_id": conversation_id,
                 }
             security_state = "ok"
+            provider_error_category: str | None = None
             try:
                 result, context = self._generate(
                     repo,
@@ -170,21 +243,29 @@ class AssistantService:
                 if isinstance(exc, ProviderError):
                     audit_event = "chatbot.provider_error"
                     failure_state = "unavailable"
+                    error_category = exc.category
+                    provider_error_category = exc.category
                 elif isinstance(exc, PermissionError):
                     audit_event = "chatbot.authorization_changed"
                     failure_state = "authorization_changed"
+                    error_category = "authorization_changed"
                 else:
                     audit_event = "chatbot.tool_validation_error"
                     failure_state = "tool_validation_error"
+                    error_category = "tool_validation_error"
                 record_audit(
                     repo,
                     audit_event,
                     context.username,
-                    {"conversation_id": conversation_id},
+                    {
+                        "conversation_id": conversation_id,
+                        "category": error_category,
+                    },
                 )
                 answer = UNAVAILABLE
                 result = ProviderResult()
                 security_state = failure_state
+                self._sources_used = []
             store.append(conversation_id, "assistant", answer)
             action_by_intent = {
                 "EARE_DASHBOARD": ("OPEN_ACTIONS", "Voir les actions"),
@@ -205,7 +286,11 @@ class AssistantService:
                 if route is not None and action_id in allowed_actions(context):
                     actions = (validate_action(action_id, label, allowed_actions(context), route),)
             response = AssistantResponse(
-                answer, intent, actions=actions, optional_document=brief,
+                answer,
+                intent,
+                actions=actions,
+                optional_document=brief,
+                sources=tuple(self._sources_used),
                 security_state=security_state,
             ).as_dict()
             response["conversation_id"] = conversation_id
@@ -235,6 +320,10 @@ class AssistantService:
                     "input_tokens": result.usage.get("input_tokens"),
                     "output_tokens": result.usage.get("output_tokens"),
                     "security_flags": [security_state] if security_state != "ok" else [],
+                    "source_ids_used": [source.id for source in self._sources_used],
+                    "guardrail_state": "allowed" if security_state == "ok" else security_state,
+                    "guardrail_reason": "allowed" if security_state == "ok" else security_state,
+                    "provider_error_category": provider_error_category,
                     "latency_ms": int((time.monotonic() - started) * 1000),
                     "created_at": datetime.now(UTC).isoformat(),
                 },
@@ -265,28 +354,95 @@ class AssistantService:
         security_flag: str,
     ) -> dict[str, Any]:
         return {
-            "id": str(uuid.uuid4()), "conversation_id": conversation_id,
-            "message_id": None, "user_id": context.subject,
-            "question": question[:2000], "answer": answer[:4000],
-            "provider": "none", "model": None, "intent": intent,
+            "id": str(uuid.uuid4()),
+            "conversation_id": conversation_id,
+            "message_id": None,
+            "user_id": context.subject,
+            "question": question[:2000],
+            "answer": answer[:4000],
+            "provider": "none",
+            "model": None,
+            "intent": intent,
             "prompt_version": CHATBOT_PROMPT_VERSION,
             "scope_policy_version": SCOPE_POLICY_VERSION,
             "tool_policy_version": TOOL_POLICY_VERSION,
             "security_policy_version": SECURITY_POLICY_VERSION,
-            "tools_called": [], "tools_denied": [],
-            "input_tokens": None, "output_tokens": None,
+            "tools_called": [],
+            "tools_denied": [],
+            "input_tokens": None,
+            "output_tokens": None,
             "security_flags": [security_flag],
-            "latency_ms": 0, "created_at": datetime.now(UTC).isoformat(),
+            "guardrail_state": security_flag,
+            "guardrail_reason": security_flag,
+            "latency_ms": 0,
+            "created_at": datetime.now(UTC).isoformat(),
         }
 
-    @staticmethod
     def build_brief(
-        repo: Repository, context: AuthorizationContext, hints: UIHints
+        self,
+        repo: Repository,
+        context: AuthorizationContext,
+        hints: UIHints,
+        question: str = "",
     ) -> AssistantBrief:
         summary = dashboard(repo, {}, context, hints)
         progress = review_progress(repo, {}, context, hints)
         gaps = golden_gaps(repo, {}, context, hints)
         guidance_result = guidance(repo, {}, context, hints)
+        perimeter = next(
+            (
+                row
+                for row in repo.list_payloads("information_systems")
+                if str(row.get("name") or "").casefold() in question.casefold()
+            ),
+            None,
+        )
+        access_args: dict[str, Any] = {"limit": self.config.max_result_items}
+        identity_args: dict[str, Any] = {"limit": self.config.max_result_items}
+        if perimeter is not None:
+            perimeter_ids = [str(perimeter.get("id"))]
+            access_args["information_system_ids"] = perimeter_ids
+            identity_args["information_system_ids"] = perimeter_ids
+        access_result = search_authorized_accesses(repo, access_args, context, hints)
+        identity_result = search_authorized_identities(repo, identity_args, context, hints)
+        providers = [str(provider) for provider in access_result.get("providers", [])]
+        campaigns = search_authorized_campaigns(
+            repo, {"limit": self.config.max_result_items}, context, hints
+        )
+        reviews = search_authorized_reviews(
+            repo, {"limit": self.config.max_result_items}, context, hints
+        )
+        remediations = search_authorized_remediations(
+            repo, {"limit": self.config.max_result_items}, context, hints
+        )
+        authentication_rows = []
+        for provider_name in providers:
+            posture = get_authentication_posture_summary(
+                repo, {"provider": provider_name}, context, hints
+            )
+            authentication_rows.extend(posture.get("providers", []))
+        knowledge: dict[str, Any] = {"items": [], "sources": [], "count": 0}
+        if self.policy.domains.get("external_guidance", False):
+            knowledge = search_access_control_knowledge(
+                repo,
+                {
+                    "query": (
+                        "least privilege privileged accounts access review "
+                        "ownership authentication"
+                    ),
+                    "publishers": (
+                        list(self.policy.enabled_publishers)
+                        if self.policy.source_mode == "selected"
+                        else []
+                    ),
+                    "limit": 3,
+                },
+                context,
+                hints,
+            )
+        if self.policy.source_mode == "selected" and not self.policy.enabled_publishers:
+            knowledge = {"items": [], "sources": [], "count": 0}
+        self._capture_sources(knowledge)
         metrics = {
             "campaigns": summary["campaigns"],
             "pending_reviews": progress["pending"],
@@ -295,43 +451,222 @@ class AssistantService:
             "golden_sources": gaps["golden_sources"],
             "golden_rows_considered": gaps["rows_considered"],
         }
-        findings = tuple(
-            f"{name}: {value}"
-            for name, value in gaps["gaps"].items()
-            if isinstance(value, int) and value > 0
+        findings = (
+            tuple(
+                f"{name}: {value}"
+                for name, value in gaps["gaps"].items()
+                if isinstance(value, int) and value > 0
+            )
+            if perimeter is None
+            else ()
         )
         recommendations = tuple(
             str(item.get("title") or item.get("description") or item.get("id"))
             for item in guidance_result.get("recommendations", [])[:5]
+        ) + tuple(str(item.get("summary")) for item in knowledge.get("items", [])[:3])
+        authentication = Counter(str(row.get("state") or "unknown") for row in authentication_rows)
+        access_count_args = {key: value for key, value in access_args.items() if key != "limit"}
+        identity_count_args = {key: value for key, value in identity_args.items() if key != "limit"}
+        access_completeness = {
+            state: search_authorized_accesses(
+                repo, {**access_count_args, "completeness": state, "limit": 1}, context, hints
+            )["count"]
+            for state in ("complete", "partial", "not_defined")
+        }
+        access_completeness = {key: value for key, value in access_completeness.items() if value}
+        review_rows = reviews["items"]
+        remediation_rows = remediations["items"]
+        campaign_rows = campaigns["items"]
+        review_count = int(reviews["count"])
+        remediation_count = int(remediations["count"])
+        campaign_count: int | None = int(campaigns["count"])
+        campaign_truncated = bool(campaigns["truncated"])
+        classification_groups: Counter[str] = Counter(
+            aggregate_authorized_data(
+                repo,
+                {"entity": "review", "metric": "count", "group_by": "classification"},
+                context,
+                hints,
+            ).get("groups", {})
         )
+        if perimeter is not None:
+            review_rows = []
+            remediation_rows = []
+            campaign_rows = []
+            review_count = 0
+            remediation_count = 0
+            campaign_truncated = False
+            classification_groups = Counter()
+            for provider_name in providers:
+                provider_reviews = search_authorized_reviews(
+                    repo,
+                    {"provider": provider_name, "limit": self.config.max_result_items},
+                    context,
+                    hints,
+                )
+                review_rows.extend(provider_reviews["items"])
+                review_count += int(provider_reviews["count"])
+                classification_groups.update(
+                    aggregate_authorized_data(
+                        repo,
+                        {
+                            "entity": "review",
+                            "metric": "count",
+                            "group_by": "classification",
+                            "filters": {"provider": provider_name},
+                        },
+                        context,
+                        hints,
+                    ).get("groups", {})
+                )
+                provider_remediations = search_authorized_remediations(
+                    repo,
+                    {"provider": provider_name, "limit": self.config.max_result_items},
+                    context,
+                    hints,
+                )
+                remediation_rows.extend(provider_remediations["items"])
+                remediation_count += int(provider_remediations["count"])
+                provider_campaigns = search_authorized_campaigns(
+                    repo,
+                    {"provider": provider_name, "limit": self.config.max_result_items},
+                    context,
+                    hints,
+                )
+                campaign_rows.extend(provider_campaigns["items"])
+                campaign_truncated = campaign_truncated or bool(provider_campaigns["truncated"])
+            review_rows = list({str(row["id"]): row for row in review_rows}.values())
+            remediation_rows = list({str(row["id"]): row for row in remediation_rows}.values())
+            campaign_rows = list({str(row["id"]): row for row in campaign_rows}.values())
+            campaign_count = None if campaign_truncated else len(campaign_rows)
+        sections: dict[str, Any] = {}
+        if identity_result["count"]:
+            sections["identities"] = {
+                "count": identity_result["count"],
+                "technical_accounts": search_authorized_identities(
+                    repo,
+                    {**identity_count_args, "identity_type": "technical_account", "limit": 1},
+                    context,
+                    hints,
+                )["count"],
+                "shared_accounts": search_authorized_identities(
+                    repo,
+                    {**identity_count_args, "identity_type": "shared_account", "limit": 1},
+                    context,
+                    hints,
+                )["count"],
+                "privileged_accounts": search_authorized_identities(
+                    repo,
+                    {**identity_count_args, "privileged_access": True, "limit": 1},
+                    context,
+                    hints,
+                )["count"],
+            }
+        if access_result["count"]:
+            sections["accesses"] = {
+                "count": access_result["count"],
+                "privileged": search_authorized_accesses(
+                    repo, {**access_count_args, "privileged": True, "limit": 1}, context, hints
+                )["count"],
+                "without_owner": search_authorized_accesses(
+                    repo, {**access_count_args, "owner": "", "limit": 1}, context, hints
+                )["count"],
+                "by_completeness": dict(sorted(access_completeness.items())),
+            }
+        if authentication_rows:
+            sections["authentication_posture"] = {
+                "providers": len(authentication_rows),
+                "by_state": dict(sorted(authentication.items())),
+                "note": "not_collected does not mean that MFA or another control is disabled",
+            }
+        providers_truncated = bool(access_result.get("providers_truncated"))
+        if review_count and not (perimeter is not None and providers_truncated):
+            sections["reviews"] = {
+                "count": review_count,
+                "by_classification": dict(sorted(classification_groups.items())),
+            }
+        if remediation_count and not (perimeter is not None and providers_truncated):
+            sections["remediations"] = {"count": remediation_count}
+        if campaign_rows:
+            sections["campaigns"] = (
+                {"items_returned": len(campaign_rows), "truncated": True}
+                if campaign_count is None or providers_truncated
+                else {"count": campaign_count}
+            )
+        if perimeter is not None and providers_truncated:
+            sections["limitations"] = {
+                "reason": "provider facet limit reached",
+                "provider_count": access_result.get("provider_count"),
+            }
+        if perimeter is not None:
+            metrics = {
+                "accesses": access_result["count"],
+                "identities": identity_result["count"],
+                "reviews": review_count if not providers_truncated else "truncated",
+                "campaigns": (
+                    campaign_count
+                    if campaign_count is not None and not providers_truncated
+                    else "truncated"
+                ),
+                "remediations": remediation_count if not providers_truncated else "truncated",
+            }
         return AssistantBrief(
-            title="Synthèse EARE",
+            title=(
+                f"Rapport de contrôle d'accès — {perimeter.get('name')}"
+                if perimeter is not None
+                else "Synthèse EARE"
+            ),
             generated_at=datetime.now(UTC).isoformat(),
-            scope=f"role={context.role}; user={context.username}",
+            scope=(
+                f"Information System: {perimeter.get('name')}"
+                if perimeter is not None
+                else f"role={context.role}; user={context.username}"
+            ),
             executive_summary="Synthèse calculée uniquement à partir des projections autorisées.",
             metrics=metrics,
             findings=findings,
             recommendations=recommendations,
+            sources=tuple(self._sources_used),
+            sections=sections,
         )
 
     @staticmethod
     def render_brief_markdown(brief: AssistantBrief) -> str:
         lines = [
-            f"# {brief.title}", "", f"- Generated at: {brief.generated_at}",
-            f"- Scope: {brief.scope}", "", brief.executive_summary, "", "## Metrics",
+            f"# {brief.title}",
+            "",
+            f"- Generated at: {brief.generated_at}",
+            f"- Scope: {brief.scope}",
+            "",
+            brief.executive_summary,
+            "",
+            "## Metrics",
         ]
         lines.extend(f"- {key}: {value}" for key, value in brief.metrics.items())
         if brief.findings:
             lines.extend(["", "## Findings", *[f"- {item}" for item in brief.findings]])
         if brief.recommendations:
-            lines.extend([
-                "", "## Recommendations", *[f"- {item}" for item in brief.recommendations]
-            ])
+            lines.extend(
+                ["", "## Recommendations", *[f"- {item}" for item in brief.recommendations]]
+            )
+        if brief.sections:
+            lines.extend(["", "## Constats EARE"])
+            for name, values in brief.sections.items():
+                lines.append(f"- {name}: {json.dumps(values, ensure_ascii=False, sort_keys=True)}")
+        if brief.sources:
+            lines.extend(["", "## Sources et références"])
+            for source in brief.sources:
+                reference = f" — {source.reference}" if source.reference else ""
+                url = f" — {source.url}" if source.url else ""
+                lines.append(f"- {source.publisher} — {source.title}{reference}{url}")
         return "\n".join(lines) + "\n"
 
     @staticmethod
     def _resolve_action(
-        repo: Repository, action_id: str, context: AuthorizationContext, hints: UIHints,
+        repo: Repository,
+        action_id: str,
+        context: AuthorizationContext,
+        hints: UIHints,
         question: str = "",
     ) -> str | None:
         if action_id not in allowed_actions(context):
@@ -340,8 +675,13 @@ class AssistantService:
             candidate = campaign_summary(repo, {"campaign_id": hints.object_id}, context, hints)
             if candidate.get("available") and hints.object_id:
                 return f"/campaigns/{hints.object_id}"
-            if any(term in question.casefold() for term in ("ouvre", "ouvrir", "open", "campagne", "campaign")):
-                matches = find_authorized_campaign(repo, {"query": question}, context, hints).get("matches", [])
+            if any(
+                term in question.casefold()
+                for term in ("ouvre", "ouvrir", "open", "campagne", "campaign")
+            ):
+                matches = find_authorized_campaign(repo, {"query": question}, context, hints).get(
+                    "matches", []
+                )
                 if len(matches) == 1:
                     return f"/campaigns/{matches[0]['id']}"
             return "/campaigns"
@@ -361,9 +701,27 @@ class AssistantService:
     @staticmethod
     def _navigation_action(question: str) -> tuple[str, str] | None:
         text = question.casefold()
-        if any(term in text for term in ("si", "système d'information", "systeme d'information", "organisation", "périmètre", "perimetre", "scope")):
+        if re.search(r"\bsi\b", text) or any(
+            term in text
+            for term in (
+                "système d'information",
+                "systeme d'information",
+                "organisation",
+                "périmètre",
+                "perimetre",
+                "scope",
+            )
+        ):
             return "OPEN_PERIMETERS", "Ouvrir les périmètres"
-        if any(term in text for term in ("créer une campagne", "creer une campagne", "nouvelle campagne", "lancer une campagne")):
+        if any(
+            term in text
+            for term in (
+                "créer une campagne",
+                "creer une campagne",
+                "nouvelle campagne",
+                "lancer une campagne",
+            )
+        ):
             return "CREATE_CAMPAIGN", "Créer une campagne"
         if any(term in text for term in ("golden", "référentiel", "referentiel")):
             return "OPEN_GOLDEN", "Ouvrir la Golden Source"
@@ -379,7 +737,9 @@ class AssistantService:
             return "OPEN_REPORTS", "Ouvrir les rapports"
         if any(term in text for term in ("remédiation", "remediation", "action")):
             return "OPEN_ACTIONS", "Ouvrir les remédiations"
-        if any(term in text for term in ("utilisateurs", "users", "administration des utilisateurs")):
+        if any(
+            term in text for term in ("utilisateurs", "users", "administration des utilisateurs")
+        ):
             return "OPEN_USERS", "Ouvrir les utilisateurs"
         return None
 
@@ -428,13 +788,23 @@ class AssistantService:
                     self._tool_events.append(
                         {"tool": call.name, "status": "denied", "reason": "tool_call_limit"}
                     )
-                    record_audit(repo, "chatbot.tool_denied", context.username, {
-                        "conversation_id": conversation_id, "tool": call.name,
-                        "reason": "tool_call_limit", "result_count": 0,
-                    })
+                    record_audit(
+                        repo,
+                        "chatbot.tool_denied",
+                        context.username,
+                        {
+                            "conversation_id": conversation_id,
+                            "tool": call.name,
+                            "reason": "tool_call_limit",
+                            "result_count": 0,
+                        },
+                    )
                     raise ValueError("Tool call limit exceeded")
                 if not call.call_id or call.call_id in call_ids:
-                    raise ProviderError("Chatbot returned invalid tool call id")
+                    raise ProviderError(
+                        "Chatbot returned invalid tool call id",
+                        category="invalid_tool_response",
+                    )
                 call_ids.add(call.call_id)
                 if principal_resolver is not None:
                     refreshed = principal_resolver()
@@ -446,13 +816,39 @@ class AssistantService:
                     self._tool_events.append(
                         {"tool": call.name, "status": "denied", "reason": "unknown_tool"}
                     )
-                    record_audit(repo, "chatbot.tool_denied", context.username, {
-                        "conversation_id": conversation_id, "tool": call.name,
-                        "reason": "unknown_tool", "result_count": 0,
-                    })
+                    record_audit(
+                        repo,
+                        "chatbot.tool_denied",
+                        context.username,
+                        {
+                            "conversation_id": conversation_id,
+                            "tool": call.name,
+                            "reason": "unknown_tool",
+                            "result_count": 0,
+                        },
+                    )
                     raise ValueError("Unknown tool")
+                arguments = dict(call.arguments)
+                if (
+                    call.name == "search_access_control_knowledge"
+                    and self.policy.source_mode == "selected"
+                ):
+                    requested = arguments.get("publishers")
+                    enabled = {item.casefold(): item for item in self.policy.enabled_publishers}
+                    if isinstance(requested, list) and requested:
+                        arguments["publishers"] = [
+                            enabled[str(item).casefold()]
+                            for item in requested
+                            if str(item).casefold() in enabled
+                        ]
+                    else:
+                        arguments["publishers"] = list(self.policy.enabled_publishers)
+                    if not arguments["publishers"]:
+                        arguments["publishers"] = ["__none_enabled__"]
                 schema = next((item for item in TOOL_SCHEMAS if item["name"] == call.name), None)
-                if schema is None or not validate_tool_arguments(call.arguments, schema):
+                if schema is not None:
+                    arguments = self._drop_optional_nulls(arguments, schema["parameters"])
+                if schema is None or not validate_tool_arguments(arguments, schema):
                     self._tool_events.append(
                         {"tool": call.name, "status": "denied", "reason": "invalid_arguments"}
                     )
@@ -461,16 +857,20 @@ class AssistantService:
                         "chatbot.tool_denied",
                         context.username,
                         {
-                            "conversation_id": conversation_id, "tool": call.name,
-                            "reason": "invalid_arguments", "result_count": 0,
+                            "conversation_id": conversation_id,
+                            "tool": call.name,
+                            "reason": "invalid_arguments",
+                            "result_count": 0,
                         },
                     )
                     raise ValueError("Invalid tool arguments")
                 # Context is reconstructed by the API on every request and passed to every call.
                 projected = bound_tool_output(
-                    function(repo, call.arguments, context, hints),
+                    function(repo, arguments, context, hints),
                     max_items=self.config.max_result_items,
                 )
+                if call.name == "search_access_control_knowledge":
+                    self._capture_sources(projected)
                 self._tool_events.append(
                     {"tool": call.name, "status": "allowed", "reason": "authorized"}
                 )
@@ -479,13 +879,16 @@ class AssistantService:
                     "chatbot.tool_allowed",
                     context.username,
                     {
-                        "conversation_id": conversation_id, "tool": call.name,
-                        "reason": "authorized", "result_count": len(projected),
+                        "conversation_id": conversation_id,
+                        "tool": call.name,
+                        "reason": "authorized",
+                        "result_count": len(projected),
                     },
                 )
                 pending_outputs.append((call, projected))
             messages.extend(
-                item for item in result.output_items
+                item
+                for item in result.output_items
                 if item.get("type") in {"reasoning", "function_call"}
             )
             for call, projected in pending_outputs:
@@ -493,15 +896,80 @@ class AssistantService:
                     {
                         "type": "function_call_output",
                         "call_id": call.call_id,
-                        "output": json.dumps({
-                            "type": "eare_data",
-                            "untrusted": True,
-                            "tool": call.name,
-                            "data": projected,
-                        }, ensure_ascii=False, separators=(",", ":")),
+                        "output": json.dumps(
+                            {
+                                "type": "eare_data",
+                                "untrusted": True,
+                                "tool": call.name,
+                                "data": projected,
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
                     }
                 )
         raise ValueError("Tool round limit exceeded")
+
+    @classmethod
+    def _drop_optional_nulls(
+        cls, arguments: dict[str, Any], schema: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Undo OpenAI strict-mode null placeholders before EARE validation."""
+        required = set(schema.get("required", []))
+        properties = schema.get("properties")
+        property_schemas: dict[str, Any] = properties if isinstance(properties, dict) else {}
+        result: dict[str, Any] = {}
+        for key, value in arguments.items():
+            if value is None and key not in required:
+                continue
+            child_schema = property_schemas.get(key)
+            if isinstance(value, dict) and isinstance(child_schema, dict):
+                value = cls._drop_optional_nulls(value, child_schema)
+            result[key] = value
+        return result
+
+    def _capture_sources(self, projected: dict[str, Any]) -> None:
+        existing = {source.id for source in self._sources_used}
+        raw_sources = projected.get("sources")
+        if not isinstance(raw_sources, list):
+            return
+        for raw in raw_sources:
+            if not isinstance(raw, dict):
+                continue
+            identifier = str(raw.get("id") or "")
+            publisher = str(raw.get("publisher") or "")
+            title = str(raw.get("title") or "")
+            url = raw.get("url")
+            parsed_url = urlparse(str(url)) if url is not None else None
+            if (
+                not identifier
+                or identifier in existing
+                or not publisher
+                or not title
+                or (
+                    parsed_url is not None
+                    and (
+                        parsed_url.scheme != "https"
+                        or not parsed_url.netloc
+                        or parsed_url.username is not None
+                        or parsed_url.password is not None
+                    )
+                )
+            ):
+                continue
+            self._sources_used.append(
+                AssistantSource(
+                    id=identifier,
+                    publisher=publisher,
+                    title=title,
+                    reference=str(raw.get("reference")) if raw.get("reference") else None,
+                    version=str(raw.get("version")) if raw.get("version") else None,
+                    url=str(url) if url else None,
+                )
+            )
+            existing.add(identifier)
+            if len(self._sources_used) >= 8:
+                break
 
 
 class FakeLLMProvider:
@@ -523,5 +991,5 @@ class FakeLLMProvider:
     def validate_configuration(self) -> None:
         return None
 
-    def healthcheck(self) -> bool:
-        return True
+    def healthcheck(self) -> ProviderHealth:
+        return ProviderHealth(True, "ok")

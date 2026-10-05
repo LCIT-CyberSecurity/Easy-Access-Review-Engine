@@ -26,6 +26,12 @@ class ProviderResult:
     output_items: tuple[dict[str, Any], ...] = ()
 
 
+@dataclass(frozen=True)
+class ProviderHealth:
+    ok: bool
+    category: str
+
+
 class LLMProvider(Protocol):
     capabilities: ProviderCapabilities
 
@@ -34,4 +40,4 @@ class LLMProvider(Protocol):
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
     ) -> ProviderResult: ...
     def validate_configuration(self) -> None: ...
-    def healthcheck(self) -> bool: ...
+    def healthcheck(self) -> ProviderHealth: ...

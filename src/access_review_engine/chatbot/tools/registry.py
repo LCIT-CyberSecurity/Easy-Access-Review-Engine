@@ -21,6 +21,15 @@ from access_review_engine.chatbot.security.tool_policy import (
     MAX_RESULT_COUNT,
     MAX_STRING_CHARS,
 )
+from access_review_engine.chatbot.tools.knowledge import (
+    KNOWLEDGE_TOOL_FUNCTIONS,
+    KNOWLEDGE_TOOL_SCHEMAS,
+)
+from access_review_engine.chatbot.tools.semantic import (
+    SEMANTIC_TOOL_FUNCTIONS,
+    SEMANTIC_TOOL_SCHEMAS,
+)
+from access_review_engine.chatbot.tools.ui import UI_TOOL_FUNCTIONS, UI_TOOL_SCHEMAS
 from access_review_engine.golden_authorization import can_access_golden
 from access_review_engine.golden_functional import functional_access_rows
 from access_review_engine.guidance import GuidanceContext, build_guidance
@@ -411,116 +420,149 @@ TOOL_FUNCTIONS: dict[str, Tool] = {
     "get_source_status": source_status,
     "get_guidance": guidance,
     "get_page_help": page_help,
+    **SEMANTIC_TOOL_FUNCTIONS,
+    **KNOWLEDGE_TOOL_FUNCTIONS,
+    **UI_TOOL_FUNCTIONS,
 }
-TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "name": "find_authorized_campaign",
-        "description": "Find a campaign by name among campaigns visible to the current user",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 200}},
-            "required": ["query"],
-            "additionalProperties": False,
+TOOL_SCHEMAS = (
+    [
+        {
+            "type": "function",
+            "name": "find_authorized_campaign",
+            "description": "Find a campaign by name among campaigns visible to the current user",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 200}},
+                "required": ["query"],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_dashboard_summary",
-        "description": "Read-only authorized EARE dashboard projection",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_dashboard_summary",
+            "description": "Read-only authorized EARE dashboard projection",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function", "name": "get_campaign_readiness",
-        "description": "Read-only deterministic campaign launch readiness",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {"campaign_id": {"type": ["string", "null"]}},
-            "required": ["campaign_id"], "additionalProperties": False,
+        {
+            "type": "function",
+            "name": "get_campaign_readiness",
+            "description": "Read-only deterministic campaign launch readiness",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_id": {"type": ["string", "null"]}},
+                "required": ["campaign_id"],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function", "name": "get_campaign_findings",
-        "description": "Read-only authorized campaign finding summary",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {"campaign_id": {"type": ["string", "null"]}},
-            "required": ["campaign_id"], "additionalProperties": False,
+        {
+            "type": "function",
+            "name": "get_campaign_findings",
+            "description": "Read-only authorized campaign finding summary",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_id": {"type": ["string", "null"]}},
+                "required": ["campaign_id"],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function", "name": "get_golden_summary",
-        "description": "Read-only deterministic Golden quality summary",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_golden_summary",
+            "description": "Read-only deterministic Golden quality summary",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function", "name": "get_source_status",
-        "description": "Read-only authorized source and snapshot status",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {"provider": {"type": ["string", "null"]}},
-            "required": ["provider"], "additionalProperties": False,
+        {
+            "type": "function",
+            "name": "get_source_status",
+            "description": "Read-only authorized source and snapshot status",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"provider": {"type": ["string", "null"]}},
+                "required": ["provider"],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_campaign_summary",
-        "description": "Read-only authorized EARE campaign projection",
-        "strict": True,
-        "parameters": {
-            "type": "object",
-            "properties": {"campaign_id": {"type": ["string", "null"]}},
-            "required": ["campaign_id"],
-            "additionalProperties": False,
+        {
+            "type": "function",
+            "name": "get_campaign_summary",
+            "description": "Read-only authorized EARE campaign projection",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {"campaign_id": {"type": ["string", "null"]}},
+                "required": ["campaign_id"],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_golden_gaps",
-        "description": "Read-only authorized Golden quality projection",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_golden_gaps",
+            "description": "Read-only authorized Golden quality projection",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_review_progress",
-        "description": "Read-only authorized review progress projection",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_review_progress",
+            "description": "Read-only authorized review progress projection",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_guidance",
-        "description": "Read-only deterministic EARE guidance",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_guidance",
+            "description": "Read-only deterministic EARE guidance",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-    {
-        "type": "function",
-        "name": "get_page_help",
-        "description": "Read-only deterministic help for the validated current page",
-        "strict": True,
-        "parameters": {
-            "type": "object", "properties": {}, "required": [], "additionalProperties": False
+        {
+            "type": "function",
+            "name": "get_page_help",
+            "description": "Read-only deterministic help for the validated current page",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
         },
-    },
-]
+    ]
+    + SEMANTIC_TOOL_SCHEMAS
+    + KNOWLEDGE_TOOL_SCHEMAS
+    + UI_TOOL_SCHEMAS
+)
 
 
 def _safe_text(value: Any) -> str:

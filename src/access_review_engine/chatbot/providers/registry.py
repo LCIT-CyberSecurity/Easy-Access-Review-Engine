@@ -8,4 +8,6 @@ from access_review_engine.chatbot.providers.openai import OpenAIProvider, Provid
 def build_provider(config: ChatbotConfig) -> LLMProvider:
     if config.provider == "openai":
         return OpenAIProvider(config)
-    raise ProviderError(f"Unsupported chatbot provider: {config.provider}")
+    raise ProviderError(
+        f"Unsupported chatbot provider: {config.provider}", category="provider_error"
+    )
