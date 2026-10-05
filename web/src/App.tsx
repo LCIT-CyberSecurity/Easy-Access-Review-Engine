@@ -7085,7 +7085,7 @@ export function ChatbotGuardrailsAdministration({ value, onSave, pending = false
     </div>
     <h3>Bounds and retention</h3>
     <div className="form-grid">{[
-      ["max_tool_calls", 1, 20], ["max_tool_rounds", 1, 5], ["max_results", 1, 500], ["history_messages", 2, 30], ["retention_days", 1, 3650],
+      ["max_tool_calls", 1, 20], ["max_tool_rounds", 1, 5], ["max_results", 1, 100], ["history_messages", 2, 30], ["retention_days", 1, 3650],
     ].map(([key, minimum, maximum]) => <label key={String(key)}>{String(key).replaceAll("_", " ")}<input type="number" min={Number(minimum)} max={Number(maximum)} value={Number(limits[String(key)] ?? minimum)} onChange={(event) => updateSection("limits", limits, String(key), Number(event.target.value))} /></label>)}</div>
     <h3>Logging</h3>
     <div className="chatbot-guardrail-grid">{Object.entries(logging).map(([key, enabled]) => <label className="check-row" key={key}><input type="checkbox" checked={Boolean(enabled)} onChange={(event) => updateSection("logging", logging, key, event.target.checked)} /> {key.replaceAll("_", " ")}</label>)}</div>

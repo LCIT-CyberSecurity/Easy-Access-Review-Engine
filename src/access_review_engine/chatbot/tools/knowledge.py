@@ -98,5 +98,24 @@ KNOWLEDGE_TOOL_SCHEMAS = [
             "required": ["query"],
             "additionalProperties": False,
         },
+    },
+    {
+        "type": "function",
+        "name": "select_used_knowledge_sources",
+        "description": "Declare which source IDs from the preceding knowledge result were used",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "source_ids": {
+                    "type": "array",
+                    "items": {"type": "string", "maxLength": 200},
+                    "maxItems": 8,
+                    "uniqueItems": True,
+                }
+            },
+            "required": ["source_ids"],
+            "additionalProperties": False,
+        },
     }
 ]

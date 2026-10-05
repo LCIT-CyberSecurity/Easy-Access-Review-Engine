@@ -105,21 +105,6 @@ class GuardrailPolicy:
             key = "access_control"
         if not self.domains.get(key, False):
             return False, f"domain_disabled:{key}"
-        if any(
-            term in text
-            for term in (
-                "cnil",
-                "anssi",
-                "nist",
-                "iso",
-                "hds",
-                "enisa",
-                "standard",
-                "référentiel",
-                "referentiel",
-            )
-        ) and not self.domains.get("external_guidance", False):
-            return False, "domain_disabled:external_guidance"
         return True, "allowed"
 
 
@@ -184,7 +169,7 @@ def validate_policy(payload: object) -> GuardrailPolicy:
         max_tool_rounds=_bounded_integer(
             raw_limits.get("max_tool_rounds", 3), "max_tool_rounds", 1, 5
         ),
-        max_results=_bounded_integer(raw_limits.get("max_results", 100), "max_results", 1, 500),
+        max_results=_bounded_integer(raw_limits.get("max_results", 100), "max_results", 1, 100),
         history_messages=_bounded_integer(
             raw_limits.get("history_messages", 12), "history_messages", 2, 30
         ),

@@ -31,7 +31,7 @@ UI_CATALOG: tuple[UIPage, ...] = (
         "Campaigns",
         "/campaigns",
         "Access review campaigns.",
-        "Audit → Campaigns",
+        "Audit → Campagnes",
         _OPERATIONAL,
     ),
     UIPage(
@@ -39,7 +39,7 @@ UI_CATALOG: tuple[UIPage, ...] = (
         "Create a campaign",
         "/campaigns/new",
         "Prepare a new campaign; navigation does not create it.",
-        "Audit → Campaigns → Create a campaign",
+        "Audit → Campagnes → Créer une campagne",
         _OPERATIONAL,
     ),
     UIPage(
@@ -47,7 +47,7 @@ UI_CATALOG: tuple[UIPage, ...] = (
         "Golden Source",
         "/golden",
         "Expected access reference and its quality.",
-        "Access & Reference → Golden Source",
+        "Accès & Référentiel → Golden Source",
         _OPERATIONAL,
     ),
     UIPage(
@@ -59,14 +59,14 @@ UI_CATALOG: tuple[UIPage, ...] = (
         _REVIEWS,
     ),
     UIPage(
-        "ACTIONS", "Actions", "/actions", "Read remediation follow-up.", "Audit → Actions", _ACTIONS
+        "ACTIONS", "Remédiations / Actions", "/actions", "Read remediation follow-up.", "Audit → Remédiations / Actions", _ACTIONS
     ),
     UIPage(
         "SOURCES",
-        "Sources & IdPs",
+        "Sources",
         "/sources",
         "Connected providers, snapshots and collection status.",
-        "System → Sources & IdPs",
+        "Système → Sources",
         _OPERATIONAL,
     ),
     UIPage(
@@ -74,15 +74,15 @@ UI_CATALOG: tuple[UIPage, ...] = (
         "Reports",
         "/reports",
         "Authorized access-review reports.",
-        "Audit → Reports",
+        "Audit → Rapports",
         _OPERATIONAL,
     ),
     UIPage(
         "PERIMETERS",
-        "Scopes",
+        "Périmètres",
         "/perimeters",
         "Organizations, information systems and their associations.",
-        "Access & Reference → Scopes",
+        "Accès & Référentiel → Périmètres",
         _OPERATIONAL,
     ),
     UIPage(
@@ -90,7 +90,7 @@ UI_CATALOG: tuple[UIPage, ...] = (
         "Identities",
         "/identities",
         "Observed identities and their access assignments.",
-        "Access & Reference → Identities",
+        "Accès & Référentiel → Identités",
         _OPERATIONAL,
     ),
     UIPage(
@@ -98,7 +98,7 @@ UI_CATALOG: tuple[UIPage, ...] = (
         "Access",
         "/accesses",
         "Reviewable Access objects and functional model.",
-        "Access & Reference → Access",
+        "Accès & Référentiel → Accès",
         _OPERATIONAL,
     ),
     UIPage(

@@ -2,7 +2,7 @@ from access_review_engine.chatbot.semantic_catalog import prompt_catalog
 
 CHATBOT_PROMPT_VERSION = "eare-chatbot-v3"
 SCOPE_POLICY_VERSION = "1.2"
-TOOL_POLICY_VERSION = "1.2"
+TOOL_POLICY_VERSION = "1.3"
 SECURITY_POLICY_VERSION = "1.2"
 
 SYSTEM_PROMPT = (
@@ -54,7 +54,8 @@ the user to the relevant screen instead.
 
 For any external requirement, recommendation, standard or good practice, first call
 search_access_control_knowledge. Cite only source metadata returned by that tool in the current
-answer. Never invent a title, clause, control, date, version or URL. If the catalog has no verified
+answer, then call select_used_knowledge_sources with only the source IDs actually used. The
+backend will ignore IDs that were not returned by the knowledge tool. Never invent a title, clause, control, date, version or URL. If the catalog has no verified
 source, state that you can provide general orientation but cannot precisely attribute it. Do not
 claim that ISO/IEC 27001, HDS or another framework imposes MFA everywhere without verified and
 applicable support. Use short paraphrases and never reproduce long passages from standards.

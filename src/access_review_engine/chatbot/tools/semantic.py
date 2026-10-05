@@ -97,6 +97,55 @@ def _matches_perimeters(row: dict[str, Any], args: dict[str, Any]) -> bool:
     return True
 
 
+def _information_system_access_keys(
+    repo: Repository, args: dict[str, Any]
+) -> set[tuple[str, str]]:
+    requested = {str(value) for value in args.get("information_system_ids", [])}
+    if not requested:
+        return set()
+    accesses = {
+        str(row.get("id")): (str(row.get("provider") or ""), str(row.get("name") or ""))
+        for row in repo.list_payloads("accesses")
+    }
+    return {
+        accesses[str(assignment.get("object_id"))]
+        for assignment in repo.list_payloads("scope_assignments")
+        if assignment.get("object_type") == "access"
+        and assignment.get("scope_type") == "information_system"
+        and str(assignment.get("scope_id")) in requested
+        and str(assignment.get("object_id")) in accesses
+    }
+
+
+def _information_system_access_ids(repo: Repository, args: dict[str, Any]) -> set[str]:
+    requested = {str(value) for value in args.get("information_system_ids", [])}
+    return {
+        str(assignment.get("object_id"))
+        for assignment in repo.list_payloads("scope_assignments")
+        if assignment.get("object_type") == "access"
+        and assignment.get("scope_type") == "information_system"
+        and str(assignment.get("scope_id")) in requested
+    }
+
+
+def _matches_information_system_access(
+    row: dict[str, Any], repo: Repository, args: dict[str, Any]
+) -> bool:
+    keys = _information_system_access_keys(repo, args)
+    if not keys:
+        return not args.get("information_system_ids")
+    row_key = (str(row.get("access_provider") or row.get("provider") or ""), str(
+        row.get("access_name") or row.get("name") or ""
+    ))
+    if row_key in keys:
+        return True
+    return any(
+        str(access.get("id")) in _information_system_access_ids(repo, args)
+        for access in row.get("accesses", [])
+        if isinstance(access, dict)
+    )
+
+
 def _visible_golden_rows(repo: Repository, context: AuthorizationContext) -> list[dict[str, Any]]:
     versions = {str(row.get("id")): row for row in repo.list_payloads("golden_source_versions")}
     result: list[dict[str, Any]] = []
@@ -187,7 +236,9 @@ def _access_rows(repo: Repository, context: AuthorizationContext) -> list[dict[s
     return result
 
 
-def _filter_accesses(rows: list[dict[str, Any]], args: dict[str, Any]) -> list[dict[str, Any]]:
+def _filter_accesses(
+    rows: list[dict[str, Any]], repo: Repository, args: dict[str, Any]
+) -> list[dict[str, Any]]:
     text = str(args.get("text") or "").casefold()
     result: list[dict[str, Any]] = []
     for row in rows:
@@ -227,6 +278,8 @@ def _filter_accesses(rows: list[dict[str, Any]], args: dict[str, Any]) -> list[d
             continue
         if not _matches_perimeters(row, args):
             continue
+        if not _matches_information_system_access(row, repo, args):
+            continue
         result.append(row)
     return result
 
@@ -234,7 +287,7 @@ def _filter_accesses(rows: list[dict[str, Any]], args: dict[str, Any]) -> list[d
 def search_authorized_accesses(
     repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
 ) -> dict[str, Any]:
-    rows = _filter_accesses(_access_rows(repo, context), args)
+    rows = _filter_accesses(_access_rows(repo, context), repo, args)
     limit = _limit(args)
     providers = sorted({str(row["provider"]) for row in rows if row.get("provider")})
     return {
@@ -326,7 +379,9 @@ def _identity_rows(repo: Repository, context: AuthorizationContext) -> list[dict
     return result
 
 
-def _filter_identities(rows: list[dict[str, Any]], args: dict[str, Any]) -> list[dict[str, Any]]:
+def _filter_identities(
+    rows: list[dict[str, Any]], repo: Repository, args: dict[str, Any]
+) -> list[dict[str, Any]]:
     text = str(args.get("text") or "").casefold()
     result = []
     for row in rows:
@@ -366,7 +421,12 @@ def _filter_identities(rows: list[dict[str, Any]], args: dict[str, Any]) -> list
                 and row["privileged_access"] is not args["privileged_access"]
             ):
                 continue
-            if not _matches_perimeters(row, args):
+            non_information_args = {
+                key: value for key, value in args.items() if key != "information_system_ids"
+            }
+            if not _matches_perimeters(row, non_information_args):
+                continue
+            if not _matches_information_system_access(row, repo, args):
                 continue
             result.append(row)
     return result
@@ -375,7 +435,7 @@ def _filter_identities(rows: list[dict[str, Any]], args: dict[str, Any]) -> list
 def search_authorized_identities(
     repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
 ) -> dict[str, Any]:
-    rows = _filter_identities(_identity_rows(repo, context), args)
+    rows = _filter_identities(_identity_rows(repo, context), repo, args)
     limit = _limit(args)
     return {"items": rows[:limit], "count": len(rows), "truncated": len(rows) > limit}
 
@@ -430,6 +490,7 @@ def search_authorized_reviews(
         and (not args.get("campaign_id") or row["campaign_id"] == args["campaign_id"])
         and (not args.get("classification") or row["classification"] == args["classification"])
         and (not args.get("status") or row["status"] == args["status"])
+        and _matches_information_system_access(row, repo, args)
     ]
     limit = _limit(args)
     return {"items": rows[:limit], "count": len(rows), "truncated": len(rows) > limit}
@@ -443,12 +504,129 @@ def get_authorized_review(
     return {"available": row is not None, "item": row}
 
 
+def get_authorized_review_context(
+    repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
+) -> dict[str, Any]:
+    """Return only the evidence needed to understand one authorized review item."""
+    identifier = str(args.get("review_id") or hints.object_id or "")
+    review = next((item for item in _review_rows(repo, context) if item["id"] == identifier), None)
+    if review is None:
+        return {"available": False, "item": None}
+    raw_review = next(
+        (item for item in repo.list_payloads("review_items") if str(item.get("id")) == identifier),
+        None,
+    )
+    if raw_review is None:
+        return {"available": False, "item": None}
+    identity = next(
+        (
+            item
+            for item in repo.list_payloads("identities")
+            if str(item.get("provider")) == str(raw_review.get("identity_provider"))
+            and str(item.get("identifier")) == str(raw_review.get("identity_identifier"))
+        ),
+        None,
+    )
+    access = next(
+        (
+            item
+            for item in repo.list_payloads("accesses")
+            if str(item.get("provider")) == str(raw_review.get("access_provider"))
+            and str(item.get("name")) == str(raw_review.get("access_name"))
+        ),
+        None,
+    )
+    assignment = next(
+        (
+            item
+            for item in repo.list_payloads("access_assignments")
+            if str(item.get("provider")) == str(raw_review.get("access_provider"))
+            and str(item.get("access_name")) == str(raw_review.get("access_name"))
+            and str(item.get("identity_provider")) == str(raw_review.get("identity_provider"))
+            and str(item.get("identity_identifier")) == str(raw_review.get("identity_identifier"))
+        ),
+        None,
+    )
+    decisions = [
+        item for item in repo.list_payloads("decisions")
+        if str(item.get("review_item_id")) == identifier
+    ]
+    return {
+        "available": True,
+        "item": {
+            "review": review,
+            "identity": (
+                {
+                    "id": identity.get("id"),
+                    "provider": identity.get("provider"),
+                    "identifier": identity.get("identifier"),
+                    "display_name": identity.get("display_name"),
+                    "type": identity.get("type"),
+                    "status": identity.get("status"),
+                    "owner": identity.get("account_owner"),
+                }
+                if identity
+                else None
+            ),
+            "access": (
+                {
+                    "id": access.get("id"),
+                    "provider": access.get("provider"),
+                    "name": access.get("name"),
+                    "display_name": access.get("display_name"),
+                    "description": access.get("description"),
+                    "owner": access.get("access_owner"),
+                    "target": access.get("target"),
+                    "capabilities": access.get("capabilities", []),
+                }
+                if access
+                else None
+            ),
+            "access_assignment": (
+                {
+                    key: assignment.get(key)
+                    for key in (
+                        "id", "provider", "access_name", "identity_provider", "identity_identifier"
+                    )
+                }
+                if assignment
+                else None
+            ),
+            "permission": access.get("permission") if access else None,
+            "functional_rights": access.get("functional_rights", []) if access else [],
+            "targets": access.get("target") if access else None,
+            "capabilities": access.get("capabilities", []) if access else [],
+            "classification": raw_review.get("classification"),
+            "findings": raw_review.get("findings", []),
+            "current_decision": (
+                {
+                    key: decisions[0].get(key)
+                    for key in ("id", "review_item_id", "value", "status", "decided_at")
+                    if key in decisions[0]
+                }
+                if decisions
+                else None
+            ),
+            "business_context": access.get("business_context") if access else None,
+            "owner": access.get("access_owner") if access else None,
+            "perimeters": _perimeters(repo, "access", access.get("id")) if access else {},
+        },
+    }
+
+
 def search_authorized_campaigns(
     repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
 ) -> dict[str, Any]:
     text = str(args.get("text") or "").casefold()
     rows = []
+    review_ids = {
+        str(item.get("campaign_id"))
+        for item in repo.list_payloads("review_items")
+        if _matches_information_system_access(item, repo, args)
+    }
     for row in _visible_campaign_rows(repo, context):
+        if args.get("information_system_ids") and str(row.get("id")) not in review_ids:
+            continue
         providers = sorted(_campaign_providers(row, repo))
         item: dict[str, Any] = {
             "id": str(row.get("id")),
@@ -528,6 +706,7 @@ def search_authorized_remediations(
         if (not text or text in json.dumps(row, ensure_ascii=False).casefold())
         and (not args.get("status") or row["status"] == args["status"])
         and (not args.get("provider") or row["provider"] == args["provider"])
+        and _matches_information_system_access(row, repo, args)
     ]
     limit = _limit(args)
     return {"items": rows[:limit], "count": len(rows), "truncated": len(rows) > limit}
@@ -772,6 +951,7 @@ SEMANTIC_TOOL_FUNCTIONS = {
     "get_authorized_identity": get_authorized_identity,
     "search_authorized_reviews": search_authorized_reviews,
     "get_authorized_review": get_authorized_review,
+    "get_authorized_review_context": get_authorized_review_context,
     "search_authorized_campaigns": search_authorized_campaigns,
     "get_authorized_campaign": get_authorized_campaign,
     "search_authorized_remediations": search_authorized_remediations,
@@ -855,6 +1035,7 @@ SEMANTIC_TOOL_SCHEMAS = [
             "campaign_id": _STRING,
             "classification": _STRING,
             "status": _STRING,
+            "information_system_ids": _STRING_ARRAY,
             "limit": _LIMIT,
         },
         [],
@@ -866,9 +1047,15 @@ SEMANTIC_TOOL_SCHEMAS = [
         ["review_id"],
     ),
     _schema(
+        "get_authorized_review_context",
+        "Get the authorized evidence context for one review item only",
+        {"review_id": {"type": ["string", "null"], "maxLength": 200}},
+        ["review_id"],
+    ),
+    _schema(
         "search_authorized_campaigns",
         "Search authorized Campaign DTOs",
-        {"text": _STRING, "provider": _STRING, "status": _STRING, "limit": _LIMIT},
+        {"text": _STRING, "provider": _STRING, "status": _STRING, "information_system_ids": _STRING_ARRAY, "limit": _LIMIT},
         [],
     ),
     _schema(
@@ -880,7 +1067,7 @@ SEMANTIC_TOOL_SCHEMAS = [
     _schema(
         "search_authorized_remediations",
         "Search authorized remediation DTOs",
-        {"text": _STRING, "provider": _STRING, "status": _STRING, "limit": _LIMIT},
+        {"text": _STRING, "provider": _STRING, "status": _STRING, "information_system_ids": _STRING_ARRAY, "limit": _LIMIT},
         [],
     ),
     _schema(

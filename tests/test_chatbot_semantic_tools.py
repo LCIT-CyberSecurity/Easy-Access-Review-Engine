@@ -10,6 +10,7 @@ from access_review_engine.chatbot.tools.semantic import (
     get_authentication_posture_summary,
     get_authorized_access,
     get_authorized_identity,
+    get_authorized_review_context,
     search_authorized_accesses,
     search_authorized_campaigns,
     search_authorized_identities,
@@ -219,13 +220,79 @@ def test_perimeter_filter_is_classification_not_new_authorization(tmp_path) -> N
     assert excluded["count"] == 0
 
 
+def test_information_system_report_does_not_expand_shared_provider_perimeter(tmp_path) -> None:
+    with Repository(tmp_path / "perimeter-report.db") as repo:
+        _seed(repo)
+        repo.upsert(
+            "accesses",
+            {"id": "access-rh", "provider": "A", "name": "rh-reader"},
+        )
+        repo.upsert(
+            "identities",
+            {
+                "id": "identity-rh",
+                "provider": "A",
+                "identifier": "svc-rh",
+                "type": "technical_account",
+                "status": "active",
+            },
+        )
+        repo.upsert(
+            "access_assignments",
+            {
+                "id": "assignment-rh",
+                "provider": "A",
+                "access_name": "rh-reader",
+                "identity_provider": "A",
+                "identity_identifier": "svc-rh",
+            },
+        )
+        repo.upsert(
+            "scope_assignments",
+            {
+                "id": "scope-access-rh",
+                "scope_type": "information_system",
+                "scope_id": "rh",
+                "object_type": "access",
+                "object_id": "access-rh",
+            },
+        )
+        repo.upsert(
+            "review_items",
+            {
+                "id": "review-rh",
+                "campaign_id": "campaign-a",
+                "identity_provider": "A",
+                "identity_identifier": "svc-rh",
+                "access_provider": "A",
+                "access_name": "rh-reader",
+                "classification": "unexpected",
+                "reviewer": {"identity": "bob"},
+            },
+        )
+        repo.upsert(
+            "remediation_actions",
+            {"id": "action-rh", "review_item_id": "review-rh", "action": "revoke"},
+        )
+        context = _context("OPERATOR", "A")
+        perimeter = {"information_system_ids": ["finance"], "limit": 100}
+        assert search_authorized_accesses(repo, perimeter, context, UIHints())["count"] == 1
+        assert search_authorized_identities(repo, perimeter, context, UIHints())["count"] == 1
+        reviews = search_authorized_reviews(repo, perimeter, context, UIHints())
+        remediations = search_authorized_remediations(repo, perimeter, context, UIHints())
+        campaigns = search_authorized_campaigns(repo, perimeter, context, UIHints())
+    assert [row["id"] for row in reviews["items"]] == ["review-a"]
+    assert [row["id"] for row in remediations["items"]] == ["action-a"]
+    assert [row["id"] for row in campaigns["items"]] == ["campaign-a"]
+
+
 def test_ui_help_returns_only_real_role_authorized_routes(tmp_path) -> None:
     with Repository(tmp_path / "ui.db") as repo:
         operator = get_ui_help(repo, {"topic": "SI"}, _context("OPERATOR", "A"), UIHints())
         denied = get_ui_help(repo, {"page": "USERS"}, _context("OPERATOR", "A"), UIHints())
         admin = get_ui_help(repo, {"page": "USERS"}, _context("ADMIN"), UIHints())
     assert operator["item"]["route"] == "/perimeters"
-    assert operator["item"]["navigation_path"] == "Access & Reference → Scopes"
+    assert operator["item"]["navigation_path"] == "Accès & Référentiel → Périmètres"
     assert denied == {"available": False, "item": None}
     assert admin["item"]["route"] == "/system/users"
 
@@ -296,6 +363,22 @@ def test_role_visibility_contract_for_reviews_campaigns_and_remediations(tmp_pat
     assert remediations["items"][0]["id"] == "action-a"
 
 
+def test_group_owner_can_read_only_their_review_context(tmp_path) -> None:
+    with Repository(tmp_path / "review-context.db") as repo:
+        _seed(repo)
+        owner = _context("GROUP_OWNER", username="alice")
+        own = get_authorized_review_context(
+            repo, {"review_id": "review-a"}, owner, UIHints()
+        )
+        other = get_authorized_review_context(
+            repo, {"review_id": "review-b"}, owner, UIHints()
+        )
+    assert own["available"] is True
+    assert own["item"]["review"]["id"] == "review-a"
+    assert own["item"]["access"]["name"] == "finance-admin"
+    assert other == {"available": False, "item": None}
+
+
 def test_authentication_posture_preserves_not_collected_semantics(tmp_path) -> None:
     with Repository(tmp_path / "semantic.db") as repo:
         _seed(repo)
@@ -320,6 +403,20 @@ def test_semantic_search_is_bounded_but_count_is_exact(tmp_path) -> None:
         )
     assert result["count"] == 30
     assert len(result["items"]) == 5
+    assert result["truncated"] is True
+
+
+def test_semantic_limit_is_capped_and_truncation_is_consistent(tmp_path) -> None:
+    with Repository(tmp_path / "bounded.db") as repo:
+        for index in range(50):
+            repo.upsert(
+                "accesses", {"id": f"bounded-{index}", "provider": "A", "name": f"a-{index}"}
+            )
+        result = search_authorized_accesses(
+            repo, {"limit": 25}, _context("OPERATOR", "A"), UIHints()
+        )
+    assert result["count"] == 50
+    assert len(result["items"]) == 25
     assert result["truncated"] is True
 
 

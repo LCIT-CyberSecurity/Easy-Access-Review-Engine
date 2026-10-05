@@ -58,3 +58,20 @@ def test_disabled_domain_is_rejected_before_provider_use() -> None:
         False,
         "domain_disabled:authentication",
     )
+
+
+def test_external_guidance_domain_is_not_publisher_specific() -> None:
+    payload = GuardrailPolicy.defaults().as_dict()
+    payload["domains"]["external_guidance"] = False
+    policy = validate_policy(payload)
+    assert policy.allows("EARE_ACCESS_GUIDANCE", "Que recommande CISA sur IAM ?") == (
+        True,
+        "allowed",
+    )
+
+
+def test_max_results_is_capped_at_one_hundred() -> None:
+    payload = GuardrailPolicy.defaults().as_dict()
+    payload["limits"]["max_results"] = 101
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        validate_policy(payload)

@@ -57,7 +57,6 @@ from access_review_engine.chatbot.tools.registry import (
     review_progress,
 )
 from access_review_engine.chatbot.tools.semantic import (
-    aggregate_authorized_data,
     get_authentication_posture_summary,
     search_authorized_accesses,
     search_authorized_campaigns,
@@ -105,6 +104,7 @@ class AssistantService:
                 self.provider_error = exc
         self._tool_events: list[dict[str, str]] = []
         self._sources_used: list[AssistantSource] = []
+        self._available_sources: dict[str, dict[str, Any]] = {}
 
     @staticmethod
     def _context(principal: Any) -> AuthorizationContext:
@@ -126,6 +126,7 @@ class AssistantService:
         started = time.monotonic()
         self._tool_events = []
         self._sources_used = []
+        self._available_sources = {}
         hints = resolve_ui_context((hints or UIHints()).route, (hints or UIHints()).object_id)
         safe_question, intent, secret_redacted = self.safety.check_input(question, hints.route)
         context = self._context(principal)
@@ -406,14 +407,17 @@ class AssistantService:
         access_result = search_authorized_accesses(repo, access_args, context, hints)
         identity_result = search_authorized_identities(repo, identity_args, context, hints)
         providers = [str(provider) for provider in access_result.get("providers", [])]
+        perimeter_filter = (
+            {"information_system_ids": [str(perimeter.get("id"))]} if perimeter is not None else {}
+        )
         campaigns = search_authorized_campaigns(
-            repo, {"limit": self.config.max_result_items}, context, hints
+            repo, {**perimeter_filter, "limit": self.config.max_result_items}, context, hints
         )
         reviews = search_authorized_reviews(
-            repo, {"limit": self.config.max_result_items}, context, hints
+            repo, {**perimeter_filter, "limit": self.config.max_result_items}, context, hints
         )
         remediations = search_authorized_remediations(
-            repo, {"limit": self.config.max_result_items}, context, hints
+            repo, {**perimeter_filter, "limit": self.config.max_result_items}, context, hints
         )
         authentication_rows = []
         for provider_name in providers:
@@ -442,7 +446,15 @@ class AssistantService:
             )
         if self.policy.source_mode == "selected" and not self.policy.enabled_publishers:
             knowledge = {"items": [], "sources": [], "count": 0}
-        self._capture_sources(knowledge)
+        self._capture_sources(
+            knowledge,
+            {
+                str(source_id)
+                for item in knowledge.get("items", [])
+                if isinstance(item, dict)
+                for source_id in item.get("source_ids", [])
+            },
+        )
         metrics = {
             "campaigns": summary["campaigns"],
             "pending_reviews": progress["pending"],
@@ -482,63 +494,8 @@ class AssistantService:
         campaign_count: int | None = int(campaigns["count"])
         campaign_truncated = bool(campaigns["truncated"])
         classification_groups: Counter[str] = Counter(
-            aggregate_authorized_data(
-                repo,
-                {"entity": "review", "metric": "count", "group_by": "classification"},
-                context,
-                hints,
-            ).get("groups", {})
+            str(row.get("classification") or "unknown") for row in review_rows
         )
-        if perimeter is not None:
-            review_rows = []
-            remediation_rows = []
-            campaign_rows = []
-            review_count = 0
-            remediation_count = 0
-            campaign_truncated = False
-            classification_groups = Counter()
-            for provider_name in providers:
-                provider_reviews = search_authorized_reviews(
-                    repo,
-                    {"provider": provider_name, "limit": self.config.max_result_items},
-                    context,
-                    hints,
-                )
-                review_rows.extend(provider_reviews["items"])
-                review_count += int(provider_reviews["count"])
-                classification_groups.update(
-                    aggregate_authorized_data(
-                        repo,
-                        {
-                            "entity": "review",
-                            "metric": "count",
-                            "group_by": "classification",
-                            "filters": {"provider": provider_name},
-                        },
-                        context,
-                        hints,
-                    ).get("groups", {})
-                )
-                provider_remediations = search_authorized_remediations(
-                    repo,
-                    {"provider": provider_name, "limit": self.config.max_result_items},
-                    context,
-                    hints,
-                )
-                remediation_rows.extend(provider_remediations["items"])
-                remediation_count += int(provider_remediations["count"])
-                provider_campaigns = search_authorized_campaigns(
-                    repo,
-                    {"provider": provider_name, "limit": self.config.max_result_items},
-                    context,
-                    hints,
-                )
-                campaign_rows.extend(provider_campaigns["items"])
-                campaign_truncated = campaign_truncated or bool(provider_campaigns["truncated"])
-            review_rows = list({str(row["id"]): row for row in review_rows}.values())
-            remediation_rows = list({str(row["id"]): row for row in remediation_rows}.values())
-            campaign_rows = list({str(row["id"]): row for row in campaign_rows}.values())
-            campaign_count = None if campaign_truncated else len(campaign_rows)
         sections: dict[str, Any] = {}
         if identity_result["count"]:
             sections["identities"] = {
@@ -569,7 +526,7 @@ class AssistantService:
                     repo, {**access_count_args, "privileged": True, "limit": 1}, context, hints
                 )["count"],
                 "without_owner": search_authorized_accesses(
-                    repo, {**access_count_args, "owner": "", "limit": 1}, context, hints
+                    repo, {**access_count_args, "owner_state": "missing", "limit": 1}, context, hints
                 )["count"],
                 "by_completeness": dict(sorted(access_completeness.items())),
             }
@@ -579,7 +536,9 @@ class AssistantService:
                 "by_state": dict(sorted(authentication.items())),
                 "note": "not_collected does not mean that MFA or another control is disabled",
             }
-        providers_truncated = bool(access_result.get("providers_truncated"))
+        # Reviews, campaigns and remediations are already filtered by their linked
+        # review/access perimeter; provider facets must not widen an SI report.
+        providers_truncated = False
         if review_count and not (perimeter is not None and providers_truncated):
             sections["reviews"] = {
                 "count": review_count,
@@ -829,6 +788,33 @@ class AssistantService:
                     )
                     raise ValueError("Unknown tool")
                 arguments = dict(call.arguments)
+                if call.name == "search_access_control_knowledge" and not self.policy.domains.get(
+                    "external_guidance", False
+                ):
+                    self._tool_events.append(
+                        {"tool": call.name, "status": "denied", "reason": "domain_disabled:external_guidance"}
+                    )
+                    record_audit(
+                        repo,
+                        "chatbot.tool_denied",
+                        context.username,
+                        {
+                            "conversation_id": conversation_id,
+                            "tool": call.name,
+                            "reason": "domain_disabled:external_guidance",
+                            "result_count": 0,
+                        },
+                    )
+                    pending_outputs.append(
+                        (
+                            call,
+                            {
+                                "available": False,
+                                "reason": "domain_disabled:external_guidance",
+                            },
+                        )
+                    )
+                    continue
                 if (
                     call.name == "search_access_control_knowledge"
                     and self.policy.source_mode == "selected"
@@ -864,13 +850,31 @@ class AssistantService:
                         },
                     )
                     raise ValueError("Invalid tool arguments")
+                if "limit" in arguments:
+                    arguments["limit"] = min(
+                        int(arguments["limit"]), self.config.max_result_items
+                    )
                 # Context is reconstructed by the API on every request and passed to every call.
                 projected = bound_tool_output(
                     function(repo, arguments, context, hints),
                     max_items=self.config.max_result_items,
                 )
                 if call.name == "search_access_control_knowledge":
-                    self._capture_sources(projected)
+                    self._available_sources = {
+                        str(source.get("id")): source
+                        for source in projected.get("sources", [])
+                        if isinstance(source, dict) and source.get("id")
+                    }
+                elif call.name == "select_used_knowledge_sources":
+                    used_ids = {
+                        str(source_id)
+                        for source_id in arguments.get("source_ids", [])
+                        if str(source_id) in self._available_sources
+                    }
+                    self._capture_sources(
+                        {"sources": list(self._available_sources.values())}, used_ids
+                    )
+                    projected = {"source_ids": sorted(used_ids)}
                 self._tool_events.append(
                     {"tool": call.name, "status": "allowed", "reason": "authorized"}
                 )
@@ -928,7 +932,9 @@ class AssistantService:
             result[key] = value
         return result
 
-    def _capture_sources(self, projected: dict[str, Any]) -> None:
+    def _capture_sources(
+        self, projected: dict[str, Any], used_source_ids: set[str] | None = None
+    ) -> None:
         existing = {source.id for source in self._sources_used}
         raw_sources = projected.get("sources")
         if not isinstance(raw_sources, list):
@@ -937,6 +943,8 @@ class AssistantService:
             if not isinstance(raw, dict):
                 continue
             identifier = str(raw.get("id") or "")
+            if used_source_ids is not None and identifier not in used_source_ids:
+                continue
             publisher = str(raw.get("publisher") or "")
             title = str(raw.get("title") or "")
             url = raw.get("url")

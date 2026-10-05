@@ -38,6 +38,12 @@ from access_review_engine.storage import Repository, hydrate_golden_version
 Tool = Callable[[Repository, dict[str, Any], AuthorizationContext, UIHints], dict[str, Any]]
 
 
+def select_used_knowledge_sources(
+    repo: Repository, args: dict[str, Any], context: AuthorizationContext, hints: UIHints
+) -> dict[str, Any]:
+    return {"source_ids": [str(item) for item in args.get("source_ids", [])]}
+
+
 def _campaign_providers(
     row: dict[str, Any], reviews: list[dict[str, Any]], snapshots: list[dict[str, Any]]
 ) -> set[str]:
@@ -422,6 +428,7 @@ TOOL_FUNCTIONS: dict[str, Tool] = {
     "get_page_help": page_help,
     **SEMANTIC_TOOL_FUNCTIONS,
     **KNOWLEDGE_TOOL_FUNCTIONS,
+    "select_used_knowledge_sources": select_used_knowledge_sources,
     **UI_TOOL_FUNCTIONS,
 }
 TOOL_SCHEMAS = (
