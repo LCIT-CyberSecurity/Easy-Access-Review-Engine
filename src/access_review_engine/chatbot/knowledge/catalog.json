@@ -1,0 +1,177 @@
+{
+  "sources": [
+    {
+      "id": "cnil-habilitations-2024",
+      "publisher": "CNIL",
+      "title": "Sécurité : Gérer les habilitations",
+      "reference": "Guide de la sécurité des données personnelles — fiche 5",
+      "version": "2024",
+      "publication_date": "2024-03-13",
+      "url": "https://www.cnil.fr/fr/securite-gerer-les-habilitations",
+      "jurisdiction": "France",
+      "source_type": "public_authority_guidance"
+    },
+    {
+      "id": "cnil-authentication-2024",
+      "publisher": "CNIL",
+      "title": "Sécurité : Authentifier les utilisateurs",
+      "reference": "Guide de la sécurité des données personnelles — fiche 4",
+      "version": "2024",
+      "publication_date": "2024-03-14",
+      "url": "https://www.cnil.fr/securite-authentifier-les-utilisateurs",
+      "jurisdiction": "France",
+      "source_type": "public_authority_guidance"
+    },
+    {
+      "id": "anssi-secure-administration",
+      "publisher": "ANSSI",
+      "title": "Recommandations relatives à l’administration sécurisée des systèmes d’information",
+      "reference": "Guide ANSSI",
+      "version": null,
+      "publication_date": "2021-05-11",
+      "url": "https://messervices.cyber.gouv.fr/guides/recommandations-relatives-ladministration-securisee-des-si",
+      "jurisdiction": "France",
+      "source_type": "national_cybersecurity_guidance"
+    },
+    {
+      "id": "nist-sp-800-63b-4",
+      "publisher": "NIST",
+      "title": "Digital Identity Guidelines: Authentication and Authenticator Management",
+      "reference": "NIST SP 800-63B-4",
+      "version": "Revision 4",
+      "publication_date": null,
+      "url": "https://pages.nist.gov/800-63-4/sp800-63b.html",
+      "jurisdiction": "United States",
+      "source_type": "technical_standard"
+    },
+    {
+      "id": "nist-sp-800-53-r5",
+      "publisher": "NIST",
+      "title": "Security and Privacy Controls for Information Systems and Organizations",
+      "reference": "NIST SP 800-53 Rev. 5",
+      "version": "Revision 5",
+      "publication_date": "2020-09",
+      "url": "https://csrc.nist.gov/pubs/sp/800/53/r5/upd1/final",
+      "jurisdiction": "United States",
+      "source_type": "technical_standard"
+    },
+    {
+      "id": "iso-iec-27001-2022",
+      "publisher": "ISO/IEC",
+      "title": "Information security, cybersecurity and privacy protection — Information security management systems — Requirements",
+      "reference": "ISO/IEC 27001:2022",
+      "version": "Edition 3",
+      "publication_date": "2022-10",
+      "url": "https://www.iso.org/standard/27001",
+      "jurisdiction": "International",
+      "source_type": "international_standard"
+    },
+    {
+      "id": "iso-iec-27002-2022",
+      "publisher": "ISO/IEC",
+      "title": "Information security, cybersecurity and privacy protection — Information security controls",
+      "reference": "ISO/IEC 27002:2022",
+      "version": "Edition 3",
+      "publication_date": "2022-02",
+      "url": "https://www.iso.org/fr/standard/75652.html",
+      "jurisdiction": "International",
+      "source_type": "international_standard"
+    },
+    {
+      "id": "hds-reference-v2-2024",
+      "publisher": "Agence du Numérique en Santé",
+      "title": "Référentiel de certification HDS",
+      "reference": "Référentiel HDS",
+      "version": "V2",
+      "publication_date": "2024-05-16",
+      "url": "https://esante.gouv.fr/services/hebergeurs-de-donnees-de-sante/les-referentiels-de-la-procedure-de-certification",
+      "jurisdiction": "France",
+      "source_type": "sector_regulatory_reference"
+    },
+    {
+      "id": "enisa-nis-investments-2020",
+      "publisher": "ENISA",
+      "title": "NIS Investments Report",
+      "reference": "ENISA NIS Investments Report",
+      "version": null,
+      "publication_date": null,
+      "url": "https://www.enisa.europa.eu/sites/default/files/publications/ENISA%20-%20NIS%20Investments%20Report.pdf",
+      "jurisdiction": "European Union",
+      "source_type": "cybersecurity_agency_report"
+    }
+  ],
+  "entries": [
+    {
+      "id": "cnil-access-lifecycle",
+      "topics": ["access control", "habilitations", "least privilege", "access review", "joiner mover leaver", "shared accounts"],
+      "summary": "Limiter les droits aux besoins des missions, faire valider les demandes, retirer rapidement les droits devenus inutiles et revoir régulièrement les habilitations. Les comptes partagés doivent rester exceptionnels, tracés, validés et revus.",
+      "guidance_type": "recommendation",
+      "applicability": "Traitements de données personnelles et gestion générale des habilitations.",
+      "source_ids": ["cnil-habilitations-2024"]
+    },
+    {
+      "id": "cnil-user-authentication",
+      "topics": ["authentication", "shared accounts", "administrator access", "traceability"],
+      "summary": "Attribuer un identifiant propre à chaque utilisateur. Si un identifiant générique ou partagé est incontournable, encadrer l’exception, tracer les actions et renouveler le secret lorsque l’accès n’est plus nécessaire.",
+      "guidance_type": "recommendation",
+      "applicability": "Authentification des personnes accédant à des données personnelles.",
+      "source_ids": ["cnil-authentication-2024"]
+    },
+    {
+      "id": "anssi-privileged-administration",
+      "topics": ["privileged access", "administrator access", "pam", "remote access", "traceability"],
+      "summary": "Concevoir une administration sécurisée avec des moyens organisationnels et techniques dédiés, adaptés au contexte et aux risques du système d’information.",
+      "guidance_type": "recommendation",
+      "applicability": "Architecture et opérations d’administration des systèmes d’information.",
+      "source_ids": ["anssi-secure-administration"]
+    },
+    {
+      "id": "nist-authentication-assurance",
+      "topics": ["authentication", "mfa", "passwordless", "tokens", "sessions", "federation", "privileged access"],
+      "summary": "Choisir un niveau d’assurance d’authentification adapté au risque, gérer le cycle de vie des authentificateurs et appliquer les exigences de session correspondant au niveau retenu. Ne pas déduire un besoin universel de MFA sans analyse d’applicabilité.",
+      "guidance_type": "technical_guidance",
+      "applicability": "Services numériques et authentification réseau selon le contexte d’assurance.",
+      "source_ids": ["nist-sp-800-63b-4"]
+    },
+    {
+      "id": "nist-account-access-controls",
+      "topics": ["access control", "account management", "least privilege", "privileged access", "service accounts", "segregation of duties"],
+      "summary": "Structurer la gestion des comptes, le contrôle d’accès, le moindre privilège et la séparation des fonctions comme contrôles sélectionnés et adaptés au contexte de risque de l’organisation.",
+      "guidance_type": "recommendation",
+      "applicability": "Systèmes et organisations utilisant le catalogue de contrôles NIST.",
+      "source_ids": ["nist-sp-800-53-r5"]
+    },
+    {
+      "id": "iso-isms-risk-requirements",
+      "topics": ["iso 27001", "access control", "risk management", "governance"],
+      "summary": "ISO/IEC 27001 définit des exigences pour établir, mettre en œuvre, maintenir et améliorer un système de management de la sécurité de l’information fondé sur les risques. Cette référence seule ne permet pas d’affirmer que le MFA est imposé partout.",
+      "guidance_type": "requirement",
+      "applicability": "Organisations qui déclarent ou recherchent la conformité à ISO/IEC 27001:2022.",
+      "source_ids": ["iso-iec-27001-2022"]
+    },
+    {
+      "id": "iso-access-control-guidance",
+      "topics": ["iso 27002", "access control", "identity management", "authentication", "privileged access"],
+      "summary": "ISO/IEC 27002 fournit des recommandations de bonnes pratiques et des objectifs de contrôle, notamment pour le contrôle d’accès. Il s’agit d’un guide de mise en œuvre, pas d’une certification autonome.",
+      "guidance_type": "good_practice",
+      "applicability": "Organisations utilisant ISO/IEC 27002 pour concevoir leurs mesures de sécurité.",
+      "source_ids": ["iso-iec-27002-2022"]
+    },
+    {
+      "id": "hds-certification-scope",
+      "topics": ["hds", "health data", "access control", "iso 27001", "hosting"],
+      "summary": "Le référentiel HDS V2 encadre la certification des hébergeurs de données de santé et s’appuie sur l’audit ISO 27001 complété par des exigences HDS spécifiques. L’applicabilité doit être vérifiée dans le référentiel officiel plutôt que déduite d’une règle générique.",
+      "guidance_type": "requirement",
+      "applicability": "Hébergeurs et offres entrant dans le champ de la certification HDS française.",
+      "source_ids": ["hds-reference-v2-2024"]
+    },
+    {
+      "id": "enisa-iam-capabilities",
+      "topics": ["identity governance", "iam", "joiner mover leaver", "sso", "mfa", "privileged access", "access certification"],
+      "summary": "Les capacités IAM recouvrent notamment le provisioning, la gestion des mots de passe, le cycle Joiner-Mover-Leaver, le SSO, l’authentification forte, la gestion des utilisateurs privilégiés et la certification ou recertification des accès.",
+      "guidance_type": "technical_guidance",
+      "applicability": "Planification et évaluation des investissements IAM/IAG.",
+      "source_ids": ["enisa-nis-investments-2020"]
+    }
+  ]
+}

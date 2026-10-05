@@ -10,7 +10,8 @@ Availability is separate from EARE data authorization:
 1. `EARE_CHATBOT_ENABLED` is the deployment hard switch.
 2. `system_settings.chatbot_enabled` is the ADMIN-controlled global switch.
 3. `system_users.chatbot_access_enabled` authorizes an individual user.
-4. OpenAI provider/model/key readiness is checked locally without a network healthcheck.
+4. OpenAI provider/model/key readiness is checked locally; an ADMIN can separately execute the
+   bounded `/api/chatbot/provider-test` network healthcheck.
 
 Hiding the launcher is only UX. The server enforces the effective decision on
 `/api/chatbot/message`, `/api/chatbot/actions`, `/api/chatbot/brief`, and
@@ -29,6 +30,12 @@ independent.
 Every tool revalidates its arguments and receives a fresh authorization context before execution.
 Client route/object hints are never authority. An unauthorized object returns an unavailable DTO
 without confirming whether it exists.
+
+The generic semantic query layer sits behind the same authorization helpers as the normal API:
+`visible_campaign`, `campaign_required_providers`, `AuthorizationContext.can_access_provider`,
+`can_access_golden` and existing projections. It exposes no generic query language. Counts and
+groupings are calculated only after authorization, preventing names, IDs, owners, counts and
+existence from crossing provider/reviewer scopes.
 
 Dashboard aggregates are role-bounded before counting: group owners receive assigned review work,
 while BUSINESS_ADMIN and REMEDIATION_MANAGER receive no campaign/review/source/snapshot/Golden
@@ -59,6 +66,12 @@ characters, 3 tool rounds, 6 tool calls, 100 result items, 800 output tokens and
 provider timeout. These values can be tuned with the `EARE_CHATBOT_*` environment settings;
 the hard security controls listed above remain enforced.
 
+ADMIN policy stored in `system_settings.chatbot_guardrails` can lower or raise the documented
+bounded limits within validated ranges and choose enabled functional domains or verified source
+publishers. Locked security properties are compared to the complete server-defined control set;
+an attempt to change one is rejected. Domain decisions happen before provider generation, and
+selected knowledge publishers are enforced again on the server before the knowledge tool runs.
+
 Threats covered in V1:
 
 - direct and indirect prompt injection: user and imported EARE strings are untrusted data;
@@ -69,6 +82,8 @@ Threats covered in V1:
 - malicious output and XSS: no arbitrary URLs/HTML/actions are accepted;
 - denial of service: bounded message/history/output/tool rounds and provider timeout;
 - provider outage: safe sanitized error and no authorization fallback;
+- provider diagnostics: safe error categories, with no raw body, header, credential or secret;
+- normative hallucination: structured citations originate only from the controlled catalog;
 - logging leakage: traces store sanitized question/answer and never credentials/configuration.
 
 The remaining V1 limitations are heuristic injection detection, no moderation provider,

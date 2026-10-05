@@ -16,6 +16,10 @@ When a provider returns no usable text, the backend and WebUI both return a visi
 controlled message instead of rendering an empty assistant bubble. Provider failures,
 tool denials and empty provider responses remain distinct in server diagnostics.
 
+Clearly unrelated questions are handled locally, before any provider call. The response starts
+with `Hors périmètre du Chatbot EARE`, uses `intent=OUT_OF_SCOPE` and
+`security_state=out_of_scope`; the drawer displays a neutral “Hors périmètre” marker.
+
 ## Architecture and authorization
 
 Chatbot availability has three independent gates plus local provider readiness:
@@ -84,6 +88,61 @@ path or write an arbitrary file.
 The API key is server-side only and is never returned or logged. If the provider is
 disabled, unconfigured, or unavailable, the deterministic security behavior remains
 active and the user receives a safe unavailable message.
+
+ADMIN users can run `POST /api/chatbot/provider-test`. Unlike configuration readiness, this
+performs a tiny bounded Responses API call. It returns only provider, model, success and a safe
+category (`authentication_error`, `permission_denied`, `rate_limited`, `timeout`,
+`network_error`, `provider_error`, `invalid_response` or `invalid_tool_response`). Raw provider
+errors, headers and credentials are never returned or audited.
+
+## Semantic catalog and tools
+
+`chatbot/semantic_catalog.py` defines the logical EARE vocabulary independently from SQL.
+`Permission` is a source-native technical right, `FunctionalRight` is the functional
+`Target + Capability` representation, and `Access` is the reviewed object. Functional rights
+are never inferred from role names. Built-in capabilities are documented but extensible.
+
+The provider can request only allowlisted, server-side tools:
+
+- `search_authorized_accesses`, `get_authorized_access`;
+- `search_authorized_identities`, `get_authorized_identity`;
+- `search_authorized_reviews`, `get_authorized_review`;
+- `search_authorized_campaigns`, `get_authorized_campaign`;
+- `search_authorized_remediations`, `get_authorized_perimeter`;
+- `get_authentication_posture_summary`, `aggregate_authorized_data`;
+- `search_access_control_knowledge`, `get_ui_help`.
+
+Every result is authorized before transmission, bounded, secret-filtered and marked as untrusted
+EARE data. There is no SQL tool, arbitrary URL tool, database connection or physical database
+schema in the provider context. Organization and InformationSystem remain filters/classification
+scopes; this layer does not turn them into new permissions.
+
+## Verified knowledge and citations
+
+The versioned JSON catalog under `chatbot/knowledge/` stores lightweight `KnowledgeSource` and
+`KnowledgeEntry` records. Initial entries cover official CNIL, ANSSI, ENISA, NIST, ISO and HDS
+material. Publishers are data, not a code whitelist, so another verified publisher can be added
+without changing the search implementation. Entries paraphrase guidance and do not reproduce
+long standards text.
+
+Normative sources in `AssistantResponse.sources` come only from
+`search_access_control_knowledge` results used during that response. IDs are deduplicated and
+bounded; source URLs must be credential-free HTTPS both when loading the catalog and when shown
+in the drawer. When no verified entry supports a request, the tool returns an explicit catalog
+limitation instead of inviting the model to invent a citation. Reports include only sources used
+for their recommendations and distinguish deterministic EARE sections from advice.
+
+## Administration Guardrails
+
+`Administration → Users & permissions → Chatbot → Guardrails` stores functional policy in the
+existing `system_settings` table. ADMIN can enable the coarse product/access-control/IAG/
+authentication/privileged-access/external-guidance domains, select verified publishers, and
+bound tool calls, rounds, results, history, retention and conversation/tool logging.
+
+Read-only behavior, server identity, authorization/scope enforcement, secret filtering, prompt
+injection protection, the tool allowlist, absence of arbitrary SQL/URLs and bounded outputs are
+displayed as locked controls and cannot be disabled through the API. Infrastructure secrets and
+provider settings remain environment configuration.
 
 ## Context contract
 
