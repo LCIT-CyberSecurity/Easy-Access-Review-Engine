@@ -6716,7 +6716,7 @@ function Sources({ principal }: { principal: Principal }) {
               <h4>CONNECTION TEST CREDENTIALS</h4>
               <label>LDAP bind username (for test/preview)<input autoComplete="username" placeholder="aurora@lcit.local" value={testUsername} onChange={(e) => setTestUsername(e.target.value)} /></label>
               <label>LDAP bind password (for test/preview)<input type="password" autoComplete="current-password" value={testPassword} onChange={(e) => setTestPassword(e.target.value)} /></label>
-              <p className="field-note">These values are sent only for connection tests and previews; they are not saved with the connector. For synchronization, configure server-side secret environment variables.</p>
+              <p className="field-note">Both values are required for a connection test or preview. They are sent only for that operation and are not saved with the connector. Configure server-side secret environment variables for synchronization.</p>
             </> : null}
             {testResult ? (
               <section className="mapping-diagnostics">
@@ -6730,12 +6730,12 @@ function Sources({ principal }: { principal: Principal }) {
               <button
                 type="button"
                 className="button subtle"
-                disabled={test.isPending}
+                disabled={test.isPending || (editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" && (!testUsername.trim() || !testPassword))}
                 onClick={() => test.mutate({ ...editing, _test_credentials: { username: testUsername, password: testPassword } })}
               >
                 Test connection
               </button>
-              {drawerAction === "preview" && editingExisting && editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? <button type="button" className="button subtle" disabled={start.isPending} onClick={() => start.mutate({ p: s(editing.provider), a: "preview", credentials: { username: testUsername, password: testPassword } })}>Preview</button> : null}
+              {drawerAction === "preview" && editingExisting && editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? <button type="button" className="button subtle" disabled={start.isPending || !testUsername.trim() || !testPassword} onClick={() => start.mutate({ p: s(editing.provider), a: "preview", credentials: { username: testUsername, password: testPassword } })}>Preview</button> : null}
               <button type="submit" className="button primary" disabled={save.isPending}>
                 Save
               </button>
