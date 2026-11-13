@@ -105,6 +105,12 @@ def _collect() -> int:
     timeout = max(1, min(int(os.environ.get("AURORA_AD_LDAP_TIMEOUT_SECONDS", "300")), 3600))
     username = os.environ.get("AURORA_LDAP_USERNAME", "")
     password = os.environ.get("AURORA_LDAP_PASSWORD", "")
+    password_file = os.environ.get("AURORA_LDAP_PASSWORD_FILE", "")
+    if not password and password_file:
+        try:
+            password = Path(password_file).read_text(encoding="utf-8").rstrip("\r\n")
+        except OSError as exc:
+            raise ValueError("LDAP password file could not be read") from exc
     extra_attributes = [value.strip() for value in os.environ.get("AURORA_AD_LDAP_EXTRA_ATTRIBUTES", "").split(",") if value.strip()]
     for attribute in extra_attributes:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,63}", attribute) or re.search(r"password|token|secret|privatekey|credential", attribute, re.IGNORECASE):

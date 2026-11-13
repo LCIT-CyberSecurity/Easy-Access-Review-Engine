@@ -54,6 +54,22 @@ def test_ad_ldap_test_credentials_are_runtime_only() -> None:
     assert environment["AURORA_LDAP_PASSWORD"] == "bind-pass"
 
 
+def test_ad_ldap_password_file_reference_is_forwarded_without_reading_secret() -> None:
+    config = {
+        "provider": "corp-ad", "type": "active_directory",
+        "connection": {"server": "192.168.1.100", "protocol": "ldap", "base_dn": "DC=lcit,DC=local", "tls_mode": "none"},
+        "credentials": {"username_env": "TEST_LDAP_USER", "password_file_env": "TEST_LDAP_PASSWORD_FILE"},
+        "_check_only": True,
+    }
+    with patch.dict("os.environ", {"TEST_LDAP_USER": "bind-user", "TEST_LDAP_PASSWORD_FILE": "/run/secrets/ldap-password"}):
+        with patch("aurora.collector_runner.subprocess.run", return_value=CompletedProcess([], 0, "ok", "")) as run:
+            run_exporter(config, "/tmp/ad-check.zip")
+    environment = run.call_args.kwargs["env"]
+    assert environment["AURORA_LDAP_USERNAME"] == "bind-user"
+    assert environment["AURORA_LDAP_PASSWORD_FILE"] == "/run/secrets/ldap-password"
+    assert "AURORA_LDAP_PASSWORD" not in environment
+
+
 def test_ad_ldap_ldif_parser_decodes_sid_guid_and_folded_lines() -> None:
     sid_raw = bytes([1, 2]) + (5).to_bytes(6, "big") + (21).to_bytes(4, "little") + (1001).to_bytes(4, "little")
     guid = uuid.uuid4()

@@ -6392,6 +6392,11 @@ function Sources({ principal }: { principal: Principal }) {
       return { ...current, business_mapping: { ...mapping, [field]: { ...((mapping[field] ?? {}) as Row), [key]: value } } };
     });
   const supportsAttributeMapping = sourceSupportsAttributeMapping(editing?.capabilities, editing?.type);
+  const editingCredentials = (editing?.credentials as Row | undefined) ?? {};
+  const ldapServerCredentialsConfigured = Boolean(
+    s(editingCredentials.username_env, "").trim()
+      && (s(editingCredentials.password_env, "").trim() || s(editingCredentials.password_file_env, "").trim()),
+  );
   return (
     <>
       <Head title="Sources & IdPs">
@@ -6710,13 +6715,23 @@ function Sources({ principal }: { principal: Principal }) {
                 onChange={(e) => updateNested("credentials", "password_env", e.target.value || undefined)}
               />
             </label>
-            {editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? <p className="field-note">Enter environment variable names here for future collections. The variables must be defined in the Aurora API service environment.</p> : null}
+            {editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? <>
+              <label>
+                Password file environment variable
+                <input
+                  placeholder="AURORA_LDAP_PASSWORD_FILE"
+                  value={s((editing.credentials as Row | undefined)?.password_file_env, "")}
+                  onChange={(e) => updateNested("credentials", "password_file_env", e.target.value || undefined)}
+                />
+              </label>
+              <p className="field-note">Configure environment variable references on the API service for synchronization, preview, and source inspection. The referenced password file should be readable only by the service account.</p>
+            </> : null}
             </>}
             {editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? <>
               <h4>CONNECTION TEST CREDENTIALS</h4>
               <label>LDAP bind username (for test/preview)<input autoComplete="username" placeholder="aurora@lcit.local" value={testUsername} onChange={(e) => setTestUsername(e.target.value)} /></label>
               <label>LDAP bind password (for test/preview)<input type="password" autoComplete="current-password" value={testPassword} onChange={(e) => setTestPassword(e.target.value)} /></label>
-              <p className="field-note">Both values are required for a connection test or preview. They are sent only for that operation and are not saved with the connector. Configure server-side secret environment variables for synchronization.</p>
+              <p className="field-note">If server-side credentials are not configured, enter both values for a test or preview. They are sent only for that operation and are not saved with the connector.</p>
             </> : null}
             {testResult ? (
               <section className="mapping-diagnostics">
@@ -6730,12 +6745,12 @@ function Sources({ principal }: { principal: Principal }) {
               <button
                 type="button"
                 className="button subtle"
-                disabled={test.isPending || (editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" && (!testUsername.trim() || !testPassword))}
+                disabled={test.isPending || (editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" && !ldapServerCredentialsConfigured && (!testUsername.trim() || !testPassword))}
                 onClick={() => test.mutate({ ...editing, _test_credentials: { username: testUsername, password: testPassword } })}
               >
                 Test connection
               </button>
-              {drawerAction === "preview" && editingExisting && editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? <button type="button" className="button subtle" disabled={start.isPending || !testUsername.trim() || !testPassword} onClick={() => start.mutate({ p: s(editing.provider), a: "preview", credentials: { username: testUsername, password: testPassword } })}>Preview</button> : null}
+              {drawerAction === "preview" && editingExisting && editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? <button type="button" className="button subtle" disabled={start.isPending || (!ldapServerCredentialsConfigured && (!testUsername.trim() || !testPassword))} onClick={() => start.mutate({ p: s(editing.provider), a: "preview", credentials: { username: testUsername, password: testPassword } })}>Preview</button> : null}
               <button type="submit" className="button primary" disabled={save.isPending}>
                 Save
               </button>
