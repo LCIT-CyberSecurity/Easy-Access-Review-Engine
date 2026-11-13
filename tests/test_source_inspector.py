@@ -141,7 +141,7 @@ def test_ad_ldap_inspection_copies_password_file_without_trailing_newline(tmp_pa
         return subprocess.CompletedProcess(
             command,
             0,
-            "dn: CN=Finance,DC=example,DC=test\nobjectClass: group\ncn: Finance\n\n",
+            "dn: CN=Finance,DC=example,DC=test\nobjectClass: group\nname: Finance\n\n",
             "",
         )
 
