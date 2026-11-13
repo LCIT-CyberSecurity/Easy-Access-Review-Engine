@@ -193,7 +193,7 @@ from aurora.system_admin import (
 from aurora.system_admin import (
     change_password as update_password,
 )
-from aurora.web_jobs import create_job, get_events, get_job, update_progress
+from aurora.web_jobs import UserVisibleJobError, create_job, get_events, get_job, update_progress
 from aurora.web_read_models import (
     _add_review_provenance,
     _display_names,
@@ -1772,22 +1772,47 @@ def create_app(db_path: str | None = None) -> Any:
     @app.post("/api/system/sources/test")
     def system_source_test(request: Request, payload: dict[str, Any] = Body(...)):
         _require(current_user(request), ("ADMIN",))
+        test_credentials = payload.pop("_test_credentials", None)
+        if test_credentials is not None and not isinstance(test_credentials, dict):
+            raise HTTPException(status_code=400, detail="Test credentials must be an object")
         candidate = _validate_web_connector(payload)
+        secret_overrides: dict[str, str] | None = None
+        if isinstance(test_credentials, dict):
+            connection = candidate.get("connection") or {}
+            if candidate.get("type") != "active_directory" or connection.get("protocol") != "ldap":
+                raise HTTPException(status_code=400, detail="Temporary test credentials are only supported for Active Directory LDAP")
+            username = test_credentials.get("username", "")
+            password = test_credentials.get("password", "")
+            if not isinstance(username, str) or not isinstance(password, str):
+                raise HTTPException(status_code=400, detail="Test credentials must be text")
+            if len(username) > 2048 or len(password) > 4096:
+                raise HTTPException(status_code=400, detail="Test credentials are too long")
+            secret_overrides = {"username": username, "password": password}
+            if username or password:
+                credentials = dict(candidate.get("credentials") or {})
+                credentials.pop("username_env", None)
+                credentials.pop("password_env", None)
+                candidate["credentials"] = credentials
         try:
-            secret_environment(candidate)
+            if not secret_overrides or not any(secret_overrides.values()):
+                secret_environment(candidate)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         candidate["_check_only"] = True
         with tempfile.TemporaryDirectory(prefix="aurora-source-check-") as directory:
             output = Path(directory) / "connection-check.zip"
             try:
-                result = run_exporter(candidate, output)
+                result = run_exporter(candidate, output, secret_overrides=secret_overrides)
             except (RunnerError, ValueError) as exc:
                 raise HTTPException(
                     status_code=502, detail="Source connection test failed"
                 ) from exc
         if result.returncode:
-            raise HTTPException(status_code=502, detail="Source connection test failed")
+            detail = result.stderr.strip() or "Source connection test failed"
+            for secret in (secret_overrides or {}).values():
+                if secret:
+                    detail = detail.replace(secret, "[redacted]")
+            raise HTTPException(status_code=502, detail=detail[:500])
         google_diagnostics = None
         if (
             str(candidate.get("type")) in {"google_workspace", "gcp_iam", "keycloak"}
@@ -5671,26 +5696,68 @@ def create_app(db_path: str | None = None) -> Any:
         )
 
     @app.post("/api/sources/{provider}/preview", status_code=202)
-    def source_preview(provider: str, request: Request):
+    def source_preview(
+        provider: str,
+        request: Request,
+        payload: dict[str, Any] = Body(default={}),
+    ):
         principal = _require(current_user(request), ("ADMIN", "OPERATOR"), provider)
+        operation_credentials = payload.get("_operation_credentials")
+        if operation_credentials is not None and not isinstance(operation_credentials, dict):
+            raise HTTPException(status_code=400, detail="Preview credentials must be an object")
 
         def operation(job_id: str) -> dict[str, Any]:
             artifact = artifact_directory / f".aurora-preview-{provider}-{job_id}.zip"
             try:
                 update_progress(db_path, job_id, "Collecting read-only source data")
                 config = _load_web_connector(provider)
-                secrets_config = secret_environment(config)
-                if secrets_config.get("password_file"):
-                    config.setdefault("credentials", {})["password_file"] = secrets_config[
-                        "password_file"
-                    ]
-                result = run_exporter(config, artifact)
+                secret_overrides: dict[str, str] | None = None
+                if isinstance(operation_credentials, dict):
+                    username = operation_credentials.get("username", "")
+                    password = operation_credentials.get("password", "")
+                    if not isinstance(username, str) or not isinstance(password, str):
+                        raise RunnerError("Preview credentials must be text")
+                    if len(username) > 2048 or len(password) > 4096:
+                        raise RunnerError("Preview credentials are too long")
+                    if username or password:
+                        connection = config.get("connection") or {}
+                        if config.get("type") != "active_directory" or connection.get("protocol") != "ldap":
+                            raise RunnerError("Temporary preview credentials are only supported for Active Directory LDAP")
+                        credentials = dict(config.get("credentials") or {})
+                        credentials.pop("username_env", None)
+                        credentials.pop("password_env", None)
+                        config["credentials"] = credentials
+                        secret_overrides = {"username": username, "password": password}
+                if not secret_overrides:
+                    try:
+                        secrets_config = secret_environment(config)
+                    except ValueError as exc:
+                        raise UserVisibleJobError(str(exc)) from exc
+                    if secrets_config.get("password_file"):
+                        config.setdefault("credentials", {})["password_file"] = secrets_config[
+                            "password_file"
+                        ]
+                try:
+                    result = run_exporter(config, artifact, secret_overrides=secret_overrides)
+                except (RunnerError, ValueError) as exc:
+                    detail = str(exc)
+                    for secret in (secret_overrides or {}).values():
+                        if secret:
+                            detail = detail.replace(secret, "[redacted]")
+                    raise UserVisibleJobError(detail) from exc
                 if result.returncode:
-                    raise RunnerError(result.stderr.strip() or "Collector failed")
+                    detail = result.stderr.strip() or "Collector failed"
+                    for secret in (secret_overrides or {}).values():
+                        if secret:
+                            detail = detail.replace(secret, "[redacted]")
+                    raise UserVisibleJobError(detail)
                 update_progress(db_path, job_id, "Analysing collected data")
-                preview = preview_import(
-                    db_path, artifact, provider=provider, source_config=config
-                ).as_dict()
+                try:
+                    preview = preview_import(
+                        db_path, artifact, provider=provider, source_config=config
+                    ).as_dict()
+                except ValueError as exc:
+                    raise UserVisibleJobError(str(exc)) from exc
                 with Repository(db_path) as repo:
                     record_audit(repo, request, "source.preview_completed", "provider", provider)
                 return preview

@@ -26,6 +26,31 @@ remote Active Directory -> collector script -> existing AD ZIP/CSV format -> exi
 The exporter is designed for Windows PowerShell 5.1 and the ActiveDirectory module available on
 recent Windows Server releases. It does not require PowerShell 7.
 
+## Web Connector Transports
+
+The Web UI connector can use either the existing `adws` protocol or read-only LDAP collection. LDAP
+requires a Base DN and supports `none` (plain LDAP on port 389), `starttls` (LDAP upgraded on port
+389), or `ldaps` (TLS from connection start, normally port 636). For example:
+
+```yaml
+type: active_directory
+connection:
+  protocol: ldap
+  server: dc01.corp.local
+  base_dn: DC=corp,DC=local
+  tls_mode: none
+credentials:
+  username_env: AURORA_AD_USERNAME
+  password_env: AURORA_AD_PASSWORD
+```
+
+The referenced environment variables must be available to the Aurora API service for preview and
+synchronization. In the connection test drawer, credentials can also be entered for that test only;
+they are not saved with the connector. The collector reads LDAP attributes and creates the same AD
+ZIP format used by the existing importer. TLS modes require a working certificate and a name that
+matches the server; an optional CA certificate file can be supplied through
+`connection.tls_ca_cert_file_env`.
+
 ## Completeness and Fail Closed
 
 A ZIP is `completeness: full` only when every supported collection step completes without diagnostic
@@ -41,12 +66,11 @@ for tests/debugging and is not recommended for production collection.
 
 ## Security of Remote AD Access
 
-The script does not implement a custom transport or store Active Directory passwords. This is
-intentional for the MVP: AD collection uses the current Windows identity/session and the standard
-ActiveDirectory module authentication mechanisms, including Kerberos/Windows authentication according
-to the environment. There is deliberately no `AD_PASSWORD` in `.env`; `.env` is only used for
-OpenLDAP secrets. Avoid passing credentials on the command line, and target a trusted domain
-controller with `-Server` when operationally required.
+The PowerShell exporter uses the current Windows identity/session and standard ActiveDirectory
+module authentication. The Web UI's LDAP mode uses a read-only LDAP bind and keeps the password out
+of connector YAML. Plain LDAP sends credentials without encryption; use it only on a trusted network.
+For encrypted LDAP, the domain controller must have LDAPS or StartTLS correctly configured and its
+certificate must be trusted by the Aurora API service.
 
 Collection diagnostics include object type, object identifier, SID, operation and safe error text.
 They do not include environment dumps or credentials.

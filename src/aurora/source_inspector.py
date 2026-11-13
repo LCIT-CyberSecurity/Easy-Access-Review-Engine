@@ -204,6 +204,8 @@ def _query_ad(
 ) -> list[dict[str, Any]]:
     connection = _mapping(config.get("connection"), "connection")
     collection = _mapping(config.get("collection", {}), "collection")
+    if str(connection.get("protocol", "adws")).casefold() == "ldap":
+        return _query_ad_ldap(config, object_kind, search, identifier, limit, discover, runner)
     attributes = set(default_attribute_candidates("active_directory"))
     attributes.update(required_mapping_attributes(config, "active_directory"))
     command = [
@@ -226,6 +228,107 @@ def _query_ad(
         command.append("-Discover")
     result = (runner or _run)(command, os.environ.copy(), _timeout(collection))
     return _json_rows(result)
+
+
+def _query_ad_ldap(
+    config: dict[str, Any],
+    object_kind: str,
+    search: str,
+    identifier: str | None,
+    limit: int,
+    discover: bool,
+    runner: Runner | None,
+) -> list[dict[str, Any]]:
+    connection = _mapping(config.get("connection"), "connection")
+    collection = _mapping(config.get("collection", {}), "collection")
+    base_dn = str(connection.get("base_dn", "")).strip()
+    if not base_dn:
+        raise SourceInspectorError("Active Directory LDAP base DN is required")
+    tls_mode = str(connection.get("tls_mode") or ("ldaps" if connection.get("use_tls", True) else "none"))
+    server = str(connection.get("server", "")).strip()
+    if tls_mode not in {"none", "starttls", "ldaps"}:
+        raise SourceInspectorError("Invalid Active Directory LDAP TLS mode")
+    scheme = "ldaps://" if tls_mode == "ldaps" else "ldap://"
+    if server.startswith(("ldap://", "ldaps://")):
+        if not server.startswith(scheme):
+            raise SourceInspectorError("LDAP server URL does not match the selected TLS mode")
+        uri = server
+    else:
+        uri = scheme + server
+    class_filter = "(&(objectCategory=person)(objectClass=user)(!(objectClass=computer)))" if object_kind == "user" else "(objectClass=group)"
+    scope = "sub"
+    if identifier and identifier.startswith("dn:"):
+        requested_dn = identifier[3:].strip()
+        normalized_dn = requested_dn.casefold().replace(" ", "")
+        normalized_base = base_dn.casefold().replace(" ", "")
+        if normalized_dn != normalized_base and not normalized_dn.endswith("," + normalized_base):
+            raise SourceInspectorError("Source object is outside the configured base DN")
+        base_dn, scope, ldap_filter = requested_dn, "base", "(objectClass=*)"
+    elif identifier:
+        escaped = _escape_filter(identifier)
+        ldap_filter = f"(&{class_filter}(sAMAccountName={escaped}))"
+    elif search:
+        escaped = _escape_filter(search)
+        ldap_filter = f"(&{class_filter}(|(name=*{escaped}*)(sAMAccountName=*{escaped}*)(displayName=*{escaped}*)(userPrincipalName=*{escaped}*)))"
+    else:
+        ldap_filter = class_filter
+    attributes = set(default_attribute_candidates("active_directory"))
+    attributes.update(required_mapping_attributes(config, "active_directory"))
+    attributes.update({"objectClass", "name", "sAMAccountName", "displayName", "userPrincipalName", "distinguishedName", "description", "mail", "objectSid", "objectGUID"})
+    command = [
+        "ldapsearch", "-LLL", "-o", "ldif-wrap=no", "-x", "-H", uri,
+        "-b", base_dn, "-s", scope, "-z", str(min(limit, MAX_OFFSET + MAX_PAGE_SIZE + 1)),
+        "-o", f"nettimeout={max(1, min(int(collection.get('connection_timeout', 10)), 60))}",
+        "-l", str(max(1, min(int(collection.get("search_timeout", 30)), 120))),
+    ]
+    if tls_mode == "starttls":
+        command.append("-ZZ")
+    try:
+        secrets = secret_environment(config)
+    except ValueError as exc:
+        raise SourceInspectorError("Source credentials are not configured") from exc
+    username = secrets.get("username", "")
+    if username:
+        command.extend(["-D", username])
+    ldap_env = os.environ.copy()
+    if tls_mode != "none":
+        ldap_env["LDAPTLS_REQCERT"] = "demand"
+        ldap_env["LDAPTLS_REQSAN"] = "demand"
+        ca_env = str(connection.get("tls_ca_cert_file_env", "")).strip()
+        if ca_env:
+            if ca_env not in os.environ:
+                raise SourceInspectorError(f"Required TLS CA file environment variable is not set: {ca_env}")
+            ldap_env["LDAPTLS_CACERT"] = os.environ[ca_env]
+    if runner is not None:
+        command.extend([ldap_filter, *sorted(attributes, key=str.casefold)])
+        if secrets.get("password"):
+            ldap_env["AURORA_LDAP_PASSWORD"] = secrets["password"]
+        return [_ldap_ad_row(entry, object_kind) for entry in _parse_ldif(_checked_result(runner(command, ldap_env, _timeout(collection))).stdout)]
+    with tempfile.TemporaryDirectory(prefix="aurora-ad-inspector-") as directory:
+        password_file = secrets.get("password_file")
+        if secrets.get("password"):
+            password_path = Path(directory) / "password"
+            password_path.touch(mode=0o600)
+            password_path.write_text(secrets["password"], encoding="utf-8")
+            password_file = str(password_path)
+        if username and not password_file:
+            raise SourceInspectorError("Source credentials are not configured")
+        if password_file:
+            command.extend(["-y", password_file])
+        command.extend([ldap_filter, *sorted(attributes, key=str.casefold)])
+        try:
+            result = _run(command, ldap_env, _timeout(collection))
+        except SourceInspectorError:
+            raise
+    return [_ldap_ad_row(entry, object_kind) for entry in _parse_ldif(result.stdout)]
+
+
+def _ldap_ad_row(entry: dict[str, list[str]], object_kind: str) -> dict[str, Any]:
+    dn = _first(entry, "dn") or ""
+    identifier = f"dn:{dn}" if dn else _first(entry, "sAMAccountName") or ""
+    display_name = _first(entry, "displayName") or _first(entry, "name") or _first(entry, "sAMAccountName") or identifier
+    return {"kind": object_kind, "identifier": identifier, "display_name": display_name,
+            "technical_identifier": dn or identifier, "attributes": entry}
 
 
 def _query_openldap_tree(

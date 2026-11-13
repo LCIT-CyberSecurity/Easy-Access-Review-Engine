@@ -15,6 +15,10 @@ from aurora.database import DatabaseConnection, connect_database
 _WORKERS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="aurora-web")
 
 
+class UserVisibleJobError(RuntimeError):
+    """A sanitized operation error that is safe to show in the Web UI."""
+
+
 def _now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
@@ -108,12 +112,13 @@ def _run(db_path: str | Path, job_id: str, operation: Callable[[str], dict[str, 
         )
     try:
         result = operation(job_id)
-    except Exception:
+    except Exception as exc:
+        error = str(exc) if isinstance(exc, UserVisibleJobError) and str(exc) else "The background operation failed."
         with _connect(db_path) as conn:
             conn.execute(
                 "UPDATE web_jobs SET status = ?, progress = ?, error = ?, finished_at = ? "
                 "WHERE id = ?",
-                ("FAILED", "Failed", "The background operation failed.", _now(), job_id),
+                ("FAILED", "Failed", error[:500], _now(), job_id),
             )
             conn.execute(
                 "INSERT INTO web_job_events (job_id, event, detail, created_at) "

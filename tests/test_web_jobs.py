@@ -1,6 +1,6 @@
 import time
 
-from aurora.web_jobs import create_job, get_job
+from aurora.web_jobs import UserVisibleJobError, create_job, get_job
 
 
 def test_failed_job_keeps_its_provider_context(tmp_path):
@@ -20,3 +20,21 @@ def test_failed_job_keeps_its_provider_context(tmp_path):
     assert job["status"] == "FAILED"
     assert job["result"] == {"provider": "corp-ad"}
     assert job["error"] == "The background operation failed."
+
+
+def test_failed_job_can_return_sanitized_user_visible_error(tmp_path):
+    db = tmp_path / "jobs.db"
+
+    def fail(_job_id):
+        raise UserVisibleJobError("LDAP bind failed: invalid credentials")
+
+    created = create_job(db, "preview", fail, context={"provider": "corp-ad"})
+    job = created
+    for _ in range(100):
+        job = get_job(db, created["id"])
+        if job["status"] == "FAILED":
+            break
+        time.sleep(0.01)
+
+    assert job["status"] == "FAILED"
+    assert job["error"] == "LDAP bind failed: invalid credentials"

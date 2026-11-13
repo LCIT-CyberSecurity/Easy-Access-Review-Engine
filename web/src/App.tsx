@@ -6299,14 +6299,21 @@ function Sources({ principal }: { principal: Principal }) {
     [kind, setKind] = useState("preview"),
     [error, setError] = useState(""),
     [editing, setEditing] = useState<Row | null>(null),
+    [testUsername, setTestUsername] = useState(""),
+    [testPassword, setTestPassword] = useState(""),
+    [drawerAction, setDrawerAction] = useState<"preview" | null>(null),
     // Sources are keyed by provider name, not an id, so remember whether the drawer opened on one.
     [editingExisting, setEditingExisting] = useState(false),
     [testResult, setTestResult] = useState<Row | null>(null),
     start = useMutation({
-      mutationFn: (x: { p: string; a: string }) => postJson(`sources/${x.p}/${x.a}`),
+      mutationFn: (x: { p: string; a: string; credentials?: Row }) => postJson(`sources/${x.p}/${x.a}`, x.credentials ? { _operation_credentials: x.credentials } : {}),
       onSuccess: (d, variables) => {
         setError("");
         setJob(s(d.id));
+        setEditing(null);
+        setDrawerAction(null);
+        setTestUsername("");
+        setTestPassword("");
         toast("ok", variables.a === "sync" ? "Synchronization started" : "Preview started");
       },
       onError: (e) => {
@@ -6361,14 +6368,17 @@ function Sources({ principal }: { principal: Principal }) {
   const blank = () => ({
     provider: "",
     type: "active_directory",
-    connection: { server: "" },
+    connection: { server: "", protocol: "adws", base_dn: "", tls_mode: "ldaps" },
     collection: { timeout: 300, allow_partial: false },
     credentials: { username_env: "", password_env: "" },
     business_mapping: Object.fromEntries(["display_name", "description", "application", "business_permission", "resource", "owner"].map((field) => [field, { mode: "default" }])),
   });
-  const edit = (source?: Row) => {
+  const edit = (source?: Row, action: "preview" | null = null) => {
     setError("");
     setTestResult(null);
+    setTestUsername("");
+    setTestPassword("");
+    setDrawerAction(action);
     setEditingExisting(Boolean(source));
     setEditing(source ? JSON.parse(JSON.stringify(source)) : blank());
   };
@@ -6439,7 +6449,12 @@ function Sources({ principal }: { principal: Principal }) {
                 className="button subtle"
                 onClick={() => {
                   setKind("preview");
-                  start.mutate({ p: s(r.provider), a: "preview" });
+                  const config = configs.find((c) => s(c.provider) === s(r.provider));
+                  if (s(config?.type) === "active_directory" && s((config?.connection as Row | undefined)?.protocol, "adws") === "ldap") {
+                    edit(config, "preview");
+                  } else {
+                    start.mutate({ p: s(r.provider), a: "preview" });
+                  }
                 }}
               >
                 Preview
@@ -6477,7 +6492,7 @@ function Sources({ principal }: { principal: Principal }) {
         </section>
       )}
       {editing && (
-        <Drawer title={editingExisting ? "Configure source" : "Add source"} close={() => setEditing(null)}>
+        <Drawer title={editingExisting ? "Configure source" : "Add source"} close={() => { setEditing(null); setDrawerAction(null); setTestUsername(""); setTestPassword(""); }}>
           <form
             className="drawer-form"
             onSubmit={(e) => {
@@ -6512,14 +6527,29 @@ function Sources({ principal }: { principal: Principal }) {
             </label>
             <h4>CONNECTION</h4>
             {editing.type === "active_directory" ? (
-              <label>
-                Server
-                <input
-                  required
-                  value={s((editing.connection as Row | undefined)?.server, "")}
-                  onChange={(e) => updateNested("connection", "server", e.target.value)}
-                />
-              </label>
+              <>
+                <label>Connection protocol
+                  <select value={s((editing.connection as Row | undefined)?.protocol, "adws")} onChange={(e) => updateNested("connection", "protocol", e.target.value)}>
+                    <option value="adws">Active Directory Web Services</option>
+                    <option value="ldap">LDAP</option>
+                  </select>
+                </label>
+                <label>Server
+                  <input required placeholder="dc.example.org or 192.168.1.100" value={s((editing.connection as Row | undefined)?.server, "")} onChange={(e) => updateNested("connection", "server", e.target.value)} />
+                </label>
+                {(editing.connection as Row | undefined)?.protocol === "ldap" ? <>
+                  <label>Base DN<input required placeholder="DC=example,DC=org" value={s((editing.connection as Row | undefined)?.base_dn, "")} onChange={(e) => updateNested("connection", "base_dn", e.target.value)} /></label>
+                  <label>LDAP transport
+                    <select value={s((editing.connection as Row | undefined)?.tls_mode, (editing.connection as Row | undefined)?.use_tls === false ? "none" : "ldaps")} onChange={(e) => updateNested("connection", "tls_mode", e.target.value)}>
+                      <option value="ldaps">LDAPS (TLS direct, port 636)</option>
+                      <option value="starttls">LDAP puis StartTLS (port 389)</option>
+                      <option value="none">LDAP sans TLS (port 389)</option>
+                    </select>
+                  </label>
+                  {(editing.connection as Row | undefined)?.tls_mode !== "none" ? <label>CA certificate file environment variable (optional)<input placeholder="AURORA_AD_LDAP_CA_CERT_FILE" value={s((editing.connection as Row | undefined)?.tls_ca_cert_file_env, "")} onChange={(e) => updateNested("connection", "tls_ca_cert_file_env", e.target.value || undefined)} /></label> : null}
+                  {(editing.connection as Row | undefined)?.tls_mode === "none" ? <p className="field-note">LDAP simple sans TLS transmet les identifiants sans chiffrement. Utilise uniquement un réseau de confiance.</p> : null}
+                </> : null}
+              </>
             ) : editing.type === "google_workspace" ? (
               <>
                 <label>Customer ID<input required value={s((editing.connection as Row | undefined)?.customer_id, "")} onChange={(e) => updateNested("connection", "customer_id", e.target.value)} /></label>
@@ -6663,7 +6693,7 @@ function Sources({ principal }: { principal: Principal }) {
               <label>Client secret environment variable<input required placeholder="AURORA_KEYCLOAK_CLIENT_SECRET" value={s((editing.credentials as Row | undefined)?.client_secret_env, "")} onChange={(e) => updateNested("credentials", "client_secret_env", e.target.value || undefined)} /></label>
               <p className="field-note">Only the environment variable name is stored; the secret is never displayed or persisted.</p>
             </> : <>
-            <h4>SECRET REFERENCES</h4>
+            <h4>{editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? "SERVER-SIDE SECRETS FOR COLLECTION" : "SECRET REFERENCES"}</h4>
             <label>
               Username environment variable
               <input
@@ -6680,7 +6710,14 @@ function Sources({ principal }: { principal: Principal }) {
                 onChange={(e) => updateNested("credentials", "password_env", e.target.value || undefined)}
               />
             </label>
+            {editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? <p className="field-note">Enter environment variable names here for future collections. The variables must be defined in the Aurora API service environment.</p> : null}
             </>}
+            {editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? <>
+              <h4>CONNECTION TEST CREDENTIALS</h4>
+              <label>LDAP bind username (for test/preview)<input autoComplete="username" placeholder="aurora@lcit.local" value={testUsername} onChange={(e) => setTestUsername(e.target.value)} /></label>
+              <label>LDAP bind password (for test/preview)<input type="password" autoComplete="current-password" value={testPassword} onChange={(e) => setTestPassword(e.target.value)} /></label>
+              <p className="field-note">These values are sent only for connection tests and previews; they are not saved with the connector. For synchronization, configure server-side secret environment variables.</p>
+            </> : null}
             {testResult ? (
               <section className="mapping-diagnostics">
                 <p className="form-success">Connection: {s((testResult.connection as Row | undefined)?.status, "success")}</p>
@@ -6694,10 +6731,11 @@ function Sources({ principal }: { principal: Principal }) {
                 type="button"
                 className="button subtle"
                 disabled={test.isPending}
-                onClick={() => test.mutate(editing)}
+                onClick={() => test.mutate({ ...editing, _test_credentials: { username: testUsername, password: testPassword } })}
               >
                 Test connection
               </button>
+              {drawerAction === "preview" && editingExisting && editing.type === "active_directory" && (editing.connection as Row | undefined)?.protocol === "ldap" ? <button type="button" className="button subtle" disabled={start.isPending} onClick={() => start.mutate({ p: s(editing.provider), a: "preview", credentials: { username: testUsername, password: testPassword } })}>Preview</button> : null}
               <button type="submit" className="button primary" disabled={save.isPending}>
                 Save
               </button>

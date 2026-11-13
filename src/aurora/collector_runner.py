@@ -37,6 +37,27 @@ def build_command(config: dict[str, object], output: Path, root: str | Path | No
         raise ValueError("Invalid connector settings")
     base = Path(root).resolve() if root is not None else exporter_root()
     if kind == "active_directory":
+        if str(connection.get("protocol", "adws")).lower() == "ldap":
+            env = os.environ.copy()
+            env.update({
+                "AURORA_AD_LDAP_SERVER": str(connection["server"]),
+                "AURORA_AD_LDAP_BASE_DN": str(connection["base_dn"]),
+                "AURORA_AD_LDAP_TLS_MODE": str(connection.get("tls_mode") or ("ldaps" if connection.get("use_tls", True) else "none")),
+                "AURORA_AD_LDAP_PROVIDER": str(config["provider"]),
+                "AURORA_AD_LDAP_OUTPUT": str(output),
+                "AURORA_AD_LDAP_CHECK_ONLY": "1" if config.get("_check_only") else "0",
+                "AURORA_AD_LDAP_TIMEOUT_SECONDS": str(collection.get("timeout", 300)),
+                "AURORA_AD_LDAP_EXTRA_ATTRIBUTES": ",".join(required_mapping_attributes(config, kind)),
+            })
+            ca_env = str(connection.get("tls_ca_cert_file_env", "")).strip()
+            if ca_env:
+                if ca_env not in os.environ:
+                    raise ValueError(f"Required TLS CA file environment variable is not set: {ca_env}")
+                env["AURORA_AD_LDAP_CA_CERT"] = os.environ[ca_env]
+            collection = config.get("collection", {})
+            if collection.get("allow_partial"):
+                env["AURORA_AD_LDAP_ALLOW_PARTIAL"] = "1"
+            return [sys.executable, "-m", "aurora.collectors.active_directory_ldap"], env
         command = ["pwsh", str(base / "exporters/active-directory/export-active-directory.ps1"), "-ProviderName", str(config["provider"]), "-Output", str(output), "-Server", str(connection["server"]), "-OperationTimeoutSeconds", str(collection.get("timeout", 300))]
         extra_attributes = required_mapping_attributes(config, kind)
         if extra_attributes:
@@ -62,7 +83,7 @@ def build_command(config: dict[str, object], output: Path, root: str | Path | No
         return [sys.executable, "-m", f"aurora.collectors.{kind}", "--config", str(config.get("_path", "")), "--output", str(output)], os.environ.copy()
     raise ValueError(f"Unsupported connector type: {kind}")
 
-def run_exporter(config: dict[str, object], output: str | Path, root: str | Path | None = None, timeout: int | None = None) -> RunnerResult:
+def run_exporter(config: dict[str, object], output: str | Path, root: str | Path | None = None, timeout: int | None = None, secret_overrides: dict[str, str] | None = None) -> RunnerResult:
     path = Path(output).resolve()
     temporary_config: Path | None = None
     effective_config = config
@@ -77,10 +98,17 @@ def run_exporter(config: dict[str, object], output: str | Path, root: str | Path
         effective_config["_path"] = str(temporary_config)
     command, env = build_command(effective_config, path, root)
     secrets = secret_environment(config)
+    if secrets.get("username"):
+        env["AURORA_LDAP_USERNAME"] = secrets["username"]
     if secrets.get("password"):
         env["AURORA_LDAP_PASSWORD"] = secrets["password"]
     if secrets.get("password_file"):
         env["AURORA_LDAP_PASSWORD_FILE"] = secrets["password_file"]
+    if secret_overrides:
+        if secret_overrides.get("username"):
+            env["AURORA_LDAP_USERNAME"] = secret_overrides["username"]
+        if secret_overrides.get("password"):
+            env["AURORA_LDAP_PASSWORD"] = secret_overrides["password"]
     collection = config.get("collection", {})
     default_timeout = collection.get("command_timeout", collection.get("timeout", 300)) if isinstance(collection, dict) else 300
     try:

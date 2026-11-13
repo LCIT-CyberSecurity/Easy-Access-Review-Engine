@@ -52,6 +52,19 @@ def validate_connector(data: Any, expected_name: str | None = None) -> None:
     missing = [key for key in required if not connection.get(key)]
     if missing:
         raise ConfigError("Missing connection settings: " + ", ".join(missing))
+    if kind == "active_directory":
+        protocol = str(connection.get("protocol", "adws")).strip().lower()
+        if protocol not in {"adws", "ldap"}:
+            raise ConfigError("Active Directory connection.protocol must be adws or ldap")
+        if protocol == "ldap":
+            base_dn = connection.get("base_dn")
+            if not isinstance(base_dn, str) or not base_dn.strip():
+                raise ConfigError("Active Directory LDAP connections require connection.base_dn")
+            if "use_tls" in connection and not isinstance(connection["use_tls"], bool):
+                raise ConfigError("Active Directory connection.use_tls must be a boolean")
+            tls_mode = connection.get("tls_mode")
+            if tls_mode is not None and tls_mode not in {"none", "starttls", "ldaps"}:
+                raise ConfigError("Active Directory connection.tls_mode must be none, starttls or ldaps")
     if kind == "gcp_iam" and (not str(connection.get("scope", "")).startswith("projects/") or not str(connection.get("scope", "")).removeprefix("projects/")):
         raise ConfigError("GCP V1 supports only scope projects/<project>")
     collection = data.get("collection", {})
@@ -129,7 +142,7 @@ def secret_environment(data: dict[str, Any]) -> dict[str, str]:
 
 def template(provider: str, kind: str) -> dict[str, Any]:
     if kind == "active_directory":
-        return {"provider": provider, "type": kind, "connection": {"server": ""}, "collection": {"timeout": 300, "allow_partial": False, "read_only_account": False}, "business_mapping": validate_business_mapping(kind, None)}
+        return {"provider": provider, "type": kind, "connection": {"server": "", "protocol": "adws", "base_dn": "", "tls_mode": "ldaps"}, "collection": {"timeout": 300, "allow_partial": False, "read_only_account": False}, "business_mapping": validate_business_mapping(kind, None)}
     if kind == "openldap":
         return {"provider": provider, "type": kind, "connection": {"uri": "ldaps://", "base_dn": "", "bind_dn": ""}, "collection": {"search_scope": "sub", "page_size": 1000, "connection_timeout": 10, "search_timeout": 120, "command_timeout": 180, "allow_partial": False, "allow_anonymous": False, "read_only_account": False}, "business_mapping": validate_business_mapping(kind, None)}
     if kind == "google_workspace":
