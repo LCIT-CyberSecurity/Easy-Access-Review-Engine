@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from unittest.mock import patch
 
 from aurora.source_inspector import (
     browse_source_tree,
@@ -116,11 +117,9 @@ def test_attribute_suggestions_include_known_and_configured_zero_coverage_fields
     assert attributes["businessApplication"]["samples"] == []
 
 
-def test_ad_ldap_inspection_copies_password_file_without_trailing_newline(tmp_path, monkeypatch) -> None:
+def test_ad_ldap_inspection_copies_password_file_without_trailing_newline(tmp_path) -> None:
     password_file = tmp_path / "ldap-password"
     password_file.write_text("test-password\n", encoding="utf-8")
-    monkeypatch.setenv("TEST_LDAP_USERNAME", "bind-user")
-    monkeypatch.setenv("TEST_LDAP_PASSWORD_FILE", str(password_file))
     config = _ad() | {
         "connection": {
             "server": "ldap.example.test",
@@ -146,7 +145,11 @@ def test_ad_ldap_inspection_copies_password_file_without_trailing_newline(tmp_pa
             "",
         )
 
-    result = search_source_objects(config, "group", runner=runner)
+    with patch.dict("os.environ", {
+        "TEST_LDAP_USERNAME": "bind-user",
+        "TEST_LDAP_PASSWORD_FILE": str(password_file),
+    }), patch("aurora.source_inspector._run", side_effect=runner):
+        result = search_source_objects(config, "group")
     assert observed == {"bind_user": "bind-user", "password_bytes": b"test-password"}
     assert result["items"][0]["display_name"] == "Finance"
 
