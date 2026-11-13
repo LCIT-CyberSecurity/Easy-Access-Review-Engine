@@ -305,11 +305,17 @@ def _query_ad_ldap(
             ldap_env["AURORA_LDAP_PASSWORD"] = secrets["password"]
         return [_ldap_ad_row(entry, object_kind) for entry in _parse_ldif(_checked_result(runner(command, ldap_env, _timeout(collection))).stdout)]
     with tempfile.TemporaryDirectory(prefix="aurora-ad-inspector-") as directory:
+        password = secrets.get("password", "")
         password_file = secrets.get("password_file")
-        if secrets.get("password"):
+        if password_file and not password:
+            try:
+                password = Path(password_file).read_text(encoding="utf-8").rstrip("\r\n")
+            except OSError as exc:
+                raise SourceInspectorError("Source password file could not be read") from exc
+        if password:
             password_path = Path(directory) / "password"
             password_path.touch(mode=0o600)
-            password_path.write_text(secrets["password"], encoding="utf-8")
+            password_path.write_text(password, encoding="utf-8")
             password_file = str(password_path)
         if username and not password_file:
             raise SourceInspectorError("Source credentials are not configured")

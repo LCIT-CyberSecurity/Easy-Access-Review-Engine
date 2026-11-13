@@ -116,6 +116,41 @@ def test_attribute_suggestions_include_known_and_configured_zero_coverage_fields
     assert attributes["businessApplication"]["samples"] == []
 
 
+def test_ad_ldap_inspection_copies_password_file_without_trailing_newline(tmp_path, monkeypatch) -> None:
+    password_file = tmp_path / "ldap-password"
+    password_file.write_text("test-password\n", encoding="utf-8")
+    monkeypatch.setenv("TEST_LDAP_USERNAME", "bind-user")
+    monkeypatch.setenv("TEST_LDAP_PASSWORD_FILE", str(password_file))
+    config = _ad() | {
+        "connection": {
+            "server": "ldap.example.test",
+            "protocol": "ldap",
+            "base_dn": "DC=example,DC=test",
+            "tls_mode": "none",
+        },
+        "credentials": {
+            "username_env": "TEST_LDAP_USERNAME",
+            "password_file_env": "TEST_LDAP_PASSWORD_FILE",
+        },
+    }
+    observed: dict[str, object] = {}
+
+    def runner(command: list[str], _env: dict[str, str], _timeout: int) -> subprocess.CompletedProcess[str]:
+        observed["bind_user"] = command[command.index("-D") + 1]
+        password_path = command[command.index("-y") + 1]
+        observed["password_bytes"] = open(password_path, "rb").read()
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "dn: CN=Finance,DC=example,DC=test\nobjectClass: group\ncn: Finance\n\n",
+            "",
+        )
+
+    result = search_source_objects(config, "group", runner=runner)
+    assert observed == {"bind_user": "bind-user", "password_bytes": b"test-password"}
+    assert result["items"][0]["display_name"] == "Finance"
+
+
 def test_source_browser_requires_declared_connector_capability() -> None:
     try:
         source_object_kinds({"type": "future_iam"})
