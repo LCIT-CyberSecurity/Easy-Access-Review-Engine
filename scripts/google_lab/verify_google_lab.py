@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from access_review_engine.google_artifacts import read_artifact
+from aurora.google_artifacts import read_artifact
 
 
 def main() -> int:

@@ -5,12 +5,12 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from access_review_engine.api import create_app
-from access_review_engine.chatbot.access import chatbot_access_status
-from access_review_engine.chatbot.config import ChatbotConfig
-from access_review_engine.chatbot.providers.base import ProviderHealth
-from access_review_engine.storage import Repository
-from access_review_engine.system_admin import (
+from aurora.api import create_app
+from aurora.chatbot.access import chatbot_access_status
+from aurora.chatbot.config import ChatbotConfig
+from aurora.chatbot.providers.base import ProviderHealth
+from aurora.storage import Repository
+from aurora.system_admin import (
     chatbot_enabled,
     init_system,
     list_users,
@@ -42,30 +42,30 @@ def test_chatbot_defaults_and_user_flag_preservation(tmp_path: Path):
 
 
 def test_effective_access_matrix(monkeypatch):
-    monkeypatch.setenv("EARE_CHATBOT_PROVIDER", "openai")
-    monkeypatch.setenv("EARE_OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("EARE_OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("AURORA_CHATBOT_PROVIDER", "openai")
+    monkeypatch.setenv("AURORA_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AURORA_OPENAI_MODEL", "test-model")
     config = ChatbotConfig.from_env()
     user = {"enabled": True, "chatbot_access_enabled": True}
     assert chatbot_access_status(config, True, user)["available"] is False
-    monkeypatch.setenv("EARE_CHATBOT_ENABLED", "true")
+    monkeypatch.setenv("AURORA_CHATBOT_ENABLED", "true")
     config = ChatbotConfig.from_env()
     assert chatbot_access_status(config, False, user)["available"] is False
     assert (
         chatbot_access_status(config, True, {**user, "chatbot_access_enabled": False})["available"]
         is False
     )
-    monkeypatch.delenv("EARE_OPENAI_API_KEY")
+    monkeypatch.delenv("AURORA_OPENAI_API_KEY")
     assert chatbot_access_status(ChatbotConfig.from_env(), True, user)["available"] is False
-    monkeypatch.setenv("EARE_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AURORA_OPENAI_API_KEY", "test-key")
     assert chatbot_access_status(ChatbotConfig.from_env(), True, user)["available"] is True
 
 
 def _admin_client(tmp_path: Path, monkeypatch) -> tuple[TestClient, Path]:
-    monkeypatch.setenv("EARE_CHATBOT_ENABLED", "true")
-    monkeypatch.setenv("EARE_OPENAI_PROVIDER", "openai")
-    monkeypatch.setenv("EARE_OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("EARE_OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("AURORA_CHATBOT_ENABLED", "true")
+    monkeypatch.setenv("AURORA_OPENAI_PROVIDER", "openai")
+    monkeypatch.setenv("AURORA_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AURORA_OPENAI_MODEL", "test-model")
     db = tmp_path / "api.db"
     client = TestClient(create_app(str(db)))
     conn = sqlite3.connect(db)
@@ -112,7 +112,7 @@ def test_server_enforcement_and_live_user_revocation(tmp_path: Path, monkeypatch
         ("get", "/api/chatbot/report"),
     ):
         response = (
-            client.post(path, json={"message": "Résumé EARE"})
+            client.post(path, json={"message": "Résumé Aurora"})
             if method == "post"
             else client.get(path)
         )
@@ -152,7 +152,7 @@ def test_server_enforcement_and_live_user_revocation(tmp_path: Path, monkeypatch
     )
     conn.close()
     assert client.get("/api/chatbot/status").json()["available"] is False
-    assert client.post("/api/chatbot/message", json={"message": "Résumé EARE"}).status_code == 403
+    assert client.post("/api/chatbot/message", json={"message": "Résumé Aurora"}).status_code == 403
 
 
 def test_admin_global_toggle_audit_and_non_admin_denied(tmp_path: Path, monkeypatch):
@@ -205,7 +205,7 @@ def test_admin_user_toggle_audits_only_real_transitions(tmp_path: Path, monkeypa
 
 
 def test_system_overview_never_returns_openai_key(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("EARE_OPENAI_API_KEY", "super-secret-test-key")
+    monkeypatch.setenv("AURORA_OPENAI_API_KEY", "super-secret-test-key")
     client, _ = _admin_client(tmp_path, monkeypatch)
     assert (
         client.post(
@@ -234,7 +234,7 @@ def test_admin_can_run_real_provider_test_without_secret_disclosure(tmp_path: Pa
         == 200
     )
     monkeypatch.setattr(
-        "access_review_engine.chatbot.providers.openai.OpenAIProvider.healthcheck",
+        "aurora.chatbot.providers.openai.OpenAIProvider.healthcheck",
         lambda self: ProviderHealth(False, "permission_denied"),
     )
     response = client.post("/api/chatbot/provider-test")

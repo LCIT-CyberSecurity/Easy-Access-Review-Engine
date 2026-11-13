@@ -1,6 +1,6 @@
 # Access Review Model
 
-EARE models reviewable entitlements generically. It does not copy the native IAM model of every technology into the core.
+Aurora models reviewable entitlements generically. It does not copy the native IAM model of every technology into the core.
 
 The main domain objects are `Provider`, `Identity`, `Access`, `AccessAssignment`, and `AccessRelation`.
 

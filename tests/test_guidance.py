@@ -1,4 +1,4 @@
-from access_review_engine.guidance import GuidanceContext, build_guidance
+from aurora.guidance import GuidanceContext, build_guidance
 
 
 def _context(role: str, **values: object) -> GuidanceContext:

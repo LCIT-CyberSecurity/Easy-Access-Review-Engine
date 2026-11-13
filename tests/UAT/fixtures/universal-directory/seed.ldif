@@ -1,101 +1,101 @@
-dn: ou=people,dc=eare,dc=test
+dn: ou=people,dc=aurora,dc=test
 objectClass: organizationalUnit
 ou: people
 
-dn: ou=groups,dc=eare,dc=test
+dn: ou=groups,dc=aurora,dc=test
 objectClass: organizationalUnit
 ou: groups
 
-dn: uid=alice,ou=people,dc=eare,dc=test
+dn: uid=alice,ou=people,dc=aurora,dc=test
 objectClass: inetOrgPerson
 uid: alice
 cn: Alice Martin
 sn: Martin
 givenName: Alice
-mail: alice@eare.test
+mail: alice@aurora.test
 userPassword: alice-password
 
-dn: uid=bob,ou=people,dc=eare,dc=test
+dn: uid=bob,ou=people,dc=aurora,dc=test
 objectClass: inetOrgPerson
 uid: bob
 cn: Bob Leroy
 sn: Leroy
 givenName: Bob
-mail: bob@eare.test
+mail: bob@aurora.test
 userPassword: bob-password
 
-dn: uid=charlie,ou=people,dc=eare,dc=test
+dn: uid=charlie,ou=people,dc=aurora,dc=test
 objectClass: inetOrgPerson
 uid: charlie
 cn: Charlie Bernard
 sn: Bernard
 givenName: Charlie
-mail: charlie@eare.test
+mail: charlie@aurora.test
 userPassword: charlie-password
 
-dn: uid=diane,ou=people,dc=eare,dc=test
+dn: uid=diane,ou=people,dc=aurora,dc=test
 objectClass: inetOrgPerson
 uid: diane
 cn: Diane Robert
 sn: Robert
 givenName: Diane
-mail: diane@eare.test
+mail: diane@aurora.test
 userPassword: diane-password
 
-dn: uid=eric,ou=people,dc=eare,dc=test
+dn: uid=eric,ou=people,dc=aurora,dc=test
 objectClass: inetOrgPerson
 uid: eric
 cn: Eric Smith
 sn: Smith
 givenName: Eric
-mail: eric@eare.test
+mail: eric@aurora.test
 userPassword: eric-password
 
-dn: uid=frank,ou=people,dc=eare,dc=test
+dn: uid=frank,ou=people,dc=aurora,dc=test
 objectClass: inetOrgPerson
 uid: frank
 cn: Frank Jones
 sn: Jones
 givenName: Frank
-mail: frank@eare.test
+mail: frank@aurora.test
 userPassword: frank-password
 
-dn: uid=grace,ou=people,dc=eare,dc=test
+dn: uid=grace,ou=people,dc=aurora,dc=test
 objectClass: inetOrgPerson
 uid: grace
 cn: Grace Brown
 sn: Brown
 givenName: Grace
-mail: grace@eare.test
+mail: grace@aurora.test
 userPassword: grace-password
 
-dn: cn=Finance,ou=groups,dc=eare,dc=test
+dn: cn=Finance,ou=groups,dc=aurora,dc=test
 objectClass: groupOfNames
 cn: Finance
 description: Finance business users
-member: uid=alice,ou=people,dc=eare,dc=test
-member: uid=bob,ou=people,dc=eare,dc=test
+member: uid=alice,ou=people,dc=aurora,dc=test
+member: uid=bob,ou=people,dc=aurora,dc=test
 
-dn: cn=Sales,ou=groups,dc=eare,dc=test
+dn: cn=Sales,ou=groups,dc=aurora,dc=test
 objectClass: groupOfNames
 cn: Sales
 description: CRM sales users
-member: uid=charlie,ou=people,dc=eare,dc=test
+member: uid=charlie,ou=people,dc=aurora,dc=test
 
-dn: cn=Support,ou=groups,dc=eare,dc=test
+dn: cn=Support,ou=groups,dc=aurora,dc=test
 objectClass: groupOfNames
 cn: Support
 description: CRM support users
-member: uid=diane,ou=people,dc=eare,dc=test
+member: uid=diane,ou=people,dc=aurora,dc=test
 
-dn: cn=IT,ou=groups,dc=eare,dc=test
+dn: cn=IT,ou=groups,dc=aurora,dc=test
 objectClass: groupOfNames
 cn: IT
 description: IT administrators
-member: uid=eric,ou=people,dc=eare,dc=test
+member: uid=eric,ou=people,dc=aurora,dc=test
 
-dn: cn=Auditors,ou=groups,dc=eare,dc=test
+dn: cn=Auditors,ou=groups,dc=aurora,dc=test
 objectClass: groupOfNames
 cn: Auditors
 description: Read-only audit users
-member: uid=frank,ou=people,dc=eare,dc=test
+member: uid=frank,ou=people,dc=aurora,dc=test

@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessRelation,
     AccessRelationType,
@@ -14,8 +14,8 @@ from access_review_engine.domain import (
     Permission,
     Snapshot,
 )
-from access_review_engine.services import create_snapshot
-from access_review_engine.storage import Repository, hydrate_snapshot
+from aurora.services import create_snapshot
+from aurora.storage import Repository, hydrate_snapshot
 
 
 def test_repository_persists_access_relation_with_relation_indexes(tmp_path) -> None:

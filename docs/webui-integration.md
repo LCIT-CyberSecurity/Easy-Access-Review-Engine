@@ -1,6 +1,6 @@
 # Full-stack WebUI integration stack
 
-This stack runs the EARE API and WebUI on one browser origin. Nginx serves the compiled SPA and proxies `/api` to the internal FastAPI service. SQLite is persisted in the named `eare-data` volume.
+This stack runs the Aurora API and WebUI on one browser origin. Nginx serves the compiled SPA and proxies `/api` to the internal FastAPI service. SQLite is persisted in the named `aurora-data` volume.
 
 ## Start
 
@@ -12,7 +12,7 @@ cp .env.example .env
 docker compose -f web/compose.yaml up -d --build
 ```
 
-Open `http://<integration-host>:4173/`. The WebUI login uses `EARE_ADMIN_USERNAME` and `EARE_ADMIN_PASSWORD` only for the first administrator bootstrap. Subsequent users are managed from Administration.
+Open `http://<integration-host>:4173/`. The WebUI login uses `AURORA_ADMIN_USERNAME` and `AURORA_ADMIN_PASSWORD` only for the first administrator bootstrap. Subsequent users are managed from Administration.
 
 Useful checks:
 

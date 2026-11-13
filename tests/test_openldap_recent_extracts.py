@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from access_review_engine.domain import IdentityType
-from access_review_engine.importers.openldap import import_openldap_ldif
+from aurora.domain import IdentityType
+from aurora.importers.openldap import import_openldap_ldif
 
 
 def test_openldap_26_ldapsearch_lll_group_variants(tmp_path: Path) -> None:

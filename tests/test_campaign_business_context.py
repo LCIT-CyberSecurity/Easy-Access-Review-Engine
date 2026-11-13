@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from access_review_engine.access_context import capture_campaign_access_contexts, save_access_enrichment
-from access_review_engine.domain import (
+from aurora.access_context import capture_campaign_access_contexts, save_access_enrichment
+from aurora.domain import (
     AccessAssignment,
     ControlObject,
     Identity,
@@ -13,11 +13,11 @@ from access_review_engine.domain import (
     Permission,
     Provider,
 )
-from access_review_engine.services import create_snapshot
-from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
-from access_review_engine.storage import Repository
-from access_review_engine.web_read_models import projected_rows
-from access_review_engine.domain import Access
+from aurora.services import create_snapshot
+from aurora.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
+from aurora.storage import Repository
+from aurora.web_read_models import projected_rows
+from aurora.domain import Access
 
 
 def test_campaign_freezes_one_manual_context_per_access_and_keeps_history(tmp_path) -> None:

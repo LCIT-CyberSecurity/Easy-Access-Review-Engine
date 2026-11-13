@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessRelation,
     AccessRelationType,
@@ -18,9 +18,9 @@ from access_review_engine.domain import (
     Target,
     Origin,
 )
-from access_review_engine.golden_functional import functional_access_rows
-from access_review_engine.services import create_decision, create_golden_version, evolve_golden_version, promote_campaign
-from access_review_engine.storage import Repository, hydrate_golden_version
+from aurora.golden_functional import functional_access_rows
+from aurora.services import create_decision, create_golden_version, evolve_golden_version, promote_campaign
+from aurora.storage import Repository, hydrate_golden_version
 
 
 def test_golden_v1_is_not_defined_and_v2_round_trips_frozen_rights(tmp_path) -> None:

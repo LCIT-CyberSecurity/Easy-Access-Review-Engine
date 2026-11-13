@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 
-from access_review_engine.source_inspector import (
+from aurora.source_inspector import (
     browse_source_tree,
     discover_source_attributes,
     get_source_object,

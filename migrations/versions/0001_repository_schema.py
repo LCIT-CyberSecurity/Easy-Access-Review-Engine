@@ -1,4 +1,4 @@
-"""Create the EARE V1 persistence schema.
+"""Create the Aurora V1 persistence schema.
 
 This revision intentionally contains its complete schema definition. A historical migration must
 not import mutable runtime metadata from ``storage.py``.

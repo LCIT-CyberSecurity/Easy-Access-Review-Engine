@@ -36,32 +36,32 @@ chmod 600 .env
 
 Variables used by the OpenLDAP collector:
 
-- `LDAP_URI`, for example `ldaps://ldap.example.test` or `ldap://ldap.example.test` with StartTLS.
-- `BASE_DN`, required search base.
-- `PROVIDER_NAME`, provider name written to the manifest.
-- `BIND_DN`, optional bind DN.
-- `LDAP_PASSWORD` or `LDAP_PASSWORD_FILE`, used only when `BIND_DN` is set. The script keeps
-  `LDAP_PASSWORD` as a shell variable only, removes it from the child-process environment, and passes
+- `AURORA_LDAP_URI`, for example `ldaps://ldap.example.test` or `ldap://ldap.example.test` with StartTLS.
+- `AURORA_BASE_DN`, required search base.
+- `AURORA_PROVIDER_NAME`, provider name written to the manifest.
+- `AURORA_BIND_DN`, optional bind DN.
+- `AURORA_LDAP_PASSWORD` or `AURORA_LDAP_PASSWORD_FILE`, used only when `AURORA_BIND_DN` is set. The script keeps
+  `AURORA_LDAP_PASSWORD` as a shell variable only, removes it from the child-process environment, and passes
   the secret to `ldapsearch` through a password file, not as a visible process argument.
-- `LDAP_CA_CERT`, optional CA bundle/path exported as `LDAPTLS_CACERT`.
+- `AURORA_LDAP_CA_CERT`, optional CA bundle/path exported as `LDAPTLS_CACERT`.
   TLS certificate and hostname verification remain required by default.
-- `START_TLS`, set to `1` for StartTLS on `ldap://`.
-- `ALLOW_ANONYMOUS`, must be `1` to allow anonymous collection.
-- `ALLOW_PARTIAL`, must be `1` to keep a diagnostic ZIP after collection errors.
-- `PAGE_SIZE`, `CONNECTION_TIMEOUT_SECONDS`, `SEARCH_TIMEOUT_SECONDS`, `COMMAND_TIMEOUT_SECONDS`,
-  `SEARCH_SCOPE`, `LDAP_FILTER`.
+- `AURORA_START_TLS`, set to `1` for StartTLS on `ldap://`.
+- `AURORA_ALLOW_ANONYMOUS`, must be `1` to allow anonymous collection.
+- `AURORA_ALLOW_PARTIAL`, must be `1` to keep a diagnostic ZIP after collection errors.
+- `AURORA_PAGE_SIZE`, `AURORA_CONNECTION_TIMEOUT_SECONDS`, `AURORA_SEARCH_TIMEOUT_SECONDS`, `AURORA_COMMAND_TIMEOUT_SECONDS`,
+  `AURORA_SEARCH_SCOPE`, `AURORA_LDAP_FILTER`.
 
 ## TLS and Fail Closed
 
-Authenticated binds require either LDAPS (`ldaps://`) or StartTLS (`ldap://` with `START_TLS=1`). An
+Authenticated binds require either LDAPS (`ldaps://`) or StartTLS (`ldap://` with `AURORA_START_TLS=1`). An
 authenticated clear-text LDAP bind is rejected by default. Combining LDAPS and StartTLS is rejected.
 TLS verification is strict by default: the collector exports `LDAPTLS_REQCERT=demand` and
 `LDAPTLS_REQSAN=demand`, so `ldapsearch` must validate the certificate, trust chain and hostname.
-`LDAP_CA_CERT` can add the expected CA bundle/path. No TLS verification bypass is provided by default.
+`AURORA_LDAP_CA_CERT` can add the expected CA bundle/path. No TLS verification bypass is provided by default.
 
-The collector uses paged search (`-E pr=PAGE_SIZE/noprompt`) and configurable timeouts. LDAP errors,
+The collector uses paged search (`-E pr=AURORA_PAGE_SIZE/noprompt`) and configurable timeouts. LDAP errors,
 time limits, size limits, truncation and command timeout mark the export as `completeness: unknown`.
-Without `ALLOW_PARTIAL=1`, such failures exit non-zero instead of producing an apparently full export.
+Without `AURORA_ALLOW_PARTIAL=1`, such failures exit non-zero instead of producing an apparently full export.
 
 Secrets are not written to the manifest. Captured LDAP stderr and collection diagnostics are redacted
 with literal matching against configured passwords. `directory.ldif` is authoritative payload and is

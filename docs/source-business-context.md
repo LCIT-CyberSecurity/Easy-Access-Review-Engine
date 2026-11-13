@@ -2,7 +2,7 @@
 
 ## Purpose and boundaries
 
-This feature gives AD/OpenLDAP Access objects descriptive business context while preserving EARE's
+This feature gives AD/OpenLDAP Access objects descriptive business context while preserving Aurora's
 existing access model and behavior.
 
 For a directory group, the technical entitlement remains:
@@ -17,7 +17,7 @@ For a directory group, the technical entitlement remains:
 
 Application, business Permission and Resource describe that technical access. They do not replace
 technical permission, alter an Access key, create a derived business Access or create an artificial
-AccessRelation. EARE does not connect to target applications to validate their ACLs.
+AccessRelation. Aurora does not connect to target applications to validate their ACLs.
 
 Identity business keys remain `(provider, identifier)`; Access business keys remain
 `(provider, name)`. Native IDs remain reconciliation aids. AccessAssignment remains a directly
@@ -30,7 +30,7 @@ flowchart LR
     DIR[AD / OpenLDAP observation] --> TECH[Technical Access]
     DIR --> ASSIGN[Direct AccessAssignment]
     DIR --> MAP[Per-source mapping]
-    MAP --> CTX[Access.metadata.eare_business_context]
+    MAP --> CTX[Access.metadata.aurora_business_context]
     TECH --> SNAP[Immutable Snapshot]
     ASSIGN --> SNAP
     CTX --> SNAP
@@ -48,12 +48,12 @@ extensionAttribute6 = ReadWrite
 extensionAttribute7 = Invoices
 ```
 
-EARE observes group membership / member and stores Sage / ReadWrite / Invoices as context. This does
+Aurora observes group membership / member and stores Sage / ReadWrite / Invoices as context. This does
 not claim that the Sage ACL actually grants ReadWrite over Invoices.
 
 ## Reviewer feedback on business context
 
-Source facts, manual EARE references and reviewer feedback are three separate concepts:
+Source facts, manual Aurora references and reviewer feedback are three separate concepts:
 
 - A source fact is an observation or mapped value; it is **not** an independently verified target-application ACL.
 - A manual reference is entered and maintained by an ADMIN/OPERATOR; it is not a source fact.
@@ -128,7 +128,7 @@ optional field produces no fabricated value and Preview reports it as unavailabl
 affects the next collected Snapshot only; earlier Snapshots keep the context observed at their
 collection time.
 
-When an Access is re-observed, the reserved `eare_business_context` namespace is replaced. If a
+When an Access is re-observed, the reserved `aurora_business_context` namespace is replaced. If a
 previously mapped value disappears, the new observation drops it. Unrelated metadata is retained.
 Objects outside a scoped or non-authoritative observation remain untouched under existing
 reconciliation rules.
@@ -211,7 +211,7 @@ flowchart TD
 
 Administrators can use Browse source from Sources & IdPs. It supports fixed kinds (users and groups),
 search, bounded paging, object details, safe raw values, attribute discovery and sample coverage.
-The EARE service connects using the configured source. The feature is read-only and has no source
+The Aurora service connects using the configured source. The feature is read-only and has no source
 edit/create/delete/rename, membership write, password change, arbitrary LDAP query or shell action.
 
 The backend uses a small generic interface: list object kinds, search summaries, get details and
@@ -253,7 +253,7 @@ assignment checksum may equal its parent's checksum.
 sequenceDiagram
     actor Admin
     participant UI as Golden UI
-    participant API as EARE API
+    participant API as Aurora API
     participant DB as JSON repository
     Admin->>UI: Edit expected-assignment comment
     UI->>API: assignment reference and comment

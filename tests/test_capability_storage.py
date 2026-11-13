@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from access_review_engine.domain import Capability, PermissionCapabilityMapping
-from access_review_engine.storage import Repository
+from aurora.domain import Capability, PermissionCapabilityMapping
+from aurora.storage import Repository
 
 
 def test_capability_catalogue_and_mappings_survive_restart_and_used_entries_cannot_be_deleted(

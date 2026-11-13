@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from access_review_engine.domain import Identity, IdentityStatus, IdentityType
-from access_review_engine.importers.ad import import_ad_zip
-from access_review_engine.services import create_snapshot
+from aurora.domain import Identity, IdentityStatus, IdentityType
+from aurora.importers.ad import import_ad_zip
+from aurora.services import create_snapshot
 from ad_test_helpers import zip_fixture
 
 

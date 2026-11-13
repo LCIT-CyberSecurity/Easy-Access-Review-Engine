@@ -17,7 +17,7 @@ export const LOCALE_LABELS: Record<Locale, string> = {
   it: "Italiano",
   ar: "العربية",
 };
-const STORAGE_KEY = "eare.ui.locale";
+const STORAGE_KEY = "aurora.ui.locale";
 
 export function isLocale(value: string | null | undefined): value is Locale {
   return Boolean(value && (SUPPORTED_LOCALES as readonly string[]).includes(value));

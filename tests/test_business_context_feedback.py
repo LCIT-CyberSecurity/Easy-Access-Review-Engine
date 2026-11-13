@@ -4,9 +4,9 @@ import sqlite3
 
 from fastapi.testclient import TestClient
 
-from access_review_engine.api import create_app
-from access_review_engine.storage import Repository
-from access_review_engine.system_admin import init_system, upsert_user
+from aurora.api import create_app
+from aurora.storage import Repository
+from aurora.system_admin import init_system, upsert_user
 
 
 def _fixture(tmp_path):
@@ -52,7 +52,7 @@ def _fixture(tmp_path):
                     "access_name": "CRM-Admin",
                     "identity_provider": provider,
                     "identity_identifier": "alice",
-                    "reviewer": {"provider": "eare", "identity": reviewer},
+                    "reviewer": {"provider": "aurora", "identity": reviewer},
                 },
             )
         repo.upsert(

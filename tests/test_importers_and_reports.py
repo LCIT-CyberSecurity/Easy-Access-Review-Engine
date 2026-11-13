@@ -6,11 +6,11 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from access_review_engine.domain import Access, Campaign, DecisionValue, Identity, IdentityStatus, IdentityType, OwnerRef, Provider, ReviewItem
-from access_review_engine.importers.ad import import_ad_zip
-from access_review_engine.importers.openldap import import_openldap_ldif
-from access_review_engine.reporting import access_names_from_snapshot, build_report_rows, render_access_matrix, render_html_report, render_pdf_report, write_reports
-from access_review_engine.services import create_decision, create_snapshot, open_campaign
+from aurora.domain import Access, Campaign, DecisionValue, Identity, IdentityStatus, IdentityType, OwnerRef, Provider, ReviewItem
+from aurora.importers.ad import import_ad_zip
+from aurora.importers.openldap import import_openldap_ldif
+from aurora.reporting import access_names_from_snapshot, build_report_rows, render_access_matrix, render_html_report, render_pdf_report, write_reports
+from aurora.services import create_decision, create_snapshot, open_campaign
 
 
 def test_ad_zip_imports_users_groups_memberships_and_descriptions(tmp_path: Path) -> None:
@@ -322,7 +322,7 @@ def test_authentication_policy_is_explicit_and_secret_free(tmp_path: Path) -> No
 def test_campaign_csv_report_neutralizes_spreadsheet_formulas(tmp_path: Path) -> None:
     formula = '=HYPERLINK("https://example.invalid","x")'
     campaign = Campaign("formula", "snapshot-1")
-    from access_review_engine.domain import ReviewItem
+    from aurora.domain import ReviewItem
 
     item = ReviewItem(
         campaign_id="campaign-1",

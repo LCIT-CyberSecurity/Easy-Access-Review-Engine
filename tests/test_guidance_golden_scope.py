@@ -1,4 +1,4 @@
-from access_review_engine.api import _golden_version_provider_domains
+from aurora.api import _golden_version_provider_domains
 
 
 def test_golden_scope_uses_current_expected_content() -> None:

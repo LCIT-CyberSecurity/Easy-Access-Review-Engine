@@ -4,9 +4,9 @@ import csv
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from access_review_engine.domain import IdentityStatus, IdentityType
-from access_review_engine.importers.ad import import_ad_zip
-from access_review_engine.services import reconcile_identities
+from aurora.domain import IdentityStatus, IdentityType
+from aurora.importers.ad import import_ad_zip
+from aurora.services import reconcile_identities
 
 
 def test_recent_ad_extract_preserves_direct_nested_memberships(tmp_path: Path) -> None:
@@ -286,7 +286,7 @@ def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
 
 
 def _identity(provider: str, identifier: str, sid: str, status: str):
-    from access_review_engine.domain import Identity
+    from aurora.domain import Identity
 
     return Identity(
         provider=provider,

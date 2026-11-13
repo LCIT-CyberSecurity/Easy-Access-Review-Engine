@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 
 import pytest
-from access_review_engine.chatbot.config import ChatbotConfig
-from access_review_engine.chatbot.context import AuthorizationContext, UIHints
-from access_review_engine.chatbot.guardrails import GuardrailPolicy, validate_policy
-from access_review_engine.chatbot.knowledge import KnowledgeCatalog
-from access_review_engine.chatbot.providers.base import ProviderResult, ToolCall
-from access_review_engine.chatbot.service import AssistantService, FakeLLMProvider
-from access_review_engine.chatbot.tools.knowledge import search_access_control_knowledge
-from access_review_engine.storage import Repository
+from aurora.chatbot.config import ChatbotConfig
+from aurora.chatbot.context import AuthorizationContext, UIHints
+from aurora.chatbot.guardrails import GuardrailPolicy, validate_policy
+from aurora.chatbot.knowledge import KnowledgeCatalog
+from aurora.chatbot.providers.base import ProviderResult, ToolCall
+from aurora.chatbot.service import AssistantService, FakeLLMProvider
+from aurora.chatbot.tools.knowledge import search_access_control_knowledge
+from aurora.storage import Repository
 
 
 def _context() -> AuthorizationContext:

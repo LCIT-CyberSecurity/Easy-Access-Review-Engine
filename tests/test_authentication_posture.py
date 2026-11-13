@@ -7,12 +7,12 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from access_review_engine.authentication import compare_authentication_posture
-from access_review_engine.domain import AuthenticationPosture, AuthenticationStatus
-from access_review_engine.importers.ad import import_ad_zip
-from access_review_engine.importers.openldap import import_openldap_ldif
-from access_review_engine.services import create_snapshot
-from access_review_engine.storage import hydrate_snapshot
+from aurora.authentication import compare_authentication_posture
+from aurora.domain import AuthenticationPosture, AuthenticationStatus
+from aurora.importers.ad import import_ad_zip
+from aurora.importers.openldap import import_openldap_ldif
+from aurora.services import create_snapshot
+from aurora.storage import hydrate_snapshot
 
 
 def _ad_zip(path: Path, posture: dict | None = None) -> Path:

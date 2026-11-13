@@ -3,17 +3,17 @@ name: Keycloak connector contract
 on:
   push:
     paths:
-      - "src/access_review_engine/collectors/keycloak.py"
-      - "src/access_review_engine/importers/keycloak.py"
-      - "src/access_review_engine/application.py"
+      - "src/aurora/collectors/keycloak.py"
+      - "src/aurora/importers/keycloak.py"
+      - "src/aurora/application.py"
       - "tests/test_keycloak_collector.py"
       - "tests/importers/test_keycloak.py"
       - ".github/workflows/keycloak-contract.yml"
   pull_request:
     paths:
-      - "src/access_review_engine/collectors/keycloak.py"
-      - "src/access_review_engine/importers/keycloak.py"
-      - "src/access_review_engine/application.py"
+      - "src/aurora/collectors/keycloak.py"
+      - "src/aurora/importers/keycloak.py"
+      - "src/aurora/application.py"
       - "tests/test_keycloak_collector.py"
       - "tests/importers/test_keycloak.py"
       - ".github/workflows/keycloak-contract.yml"

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from access_review_engine.application import _enrich_access
-from access_review_engine.connector_capabilities import connector_capabilities
-from access_review_engine.domain import Access, ControlObject, Permission
-from access_review_engine.source_mapping import (
+from aurora.application import _enrich_access
+from aurora.connector_capabilities import connector_capabilities
+from aurora.domain import Access, ControlObject, Permission
+from aurora.source_mapping import (
     BUSINESS_CONTEXT_METADATA_KEY,
     SourceMappingError,
     build_business_context,

@@ -1,33 +1,33 @@
-# EARE WebUI authentication
+# Aurora WebUI authentication
 
-The WebUI uses an HTTP-only, signed session cookie. It does not trust `X-EARE-Role` or `X-EARE-Scopes` headers.
+The WebUI uses an HTTP-only, signed session cookie. It does not trust `X-Aurora-Role` or `X-Aurora-Scopes` headers.
 
 Provision the first administrator explicitly before starting the API:
 
 ```text
-EARE_ADMIN_USERNAME=admin
-EARE_ADMIN_PASSWORD=SecretPassword
-EARE_SESSION_SECRET=<random-secret>
+AURORA_ADMIN_USERNAME=admin
+AURORA_ADMIN_PASSWORD=SecretPassword
+AURORA_SESSION_SECRET=<random-secret>
 ```
 
-The bootstrap variables are used only when the application user table is empty. If `EARE_ADMIN_PASSWORD` is omitted, the initial password is `SecretPassword`; the administrator must change it at first login. Passwords are stored as PBKDF2-SHA256 hashes and are never returned by the API. Set `EARE_COOKIE_SECURE=1` when serving over HTTPS.
+The bootstrap variables are used only when the application user table is empty. If `AURORA_ADMIN_PASSWORD` is omitted, the initial password is `SecretPassword`; the administrator must change it at first login. Passwords are stored as PBKDF2-SHA256 hashes and are never returned by the API. Set `AURORA_COOKIE_SECURE=1` when serving over HTTPS.
 
 If the database already exists and the current local password is unknown, reset it from the API container. The command prompts without displaying the password and requires confirmation:
 
 ```bash
-docker compose -f web/compose.yaml exec eare-api \
-  eare --db /data/access-review.db system reset-password admin
+docker compose -f web/compose.yaml exec aurora-api \
+  aurora --db /data/aurora.db system reset-password admin
 ```
 
-Replace `admin` with the local username when necessary. Changing `EARE_ADMIN_PASSWORD` alone does not modify an existing account.
+Replace `admin` with the local username when necessary. Changing `AURORA_ADMIN_PASSWORD` alone does not modify an existing account.
 
 ## Local accounts and directory accounts
 
-Every EARE user signs in either with a local account or with an account taken from an LDAP directory. This is about signing in to EARE; the directories EARE audits are configured in **Sources & IdPs** and are unrelated, even when they point at the same server.
+Every Aurora user signs in either with a local account or with an account taken from an LDAP directory. This is about signing in to Aurora; the directories Aurora audits are configured in **Sources & IdPs** and are unrelated, even when they point at the same server.
 
-A directory account stores no password in EARE. At sign-in, EARE resolves the account in the directory and binds as that account to verify the password, through `ldapsearch`, so the project keeps no LDAP dependency and no password ever reaches a command line. A login that matches more than one directory entry never authenticates.
+A directory account stores no password in Aurora. At sign-in, Aurora resolves the account in the directory and binds as that account to verify the password, through `ldapsearch`, so the project keeps no LDAP dependency and no password ever reaches a command line. A login that matches more than one directory entry never authenticates.
 
-Roles and scopes are always managed in EARE, never derived from directory groups. Keep at least one local administrator: it is the way back in when the directory is unreachable.
+Roles and scopes are always managed in Aurora, never derived from directory groups. Keep at least one local administrator: it is the way back in when the directory is unreachable.
 
 ## Configure a directory
 
@@ -35,7 +35,7 @@ In **System → Authentication**, add an LDAP directory:
 
 | Field | Meaning |
 | --- | --- |
-| Name | Identifies the directory in EARE, and is what the user list shows as the sign-in source |
+| Name | Identifies the directory in Aurora, and is what the user list shows as the sign-in source |
 | LDAP URI | For example `ldaps://ldap.example.org` |
 | Base DN | Where accounts are searched, for example `dc=example,dc=org` |
 | Login attribute | `uid`, or `sAMAccountName` on Active Directory |
@@ -46,7 +46,7 @@ In **System → Authentication**, add an LDAP directory:
 The service account password stays in the server environment, like collector secrets:
 
 ```text
-EARE_DIRECTORY_PASSWORD=<service-account-secret>
+AURORA_DIRECTORY_PASSWORD=<service-account-secret>
 ```
 
 **Test connection** checks the configuration, including the password variable, before saving. Clearing **Allow people from this directory to sign in** immediately blocks every account from that directory without deleting them.
@@ -60,4 +60,4 @@ A `GROUP_OWNER` username must match the reviewer identifier used by the audited 
 
 ## External read-only API
 
-The separate `/api/v1` user API is disabled globally and per user by default. Administrators control those two switches in **System → Users & permissions**; users generate their own 90-day API key from the account menu after access is granted. EARE stores only the SHA-256 hash, displays the key once, and checks the current enabled account, API capability, role and authorized domains on every request. Bearer keys are accepted only by `/api/v1`; they do not authenticate existing session-cookie WebUI endpoints. See [external-user-api.md](external-user-api.md) for the endpoint list, authorization behavior, Swagger URL and reverse-proxy rate-limit guidance.
+The separate `/api/v1` user API is disabled globally and per user by default. Administrators control those two switches in **System → Users & permissions**; users generate their own 90-day API key from the account menu after access is granted. Aurora stores only the SHA-256 hash, displays the key once, and checks the current enabled account, API capability, role and authorized domains on every request. Bearer keys are accepted only by `/api/v1`; they do not authenticate existing session-cookie WebUI endpoints. See [external-user-api.md](external-user-api.md) for the endpoint list, authorization behavior, Swagger URL and reverse-proxy rate-limit guidance.

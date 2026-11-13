@@ -8,7 +8,7 @@ import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from access_review_engine.mcp_server import MCP_TOOL_NAMES
+from aurora.mcp_server import MCP_TOOL_NAMES
 
 
 async def run(url: str, token: str) -> None:
@@ -21,10 +21,10 @@ async def run(url: str, token: str) -> None:
                 if sorted(tool.name for tool in tools.tools) != sorted(MCP_TOOL_NAMES):
                     raise RuntimeError("unexpected MCP tool list")
                 print("list_tools: PASS")
-                await session.call_tool("eare_get_current_user", {})
-                print("eare_get_current_user: PASS")
-                await session.call_tool("eare_list_reports", {})
-                print("eare_list_reports: PASS")
+                await session.call_tool("aurora_get_current_user", {})
+                print("aurora_get_current_user: PASS")
+                await session.call_tool("aurora_list_reports", {})
+                print("aurora_list_reports: PASS")
 
 
 def main() -> int:

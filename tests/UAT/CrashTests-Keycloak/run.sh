@@ -2,10 +2,10 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-project=eare-keycloak-crashtest
+project=aurora-keycloak-crashtest
 compose=(docker compose -p "$project" -f compose.yaml)
-api_url=${EARE_URL:-http://192.168.1.5:4175}
-realm=eare-crashtest
+api_url=${AURORA_URL:-http://192.168.1.5:4175}
+realm=aurora-crashtest
 
 json_value() {
   python3 - "$1" "$2" <<'PY'
@@ -104,7 +104,7 @@ for access_name in (
     }
     scoped_names = {row["name"] for row in scoped["accesses"]}
     if not baseline_names.issubset(scoped_names):
-        raise SystemExit(f"baseline access disappeared during scoped import: {access_name}")
+        raise SystemExit(f"baseline access disappaurorad during scoped import: {access_name}")
 
 def assignment_key(row):
     return (
@@ -125,11 +125,11 @@ def relation_key(row):
 baseline_assignments = {assignment_key(row) for row in baseline["access_assignments"]}
 scoped_assignments = {assignment_key(row) for row in scoped["access_assignments"]}
 if not baseline_assignments.issubset(scoped_assignments):
-    raise SystemExit("a baseline assignment disappeared during scoped import")
+    raise SystemExit("a baseline assignment disappaurorad during scoped import")
 baseline_relations = {relation_key(row) for row in baseline["access_relations"]}
 scoped_relations = {relation_key(row) for row in scoped["access_relations"]}
 if not baseline_relations.issubset(scoped_relations):
-    raise SystemExit("a baseline relation disappeared during scoped import")
+    raise SystemExit("a baseline relation disappaurorad during scoped import")
 
 if any(row.get("status") == "deleted" for row in scoped["identities"]):
     raise SystemExit("scoped import created a deleted identity")
@@ -143,14 +143,14 @@ rm -f .env.runtime
 ./reset.sh
 
 umask 077
-eare_admin_password=${EARE_ADMIN_PASSWORD:-SecretPassword}
+aurora_admin_password=${AURORA_ADMIN_PASSWORD:-SecretPassword}
 cat > .env.runtime <<EOF
 KEYCLOAK_DB_PASSWORD=$(openssl rand -hex 24)
 KEYCLOAK_ADMIN_PASSWORD=$(openssl rand -hex 24)
-EARE_ADMIN_PASSWORD=$eare_admin_password
-EARE_SESSION_SECRET=$(openssl rand -hex 32)
-EARE_KEYCLOAK_CLIENT_SECRET=EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK
-EARE_LDAP_PASSWORD=$(openssl rand -hex 24)
+AURORA_ADMIN_PASSWORD=$aurora_admin_password
+AURORA_SESSION_SECRET=$(openssl rand -hex 32)
+AURORA_KEYCLOAK_CLIENT_SECRET=AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK
+AURORA_LDAP_PASSWORD=$(openssl rand -hex 24)
 EOF
 set -a
 source .env.runtime
@@ -160,28 +160,28 @@ compose=(docker compose --env-file "$PWD/.env.runtime" -p "$project" -f compose.
 
 "${compose[@]}" up -d --build
 keycloak_container=$("${compose[@]}" ps -q keycloak)
-api_container=$("${compose[@]}" ps -q eare-api)
+api_container=$("${compose[@]}" ps -q aurora-api)
 ldap_container=$("${compose[@]}" ps -q openldap)
 test -n "$keycloak_container"
 test -n "$api_container"
 test -n "$ldap_container"
 docker exec -i "$ldap_container" ldapadd -x -H ldap://127.0.0.1:389 \
-  -D cn=admin,dc=eare,dc=test -w "$EARE_LDAP_PASSWORD" \
+  -D cn=admin,dc=aurora,dc=test -w "$AURORA_LDAP_PASSWORD" \
   -f /dev/stdin < ../fixtures/universal-directory/seed.ldif >/dev/null
 until curl -fsS http://127.0.0.1:8180/realms/master >/dev/null; do sleep 2; done
 KEYCLOAK_CONTAINER="$keycloak_container" \
 KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
-EARE_KEYCLOAK_CLIENT_SECRET="$EARE_KEYCLOAK_CLIENT_SECRET" \
-EARE_LDAP_PASSWORD="$EARE_LDAP_PASSWORD" \
+AURORA_KEYCLOAK_CLIENT_SECRET="$AURORA_KEYCLOAK_CLIENT_SECRET" \
+AURORA_LDAP_PASSWORD="$AURORA_LDAP_PASSWORD" \
 ./seed-keycloak.sh
 ldap_users=$(docker exec "$ldap_container" ldapsearch -LLL -x -H ldap://127.0.0.1:389 \
-  -D cn=admin,dc=eare,dc=test -w "$EARE_LDAP_PASSWORD" \
-  -b ou=people,dc=eare,dc=test '(objectClass=inetOrgPerson)' uid)
+  -D cn=admin,dc=aurora,dc=test -w "$AURORA_LDAP_PASSWORD" \
+  -b ou=people,dc=aurora,dc=test '(objectClass=inetOrgPerson)' uid)
 grep -q 'uid: alice' <<<"$ldap_users"
 grep -q 'uid: bob' <<<"$ldap_users"
 ldap_finance=$(docker exec "$ldap_container" ldapsearch -LLL -x -H ldap://127.0.0.1:389 \
-  -D cn=admin,dc=eare,dc=test -w "$EARE_LDAP_PASSWORD" \
-  -b cn=Finance,ou=groups,dc=eare,dc=test -s base member)
+  -D cn=admin,dc=aurora,dc=test -w "$AURORA_LDAP_PASSWORD" \
+  -b cn=Finance,ou=groups,dc=aurora,dc=test -s base member)
 grep -q 'member: uid=alice,' <<<"$ldap_finance"
 grep -q 'member: uid=bob,' <<<"$ldap_finance"
 kc() { docker exec "$keycloak_container" /opt/keycloak/bin/kcadm.sh "$@"; }
@@ -195,19 +195,19 @@ for username in alice bob; do
 done
 for attempt in {1..60}; do
   if curl -fsS "$api_url/api/health" >/dev/null; then break; fi
-  if [[ "$attempt" == 60 ]]; then echo "EARE API did not become healthy" >&2; exit 1; fi
+  if [[ "$attempt" == 60 ]]; then echo "Aurora API did not become healthy" >&2; exit 1; fi
   sleep 2
 done
 
 cookie=$(mktemp)
 trap 'rm -f "$cookie" authz-export.zip; rm -f .env.runtime' EXIT
-login_payload=$(printf '{"username":"admin","password":"%s"}' "$EARE_ADMIN_PASSWORD")
+login_payload=$(printf '{"username":"admin","password":"%s"}' "$AURORA_ADMIN_PASSWORD")
 curl -fsS -c "$cookie" -H 'Content-Type: application/json' -d "$login_payload" "$api_url/api/auth/login" >/dev/null
 curl -fsS -b "$cookie" -c "$cookie" -H 'Content-Type: application/json' \
-  -d "{\"new_password\":\"$EARE_ADMIN_PASSWORD\"}" \
+  -d "{\"new_password\":\"$AURORA_ADMIN_PASSWORD\"}" \
   "$api_url/api/auth/change-password" >/dev/null
 
-source_payload='{"provider":"keycloak-crashtest","type":"keycloak","connection":{"base_url":"http://keycloak:8080","realm":"eare-crashtest","client_id":"eare-collector"},"credentials":{"client_secret_env":"EARE_KEYCLOAK_CLIENT_SECRET"},"collection":{"users":true,"groups":true,"memberships":true,"clients":true,"realm_roles":true,"client_roles":true,"user_role_mappings":true,"group_role_mappings":true,"composite_roles":true,"service_accounts":true,"page_size":100,"timeout":300,"allow_partial":false,"read_only_account":true}}'
+source_payload='{"provider":"keycloak-crashtest","type":"keycloak","connection":{"base_url":"http://keycloak:8080","realm":"aurora-crashtest","client_id":"aurora-collector"},"credentials":{"client_secret_env":"AURORA_KEYCLOAK_CLIENT_SECRET"},"collection":{"users":true,"groups":true,"memberships":true,"clients":true,"realm_roles":true,"client_roles":true,"user_role_mappings":true,"group_role_mappings":true,"composite_roles":true,"service_accounts":true,"page_size":100,"timeout":300,"allow_partial":false,"read_only_account":true}}'
 curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d "$source_payload" "$api_url/api/system/sources" >/dev/null
 curl -fsS -b "$cookie" -H 'Content-Type: application/json' -d "$source_payload" "$api_url/api/system/sources/test" > connection-check.json
 grep -q '"status":"success"' connection-check.json
@@ -231,7 +231,7 @@ start_sync() {
 }
 
 start_sync
-docker exec "$api_container" python -c 'import json; from access_review_engine.collectors.keycloak import collect; collect({"provider":"keycloak-uat-direct","connection":{"base_url":"http://keycloak:8080","realm":"eare-crashtest","client_id":"eare-collector"},"credentials":{"client_secret_env":"EARE_KEYCLOAK_CLIENT_SECRET"},"collection":{"page_size":100,"timeout":30,"allow_partial":False}}, "/tmp/authz-export.zip")'
+docker exec "$api_container" python -c 'import json; from aurora.collectors.keycloak import collect; collect({"provider":"keycloak-uat-direct","connection":{"base_url":"http://keycloak:8080","realm":"aurora-crashtest","client_id":"aurora-collector"},"credentials":{"client_secret_env":"AURORA_KEYCLOAK_CLIENT_SECRET"},"collection":{"page_size":100,"timeout":30,"allow_partial":False}}, "/tmp/authz-export.zip")'
 docker cp "$api_container:/tmp/authz-export.zip" authz-export.zip >/dev/null
 docker exec -i "$api_container" python - /tmp/authz-export.zip <<'PY'
 import json
@@ -313,11 +313,11 @@ finance=$(kc get groups -r "$realm" -q search=Finance --fields id --format csv -
 finance_access="group:${finance}:member"
 kc add-roles -r "$realm" --uid "$diane" --cid "$erp" --roleid "$erp_admin_role" >/dev/null
 docker exec -i "$ldap_container" ldapmodify -x -H ldap://127.0.0.1:389 \
-  -D cn=admin,dc=eare,dc=test -w "$EARE_LDAP_PASSWORD" >/dev/null <<'LDIF'
-dn: cn=Finance,ou=groups,dc=eare,dc=test
+  -D cn=admin,dc=aurora,dc=test -w "$AURORA_LDAP_PASSWORD" >/dev/null <<'LDIF'
+dn: cn=Finance,ou=groups,dc=aurora,dc=test
 changetype: modify
 delete: member
-member: uid=bob,ou=people,dc=eare,dc=test
+member: uid=bob,ou=people,dc=aurora,dc=test
 LDIF
 ldap_component=$(kc get components -r "$realm" -q name=ldap --fields id --format csv --noquotes | tail -1)
 ldap_mapper=$(kc get components -r "$realm" -q name=ldap-groups --fields id --format csv --noquotes | tail -1)
@@ -383,7 +383,7 @@ grep -q 'expected_and_observed' report.json
 # Exercise scoped collection handling while leaving all V1 surfaces readable.
 # Keycloak 25 requires view-authorization for the AuthZ collection endpoints.
 realm_management=$(client_id realm-management)
-collector_user=$(user_id service-account-eare-collector)
+collector_user=$(user_id service-account-aurora-collector)
 kc remove-roles -r "$realm" --uid "$collector_user" --cclientid realm-management \
   --rolename view-authorization >/dev/null
 mapping_after_remove=$(kc get "users/$collector_user/role-mappings/clients/$realm_management" -r "$realm" --format json)
@@ -449,27 +449,27 @@ PY
 after_4173=$(docker ps --format '{{.Names}} {{.Ports}}' | grep '4173->' || true)
 test "$before_4173" = "$after_4173"
 if docker exec "$api_container" sh -c \
-  'grep -R -I -l EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK /data 2>/dev/null | grep .'; then
-  echo "Keycloak secret canary leaked into EARE data" >&2
+  'grep -R -I -l AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK /data 2>/dev/null | grep .'; then
+  echo "Keycloak secret canary leaked into Aurora data" >&2
   exit 1
 fi
-if grep -a -q EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK authz-export.zip; then
+if grep -a -q AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK authz-export.zip; then
   echo "Keycloak secret canary leaked into the artifact" >&2
   exit 1
 fi
-if docker logs "$api_container" 2>&1 | grep -q EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK; then
+if docker logs "$api_container" 2>&1 | grep -q AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK; then
   echo "Keycloak secret canary leaked into API logs" >&2
   exit 1
 fi
 docker exec "$api_container" python - <<'PY'
 import sqlite3
 
-connection = sqlite3.connect("/data/access-review.db")
+connection = sqlite3.connect("/data/aurora.db")
 connection.execute("SELECT COUNT(*) FROM snapshots").fetchone()
 connection.close()
 PY
 
-echo "PASS: Keycloak/EARE infrastructure, source configuration, Test Connection and initial sync"
+echo "PASS: Keycloak/Aurora infrastructure, source configuration, Test Connection and initial sync"
 echo "PASS: Golden Source, drift, second sync, campaign, findings, decisions and reporting"
 echo "PASS: scoped collection and restored FULL collection"
-echo "PASS: 4173 unchanged and secret canary absent from EARE data"
+echo "PASS: 4173 unchanged and secret canary absent from Aurora data"

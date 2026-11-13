@@ -11,8 +11,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 import pytest
-from access_review_engine.application import persist_import_result
-from access_review_engine.domain import (
+from aurora.application import persist_import_result
+from aurora.domain import (
     AccessAssignment,
     AccessRelation,
     AuditEvent,
@@ -24,10 +24,10 @@ from access_review_engine.domain import (
     PermissionCapabilityMapping,
     stable_checksum,
 )
-from access_review_engine.importers.ad import import_ad_zip
-from access_review_engine.importers.keycloak import import_keycloak_zip
-from access_review_engine.importers.openldap import import_openldap_ldif
-from access_review_engine.services import (
+from aurora.importers.ad import import_ad_zip
+from aurora.importers.keycloak import import_keycloak_zip
+from aurora.importers.openldap import import_openldap_ldif
+from aurora.services import (
     close_campaign,
     create_decision,
     create_golden_source,
@@ -35,8 +35,8 @@ from access_review_engine.services import (
     promote_snapshot,
     remediation_from_decisions,
 )
-from access_review_engine.storage import Repository
-from access_review_engine.system_admin import (
+from aurora.storage import Repository
+from aurora.system_admin import (
     ensure_bootstrap_user,
     external_user_api_enabled,
     init_system,
@@ -45,14 +45,14 @@ from access_review_engine.system_admin import (
 
 
 def test_database_url_keeps_legacy_paths_and_prefers_standard_environment(monkeypatch, tmp_path):
-    from access_review_engine.database import database_url
+    from aurora.database import database_url
 
     legacy_path = tmp_path / "legacy.db"
     assert database_url(legacy_path) == f"sqlite:///{legacy_path}"
-    monkeypatch.setenv("EARE_DB_PATH", str(legacy_path))
+    monkeypatch.setenv("AURORA_DB_PATH", str(legacy_path))
     assert database_url() == f"sqlite:///{legacy_path}"
-    monkeypatch.setenv("EARE_DATABASE_URL", "postgresql+psycopg://eare:test-password@db/eare")
-    assert database_url() == "postgresql+psycopg://eare:test-password@db/eare"
+    monkeypatch.setenv("AURORA_DATABASE_URL", "postgresql+psycopg://aurora:test-password@db/aurora")
+    assert database_url() == "postgresql+psycopg://aurora:test-password@db/aurora"
 
 
 @pytest.fixture(
@@ -68,10 +68,10 @@ def repository(request: pytest.FixtureRequest, tmp_path):
             repo.close()
         return
 
-    base_url = os.environ.get("EARE_TEST_POSTGRES_URL")
+    base_url = os.environ.get("AURORA_TEST_POSTGRES_URL")
     if not base_url:
-        pytest.skip("Set EARE_TEST_POSTGRES_URL to run PostgreSQL contract tests")
-    schema = f"eare_test_{uuid4().hex}"
+        pytest.skip("Set AURORA_TEST_POSTGRES_URL to run PostgreSQL contract tests")
+    schema = f"aurora_test_{uuid4().hex}"
     admin_engine = create_engine(base_url, hide_parameters=True)
     schema_created = False
     try:
@@ -178,7 +178,7 @@ def test_system_capabilities_are_idempotent(repository: Repository) -> None:
 
 
 def test_system_administration_schema_uses_the_configured_backend(repository: Repository) -> None:
-    from access_review_engine.database import connect_database
+    from aurora.database import connect_database
 
     database_uri = repository.engine.url.render_as_string(hide_password=False)
     with connect_database(database_uri) as connection:
@@ -218,7 +218,7 @@ def test_semantic_parity_for_canonical_payload_and_ordering(repository: Reposito
 def test_import_golden_campaign_review_and_audit_semantic_parity(
     repository: Repository, tmp_path, monkeypatch, source_type: str
 ) -> None:
-    import access_review_engine.application as application
+    import aurora.application as application
 
     if source_type == "keycloak":
         fixture_directory = Path(__file__).parent / "fixtures" / "keycloak"
@@ -254,7 +254,7 @@ def test_import_golden_campaign_review_and_audit_semantic_parity(
     try:
 
         if source_type == "openldap":
-            # This fixture is intentionally scoped/incomplete, and EARE correctly
+            # This fixture is intentionally scoped/incomplete, and Aurora correctly
             # forbids promoting such a snapshot to Golden Source.
             actual = persist_import_result(repository, deepcopy(imported))
             expected = persist_import_result(mirror, deepcopy(imported))

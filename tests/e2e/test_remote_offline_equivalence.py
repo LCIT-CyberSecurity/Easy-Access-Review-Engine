@@ -10,9 +10,9 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from access_review_engine.application import import_file_to_repository
-from access_review_engine.importers.openldap import DEFAULT_OPENLDAP_FILTER
-from access_review_engine.storage import Repository
+from aurora.application import import_file_to_repository
+from aurora.importers.openldap import DEFAULT_OPENLDAP_FILTER
+from aurora.storage import Repository
 
 
 def test_remote_offline_equivalence_active_directory(tmp_path: Path) -> None:
@@ -40,10 +40,10 @@ def test_remote_offline_equivalence_openldap(tmp_path: Path) -> None:
     env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "LDAP_FIXTURE": str(tmp_path / "remote.ldif"),
-        "BASE_DN": "dc=example,dc=com",
-        "PROVIDER_NAME": "openldap-prod",
-        "ALLOW_ANONYMOUS": "1",
-        "PAGE_SIZE": "2",
+        "AURORA_BASE_DN": "dc=example,dc=com",
+        "AURORA_PROVIDER_NAME": "openldap-prod",
+        "AURORA_ALLOW_ANONYMOUS": "1",
+        "AURORA_PAGE_SIZE": "2",
     }
     Path(env["LDAP_FIXTURE"]).write_text(ldif, encoding="utf-8")
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(remote_zip)], cwd=Path.cwd(), env=env, check=True)

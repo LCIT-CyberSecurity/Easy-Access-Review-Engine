@@ -48,8 +48,8 @@ export const APPEARANCES: { id: Appearance; labelKey: string }[] = [
   { id: "system", labelKey: "settings.appearanceSystem" },
 ];
 
-const THEME_KEY = "eare.theme";
-const APPEARANCE_KEY = "eare.appearance";
+const THEME_KEY = "aurora.theme";
+const APPEARANCE_KEY = "aurora.appearance";
 const DEFAULT_THEME: ThemeId = "default";
 const DEFAULT_APPEARANCE: Appearance = "light";
 

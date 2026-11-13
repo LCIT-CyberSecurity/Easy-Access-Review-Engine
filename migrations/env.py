@@ -7,8 +7,8 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection, create_engine
 
-from access_review_engine.database import database_url
-from access_review_engine.storage import repository_metadata
+from aurora.database import database_url
+from aurora.storage import repository_metadata
 
 config = context.config
 if config.config_file_name:
@@ -19,7 +19,7 @@ target_metadata = repository_metadata()[0]
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=database_url(os.environ.get("EARE_DATABASE_URL")),
+        url=database_url(os.environ.get("AURORA_DATABASE_URL")),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -35,7 +35,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 def run_migrations_online() -> None:
-    url = database_url(os.environ.get("EARE_DATABASE_URL"))
+    url = database_url(os.environ.get("AURORA_DATABASE_URL"))
     connectable = create_engine(url, poolclass=pool.NullPool, hide_parameters=True)
     with connectable.connect() as connection:
         do_run_migrations(connection)

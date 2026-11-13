@@ -4,7 +4,7 @@ Detailed design and implementation contracts live in [engineering.md](engineerin
 
 ## Model Invariants
 
-The application core is provider-agnostic. Active Directory, OpenLDAP, and future providers are importers or connectors that translate native objects into the normalized EARE model.
+The application core is provider-agnostic. Active Directory, OpenLDAP, and future providers are importers or connectors that translate native objects into the normalized Aurora model.
 
 Provider-specific fields stay in `metadata` or `origin.raw`. The core does not add AD, LDAP, cloud, or application-specific columns.
 

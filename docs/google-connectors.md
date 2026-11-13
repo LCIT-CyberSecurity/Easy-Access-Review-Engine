@@ -25,6 +25,6 @@ Cloud Asset Inventory's `searchAllIamPolicies` requires the OAuth scope
 `https://www.googleapis.com/auth/cloud-platform`; this scope alone does not
 grant write access. The service account must still be restricted to the
 read-only IAM permissions required by the connector. Configure a reverse proxy
-and TLS outside EARE for production use; do not expose credential files to the
+and TLS outside Aurora for production use; do not expose credential files to the
 WebUI. Optional live tests must be explicitly configured and are skipped when
 Google credentials are absent.

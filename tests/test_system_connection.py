@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from access_review_engine.api import _PerThreadConnection
+from aurora.api import _PerThreadConnection
 
 
 def test_each_worker_thread_reads_the_system_database_on_its_own_connection(tmp_path: Path):
@@ -27,7 +27,7 @@ def test_each_worker_thread_reads_the_system_database_on_its_own_connection(tmp_
 
 
 def test_business_context_reads_tolerate_null_levels():
-    from access_review_engine.api import _context_value
+    from aurora.api import _context_value
 
     assert _context_value({"business_context": {"fields": {"application": {"manual": None, "source": {"value": "CRM"}}}}}, "application", "manual") is None
     assert _context_value({"business_context": {"fields": {"application": {"source": {"value": "CRM"}}}}}, "application", "source") == "CRM"
@@ -35,7 +35,7 @@ def test_business_context_reads_tolerate_null_levels():
 
 
 def test_list_summaries_count_every_filtered_row():
-    from access_review_engine.web_read_models import findings_summary, list_summary
+    from aurora.web_read_models import findings_summary, list_summary
 
     accesses = [
         {"provider": "ldap", "holder_count": 4, "finding_count": 0},

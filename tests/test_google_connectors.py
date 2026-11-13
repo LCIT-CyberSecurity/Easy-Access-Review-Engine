@@ -4,15 +4,15 @@ import json
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from access_review_engine.application import persist_import_result
-from access_review_engine.config_loader import ConfigError, validate_connector
-from access_review_engine.collectors.gcp_iam import collect as collect_gcp
-from access_review_engine.collectors.google_workspace import collect as collect_workspace
-from access_review_engine.google_artifacts import read_artifact
-from access_review_engine.importers.gcp_iam import import_gcp_iam_zip
-from access_review_engine.importers.google_workspace import import_google_workspace_zip
-from access_review_engine.services import calculate_effective_accesses
-from access_review_engine.storage import Repository
+from aurora.application import persist_import_result
+from aurora.config_loader import ConfigError, validate_connector
+from aurora.collectors.gcp_iam import collect as collect_gcp
+from aurora.collectors.google_workspace import collect as collect_workspace
+from aurora.google_artifacts import read_artifact
+from aurora.importers.gcp_iam import import_gcp_iam_zip
+from aurora.importers.google_workspace import import_google_workspace_zip
+from aurora.services import calculate_effective_accesses
+from aurora.storage import Repository
 
 
 class FakeWorkspace:
@@ -219,11 +219,11 @@ def test_workspace_admin_role_resolves_known_gcp_service_account(tmp_path):
             "collection-errors.json": [],
         },
     )
-    from access_review_engine.domain import Identity, IdentityType
+    from aurora.domain import Identity, IdentityType
 
     service_account = Identity(
-        "gcp", "eare-admin@project.iam.gserviceaccount.com", IdentityType.TECHNICAL_ACCOUNT,
-        "active", native_id="sa-unique-id", email="eare-admin@project.iam.gserviceaccount.com",
+        "gcp", "aurora-admin@project.iam.gserviceaccount.com", IdentityType.TECHNICAL_ACCOUNT,
+        "active", native_id="sa-unique-id", email="aurora-admin@project.iam.gserviceaccount.com",
     )
     result = import_google_workspace_zip(
         path, known_identities=[service_account], known_provider_types={"gcp": "gcp_iam"}
@@ -249,7 +249,7 @@ def test_workspace_service_account_email_does_not_resolve_to_other_provider(tmp_
             "collection-errors.json": [],
         },
     )
-    from access_review_engine.domain import Identity, IdentityType
+    from aurora.domain import Identity, IdentityType
 
     result = import_google_workspace_zip(
         path,
@@ -325,7 +325,7 @@ def test_workspace_memberships_with_groups_are_valid():
 
 
 def test_cloud_asset_search_uses_only_scope_and_page_token():
-    from access_review_engine.collectors.gcp_iam import _search_all_iam_policies
+    from aurora.collectors.gcp_iam import _search_all_iam_policies
 
     calls = []
 
@@ -466,7 +466,7 @@ def test_partial_workspace_import_does_not_delete_previous_identity(tmp_path):
             "collection-errors.json": [{"surface": "users"}],
         },
     )
-    with Repository(tmp_path / "eare.db") as repo:
+    with Repository(tmp_path / "aurora.db") as repo:
         persist_import_result(repo, import_google_workspace_zip(first))
         persist_import_result(repo, import_google_workspace_zip(partial))
         assert any(
@@ -955,12 +955,12 @@ def test_gcp_assignment_resolves_after_workspace_import_and_alias(tmp_path):
             "collection-errors.json": [],
         },
     )
-    with Repository(tmp_path / "eare.db") as repo:
+    with Repository(tmp_path / "aurora.db") as repo:
         gcp_result = import_gcp_iam_zip(gcp)
         assert gcp_result.assignments[0].origin.raw.get("unresolved") is True
         persist_import_result(repo, gcp_result)
         persist_import_result(repo, import_google_workspace_zip(workspace, known_identities=[]))
-        from access_review_engine.application import _resolve_unresolved_assignments
+        from aurora.application import _resolve_unresolved_assignments
 
         _resolve_unresolved_assignments(repo)
         assignments = repo.list_payloads("access_assignments")
@@ -989,7 +989,7 @@ def test_gcp_known_principal_prefers_workspace_provider_over_same_email_other_id
             "collection-errors.json": [],
         },
     )
-    from access_review_engine.domain import Identity, IdentityType
+    from aurora.domain import Identity, IdentityType
 
     result = import_gcp_iam_zip(
         path,

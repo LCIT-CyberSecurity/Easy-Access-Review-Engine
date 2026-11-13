@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -21,7 +21,7 @@ from access_review_engine.domain import (
     Provider,
     Target,
 )
-from access_review_engine.services import (
+from aurora.services import (
     close_campaign,
     create_decision,
     create_golden_source,
@@ -33,7 +33,7 @@ from access_review_engine.services import (
     promote_snapshot,
     remediation_from_decisions,
 )
-from access_review_engine.web_use_cases import prepare_campaign_review
+from aurora.web_use_cases import prepare_campaign_review
 
 
 def test_golden_owner_routes_campaign_without_mutating_snapshot() -> None:
@@ -78,9 +78,9 @@ def test_campaign_reviewer_assignment_routes_unresolved_access_group() -> None:
     _, items = open_campaign(
         campaign,
         prepared.snapshot,
-        reviewer_assignments={("corp-ad", "erp"): OwnerRef("eare", "operator")},
+        reviewer_assignments={("corp-ad", "erp"): OwnerRef("aurora", "operator")},
     )
-    assert items[0].reviewer == OwnerRef("eare", "operator")
+    assert items[0].reviewer == OwnerRef("aurora", "operator")
 
 
 def test_comparison_findings_and_scope() -> None:
@@ -356,7 +356,7 @@ def _access(name: str, owner: OwnerRef | None = None) -> Access:
 
 
 def _review_item():
-    from access_review_engine.domain import ReviewItem
+    from aurora.domain import ReviewItem
 
     return ReviewItem(
         campaign_id="c",

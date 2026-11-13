@@ -1,4 +1,4 @@
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -10,8 +10,8 @@ from access_review_engine.domain import (
     Permission,
     Provider,
 )
-from access_review_engine.services import calculate_effective_accesses, create_snapshot
-from access_review_engine.snapshot_composition import compose_snapshots, _resolve_composite_assignment
+from aurora.services import calculate_effective_accesses, create_snapshot
+from aurora.snapshot_composition import compose_snapshots, _resolve_composite_assignment
 
 
 def test_composition_derives_workspace_group_to_gcp_access_without_fake_assignment():
@@ -160,7 +160,7 @@ def test_composition_resolves_old_gcp_principal_after_workspace_import():
     )
     assert any(item.identifier == "cloud-admins@example.com" for item in workspace_snapshot.identities)
     assert gcp_snapshot.access_assignments[0].origin.raw["unresolved"] is True
-    from access_review_engine.snapshot_composition import _resolve_composite_assignment
+    from aurora.snapshot_composition import _resolve_composite_assignment
 
     resolved_probe = _resolve_composite_assignment(
         gcp_snapshot.access_assignments[0], workspace_snapshot.identities, workspace_snapshot.providers
@@ -207,7 +207,7 @@ def test_composition_prefers_workspace_identity_over_other_idps():
         "alice@example.com",
         Origin("policy", True, False, "projects/p", {"principal": "user:alice@example.com", "unresolved": True}),
     )
-    from access_review_engine.snapshot_composition import _resolve_composite_assignment
+    from aurora.snapshot_composition import _resolve_composite_assignment
 
     resolved = _resolve_composite_assignment(
         assignment, identities, [ad, workspace, gcp]
@@ -229,7 +229,7 @@ def test_composition_keeps_ambiguous_workspace_principal_unresolved():
         Identity("workspace-a", "alice@example.com", IdentityType.USER_ACCOUNT, "active"),
         Identity("workspace-b", "alice@example.com", IdentityType.USER_ACCOUNT, "active"),
     ]
-    from access_review_engine.snapshot_composition import _resolve_composite_assignment
+    from aurora.snapshot_composition import _resolve_composite_assignment
 
     resolved = _resolve_composite_assignment(
         assignment, identities, [workspace_a, workspace_b]

@@ -1,13 +1,13 @@
-# EARE Chatbot security model
+# Aurora Chatbot security model
 
 The authorization layer is the security boundary. The LLM is untrusted and cannot authorize
 itself, change tool policy, construct URLs, or perform business writes.
 
 ## Data access
 
-Availability is separate from EARE data authorization:
+Availability is separate from Aurora data authorization:
 
-1. `EARE_CHATBOT_ENABLED` is the deployment hard switch.
+1. `AURORA_CHATBOT_ENABLED` is the deployment hard switch.
 2. `system_settings.chatbot_enabled` is the ADMIN-controlled global switch.
 3. `system_users.chatbot_access_enabled` authorizes an individual user.
 4. OpenAI provider/model/key readiness is checked locally; an ADMIN can separately execute the
@@ -51,19 +51,19 @@ API keys, client secrets, passwords, token assignments and private-key PEM block
 before provider calls, traces, audits or frontend output.
 
 The provider registry rejects unsupported provider names instead of silently selecting OpenAI.
-OpenAI V1 uses only the Responses API, `store=false`, strict custom EARE tools, bounded output,
+OpenAI V1 uses only the Responses API, `store=false`, strict custom Aurora tools, bounded output,
 and in-memory replay of required opaque output/reasoning items. Reasoning state is not stored.
 
 ## Retention and limits
 
-Message and trace retention is controlled by `EARE_CHATBOT_TRACE_RETENTION_DAYS`; cleanup is
+Message and trace retention is controlled by `AURORA_CHATBOT_TRACE_RETENTION_DAYS`; cleanup is
 bounded and removes old orphan conversations while leaving `audit_events` untouched. Tool DTOs
 are count- and size-bounded. The assistant is read-only: approval, revocation, assignment,
 Golden mutation, collection, RBAC, deletion and connector writes are not exposed.
 
 Operational defaults are: 8,000 characters per message, 12 history messages, 24,000 context
 characters, 3 tool rounds, 6 tool calls, 100 result items, 800 output tokens and a 20-second
-provider timeout. These values can be tuned with the `EARE_CHATBOT_*` environment settings;
+provider timeout. These values can be tuned with the `AURORA_CHATBOT_*` environment settings;
 the hard security controls listed above remain enforced.
 
 ADMIN policy stored in `system_settings.chatbot_guardrails` can lower or raise the documented
@@ -74,7 +74,7 @@ selected knowledge publishers are enforced again on the server before the knowle
 
 Threats covered in V1:
 
-- direct and indirect prompt injection: user and imported EARE strings are untrusted data;
+- direct and indirect prompt injection: user and imported Aurora strings are untrusted data;
 - broken object authorization: campaign/provider scope is rechecked for every request/tool;
 - cross-user leakage: conversations are keyed by authenticated subject;
 - secret leakage: bearer tokens, key blocks and credential-like values are redacted;
@@ -101,7 +101,7 @@ Zero Data Retention guarantee.
 Browser
   |
   v
-EARE API -> authentication/current principal
+Aurora API -> authentication/current principal
           -> AssistantContext and authorization
           -> ToolBroker/read projections
           -> DTO allowlist and data firewall
@@ -110,7 +110,7 @@ EARE API -> authentication/current principal
 
 Imported provider strings and user text remain untrusted data at every stage. Security
 events contain metadata and safe references only. Conversation content can be disabled with
-`EARE_CHATBOT_STORE_MESSAGE_CONTENT=false`; in that mode raw message and trace content is
+`AURORA_CHATBOT_STORE_MESSAGE_CONTENT=false`; in that mode raw message and trace content is
 not persisted, while security metadata remains available for audit.
 
 Product evaluation does not treat provider wording as an authorization or correctness

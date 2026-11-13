@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-container=${KEYCLOAK_CONTAINER:-eare-keycloak}
-realm=${KEYCLOAK_REALM:-eare-crashtest}
+container=${KEYCLOAK_CONTAINER:-aurora-keycloak}
+realm=${KEYCLOAK_REALM:-aurora-crashtest}
 admin_password=${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is required}
-collector_secret=${EARE_KEYCLOAK_CLIENT_SECRET:?EARE_KEYCLOAK_CLIENT_SECRET is required}
-ldap_password=${EARE_LDAP_PASSWORD:?EARE_LDAP_PASSWORD is required}
+collector_secret=${AURORA_KEYCLOAK_CLIENT_SECRET:?AURORA_KEYCLOAK_CLIENT_SECRET is required}
+ldap_password=${AURORA_LDAP_PASSWORD:?AURORA_LDAP_PASSWORD is required}
 
 kc() {
   docker exec "$container" /opt/keycloak/bin/kcadm.sh "$@"
@@ -31,8 +31,8 @@ if ! kc get components -r "$realm" -q name=ldap --fields id --format csv --noquo
     /opt/keycloak/bin/kcadm.sh create components -r "$1" \
       -s name=ldap -s providerId=ldap -s providerType=org.keycloak.storage.UserStorageProvider \
       -s '\''config.connectionUrl=["ldap://openldap:389"]'\'' \
-      -s '\''config.usersDn=["ou=people,dc=eare,dc=test"]'\'' \
-      -s '\''config.bindDn=["cn=admin,dc=eare,dc=test"]'\'' \
+      -s '\''config.usersDn=["ou=people,dc=aurora,dc=test"]'\'' \
+      -s '\''config.bindDn=["cn=admin,dc=aurora,dc=test"]'\'' \
       -s "config.bindCredential=[\"$LDAP_BIND_PASSWORD\"]" \
       -s '\''config.usernameLDAPAttribute=["uid"]'\'' -s '\''config.rdnLDAPAttribute=["uid"]'\'' \
       -s '\''config.uuidLDAPAttribute=["entryUUID"]'\'' -s '\''config.userObjectClasses=["inetOrgPerson"]'\'' \
@@ -47,7 +47,7 @@ if ! kc get components -r "$realm" -q name=ldap-groups --fields id --format csv 
   kc create components -r "$realm" -s name=ldap-groups \
     -s "parentId=$component_id" -s providerId=group-ldap-mapper \
     -s providerType=org.keycloak.storage.ldap.mappers.LDAPStorageMapper \
-    -s 'config."groups.dn"=["ou=groups,dc=eare,dc=test"]' \
+    -s 'config."groups.dn"=["ou=groups,dc=aurora,dc=test"]' \
     -s 'config."group.name.ldap.attribute"=["cn"]' \
     -s 'config."group.object.classes"=["groupOfNames"]' \
     -s 'config."membership.ldap.attribute"=["member"]' \
@@ -84,9 +84,9 @@ echo "Seed stage: Authorization Services clients"
 kc update "clients/$crm" -r "$realm" -s authorizationServicesEnabled=false >/dev/null
 kc update "clients/$erp" -r "$realm" -s serviceAccountsEnabled=true >/dev/null
 kc update "clients/$erp" -r "$realm" -s authorizationServicesEnabled=true >/dev/null
-collector=$(client_id eare-collector)
+collector=$(client_id aurora-collector)
 if [[ -z "$collector" ]]; then
-  collector=$(kc create clients -r "$realm" -s clientId=eare-collector -s name=EARE -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true -s "secret=$collector_secret" -i)
+  collector=$(kc create clients -r "$realm" -s clientId=aurora-collector -s name=Aurora -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true -s "secret=$collector_secret" -i)
 fi
 backup=$(client_id svc-backup)
 if [[ -z "$backup" ]]; then
@@ -238,8 +238,8 @@ for role in \
   view-users query-users query-groups query-clients view-clients view-realm \
   manage-clients view-authorization; do
   [[ -n "$collector_user" ]] && kc add-roles -r "$realm" \
-    --uusername service-account-eare-collector --cclientid realm-management \
+    --uusername service-account-aurora-collector --cclientid realm-management \
     --rolename "$role" >/dev/null
 done
 
-echo "Keycloak realm $realm seeded with read-only LDAP federation and EARE clients."
+echo "Keycloak realm $realm seeded with read-only LDAP federation and Aurora clients."

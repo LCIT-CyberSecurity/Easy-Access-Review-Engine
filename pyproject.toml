@@ -1,5 +1,5 @@
 [project]
-name = "easy-access-review-engine"
+name = "aurora"
 version = "0.1.0"
 description = "Open source access review, comparison and recertification engine"
 readme = "README.md"
@@ -30,8 +30,7 @@ google = [
 ]
 
 [project.scripts]
-eare = "access_review_engine.cli.main:main"
-access-review = "access_review_engine.cli.main:main"
+aurora = "aurora.cli.main:main"
 
 [tool.ruff]
 line-length = 100
@@ -51,8 +50,8 @@ testpaths = ["tests"]
 pythonpath = ["src", "tests"]
 markers = [
   "live_google: opt-in tests requiring configured Google lab credentials",
-  "postgres: tests requiring EARE_TEST_POSTGRES_URL",
+  "postgres: tests requiring AURORA_TEST_POSTGRES_URL",
 ]
 
 [tool.coverage.run]
-source = ["src/access_review_engine"]
+source = ["src/aurora"]

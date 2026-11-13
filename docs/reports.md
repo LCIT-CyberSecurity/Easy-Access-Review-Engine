@@ -2,7 +2,7 @@
 
 Reports has two deliberately separate forms:
 
-1. the native EARE restitution workspace in the WebUI;
+1. the native Aurora restitution workspace in the WebUI;
 2. standalone HTML, PDF, CSV and JSON deliverables for download or external
    distribution.
 
@@ -60,6 +60,6 @@ Additional exports are:
 
 The HTML report can be opened separately in a new browser tab or distributed
 externally. It is not rendered through an iframe, object, embed, injected HTML,
-or generated-PDF preview inside the EARE Reports workspace.
+or generated-PDF preview inside the Aurora Reports workspace.
 
 Report output must never expose secrets. Dynamic values are escaped and CSV output neutralizes spreadsheet formulas.

@@ -1,4 +1,4 @@
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -9,7 +9,7 @@ from access_review_engine.domain import (
     canonical_target_key,
     target_semantically_equal,
 )
-from access_review_engine.services import calculate_effective_accesses
+from aurora.services import calculate_effective_accesses
 
 
 def test_ct_crm_038_same_generic_graph_calculates_ad_ldap_crm_aws_db_linux_and_cross_provider() -> (

@@ -41,8 +41,8 @@ Use a disposable lab domain and fictitious names only.
 3. Import the ZIP on the Python side:
 
    ```bash
-   access-review import lab-ad-export.zip
-   access-review findings-list
+   aurora provider import lab-ad-export.zip
+   aurora analyze
    ```
 
 4. Verify:

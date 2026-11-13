@@ -18,13 +18,13 @@ jobs:
       - name: Run guarded live tests
         env:
           GOOGLE_APPLICATION_CREDENTIALS_JSON: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
-          EARE_WORKSPACE_CUSTOMER_ID: ${{ vars.EARE_WORKSPACE_CUSTOMER_ID }}
-          EARE_WORKSPACE_DELEGATED_ADMIN: ${{ vars.EARE_WORKSPACE_DELEGATED_ADMIN }}
-          EARE_GCP_SCOPE: ${{ vars.EARE_GCP_SCOPE }}
+          AURORA_WORKSPACE_CUSTOMER_ID: ${{ vars.AURORA_WORKSPACE_CUSTOMER_ID }}
+          AURORA_WORKSPACE_DELEGATED_ADMIN: ${{ vars.AURORA_WORKSPACE_DELEGATED_ADMIN }}
+          AURORA_GCP_SCOPE: ${{ vars.AURORA_GCP_SCOPE }}
         run: |
           umask 077
-          credential_file="$RUNNER_TEMP/eare-google-service-account.json"
+          credential_file="$RUNNER_TEMP/aurora-google-service-account.json"
           printf '%s' "$GOOGLE_APPLICATION_CREDENTIALS_JSON" > "$credential_file"
-          export EARE_WORKSPACE_CREDENTIALS_FILE="$credential_file"
+          export AURORA_WORKSPACE_CREDENTIALS_FILE="$credential_file"
           export GOOGLE_APPLICATION_CREDENTIALS="$credential_file"
           pytest -q tests/test_google_live.py

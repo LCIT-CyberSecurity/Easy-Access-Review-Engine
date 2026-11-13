@@ -3,18 +3,18 @@ name: Google connector contracts
 on:
   push:
     paths:
-      - "src/access_review_engine/collectors/**"
-      - "src/access_review_engine/importers/**"
-      - "src/access_review_engine/google_artifacts.py"
-      - "src/access_review_engine/snapshot_composition.py"
+      - "src/aurora/collectors/**"
+      - "src/aurora/importers/**"
+      - "src/aurora/google_artifacts.py"
+      - "src/aurora/snapshot_composition.py"
       - "tests/test_google_*.py"
       - ".github/workflows/google-contract.yml"
   pull_request:
     paths:
-      - "src/access_review_engine/collectors/**"
-      - "src/access_review_engine/importers/**"
-      - "src/access_review_engine/google_artifacts.py"
-      - "src/access_review_engine/snapshot_composition.py"
+      - "src/aurora/collectors/**"
+      - "src/aurora/importers/**"
+      - "src/aurora/google_artifacts.py"
+      - "src/aurora/snapshot_composition.py"
       - "tests/test_google_*.py"
       - ".github/workflows/google-contract.yml"
 

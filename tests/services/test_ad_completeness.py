@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     ControlObject,
@@ -12,7 +12,7 @@ from access_review_engine.domain import (
     Origin,
     Permission,
 )
-from access_review_engine.services import create_golden_source, create_golden_version, create_snapshot
+from aurora.services import create_golden_source, create_golden_version, create_snapshot
 
 
 def test_unknown_collection_cannot_produce_missing() -> None:

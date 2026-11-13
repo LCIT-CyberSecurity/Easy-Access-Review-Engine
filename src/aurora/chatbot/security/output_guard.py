@@ -1,0 +1,29 @@
+from __future__ import annotations
+
+import re
+
+from aurora.chatbot.schemas import AssistantAction
+
+_DANGEROUS = re.compile(r"(?:javascript|data|file):|<\s*(?:script|iframe|object|img)\b", re.I)
+_SECRET = re.compile(r"(?:bearer\s+|-----BEGIN|api[_ -]?key\s*[:=])", re.I)
+
+
+def validate_answer(answer: str, max_chars: int) -> str:
+    if not isinstance(answer, str) or len(answer) > max_chars or _DANGEROUS.search(answer):
+        raise ValueError("Unsafe chatbot output")
+    if _SECRET.search(answer):
+        raise ValueError("Sensitive chatbot output")
+    return answer
+
+
+def validate_action(
+    action_id: str, label: str, allowed: set[str], route: str | None = None
+) -> AssistantAction:
+    if action_id not in allowed or _DANGEROUS.search(label):
+        raise ValueError("Unknown or unsafe chatbot action")
+    if route is not None and (
+        not route.startswith("/")
+        or any(token in route.casefold() for token in ("javascript:", "data:", "file:", "//"))
+    ):
+        raise ValueError("Unknown or unsafe chatbot route")
+    return AssistantAction(action_id, label[:120], route)

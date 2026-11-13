@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from access_review_engine.campaign_authorization import (
+from aurora.campaign_authorization import (
     CampaignScopeError,
     campaign_authorization_providers,
     campaign_required_providers,
     can_access_campaign,
     normalize_campaign_scope,
 )
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     Campaign,
@@ -20,8 +20,8 @@ from access_review_engine.domain import (
     Origin,
     Provider,
 )
-from access_review_engine.services import create_golden_source, create_golden_version, create_snapshot
-from access_review_engine.web_use_cases import prepare_campaign_review
+from aurora.services import create_golden_source, create_golden_version, create_snapshot
+from aurora.web_use_cases import prepare_campaign_review
 
 
 def test_campaign_scope_normalization_validates_access_business_keys() -> None:

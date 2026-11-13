@@ -1,8 +1,8 @@
 # Campaign authorization and review scope
 
-EARE keeps three separate boundaries:
+Aurora keeps three separate boundaries:
 
-- **Role**: what an EARE user can do.
+- **Role**: what an Aurora user can do.
 - **Authorized domains** (`system_users.scopes`): the providers where that role can act.
 - **Campaign review scope** (`Campaign.scope`): the expected/observed Access assignments selected for review.
 

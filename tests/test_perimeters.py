@@ -1,4 +1,4 @@
-from access_review_engine.perimeters import (
+from aurora.perimeters import (
     associate,
     create_perimeter,
     descendants,
@@ -8,7 +8,7 @@ from access_review_engine.perimeters import (
     update_perimeter,
     validate_selection,
 )
-from access_review_engine.storage import Repository
+from aurora.storage import Repository
 
 
 def test_perimeters_support_independent_trees_and_explicit_associations(tmp_path):

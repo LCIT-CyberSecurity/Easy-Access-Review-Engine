@@ -10,7 +10,7 @@ if str(CURRENT_DIR) not in sys.path:
 
 import pytest
 
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -30,8 +30,8 @@ from access_review_engine.domain import (
     Permission,
     Target,
 )
-from access_review_engine.reporting import write_reports
-from access_review_engine.services import (
+from aurora.reporting import write_reports
+from aurora.services import (
     calculate_effective_accesses,
     close_campaign,
     create_decision,
@@ -46,7 +46,7 @@ from access_review_engine.services import (
     reconcile_identities,
     remediation_from_decisions,
 )
-from access_review_engine.storage import (
+from aurora.storage import (
     Repository,
     hydrate_access,
     hydrate_access_relation,

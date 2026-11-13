@@ -1,20 +1,20 @@
-"""Reproducible product-assistant evaluations over authorized EARE projections."""
+"""Reproducible product-assistant evaluations over authorized Aurora projections."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
-from access_review_engine.chatbot.context import AuthorizationContext, UIHints
-from access_review_engine.chatbot.diagnostics import explain_finding, summarize_findings
-from access_review_engine.chatbot.scope import classify
-from access_review_engine.chatbot.tools.registry import (
+from aurora.chatbot.context import AuthorizationContext, UIHints
+from aurora.chatbot.diagnostics import explain_finding, summarize_findings
+from aurora.chatbot.scope import classify
+from aurora.chatbot.tools.registry import (
     campaign_findings,
     campaign_readiness,
     campaign_summary,
     source_status,
 )
-from access_review_engine.storage import Repository
+from aurora.storage import Repository
 
 
 @dataclass(frozen=True)
@@ -33,45 +33,45 @@ class AssistantEvaluation:
 EVALUATIONS = (
     AssistantEvaluation(
         "dashboard_summary", "ADMIN", frozenset({"*"}), "/",
-        "Résume mon dashboard.", "EARE_DASHBOARD", ("pending_reviews",),
+        "Résume mon dashboard.", "AURORA_DASHBOARD", ("pending_reviews",),
     ),
     AssistantEvaluation(
         "campaign_pending_reviews", "ADMIN", frozenset({"*"}), "/campaigns/q4",
-        "Pourquoi cette campagne n'est pas terminée ?", "EARE_CAMPAIGN",
+        "Pourquoi cette campagne n'est pas terminée ?", "AURORA_CAMPAIGN",
         ("pending_reviews", "missing_reviewers"),
         ("LDAP synchronization failure", "user changed department"),
         ("OPEN_CAMPAIGN",),
     ),
     AssistantEvaluation(
         "campaign_inaccessible", "OPERATOR", frozenset({"other-provider"}), "/campaigns/q4",
-        "Résume cette campagne.", "EARE_CAMPAIGN", ("available=false",),
+        "Résume cette campagne.", "AURORA_CAMPAIGN", ("available=false",),
     ),
     AssistantEvaluation(
         "campaign_readiness", "ADMIN", frozenset({"*"}), "/campaigns/draft",
-        "Puis-je lancer cette campagne ?", "EARE_CAMPAIGN",
+        "Puis-je lancer cette campagne ?", "AURORA_CAMPAIGN",
         ("ready", "blockers"),
     ),
     AssistantEvaluation(
         "golden_quality", "ADMIN", frozenset({"*"}), "/golden",
-        "Quels sont les problèmes dans ma Golden ?", "EARE_GOLDEN",
+        "Quels sont les problèmes dans ma Golden ?", "AURORA_GOLDEN",
         ("functional_model_not_defined",),
     ),
     AssistantEvaluation(
         "review_finding_cause_missing", "ADMIN", frozenset({"*"}), "/reviews",
-        "Pourquoi cet accès est-il unexpected ?", "EARE_REVIEW",
+        "Pourquoi cet accès est-il unexpected ?", "AURORA_REVIEW",
         ("snapshot", "Golden Source"), ("changed department", "HR cause"),
     ),
     AssistantEvaluation(
         "source_status", "OPERATOR", frozenset({"crm"}), "/sources",
-        "Le snapshot est-il exploitable ?", "EARE_SOURCE", ("snapshot",),
+        "Le snapshot est-il exploitable ?", "AURORA_SOURCE", ("snapshot",),
     ),
     AssistantEvaluation(
         "access_governance_guidance", "ADMIN", frozenset({"*"}), "/",
-        "Quelles bonnes pratiques pour les comptes techniques ?", "EARE_ACCESS_GUIDANCE",
+        "Quelles bonnes pratiques pour les comptes techniques ?", "AURORA_ACCESS_GUIDANCE",
     ),
     AssistantEvaluation(
         "perimeter_navigation", "ADMIN", frozenset({"*"}), "/dashboard",
-        "Où gérer les SI ?", "EARE_NAVIGATION", allowed_actions=("OPEN_PERIMETERS",),
+        "Où gérer les SI ?", "AURORA_NAVIGATION", allowed_actions=("OPEN_PERIMETERS",),
     ),
     AssistantEvaluation(
         "out_of_scope", "ADMIN", frozenset({"*"}), "/",
@@ -172,7 +172,7 @@ def test_source_projection_is_bounded_and_scope_filtered(evaluation_repo) -> Non
 
 
 def test_golden_quality_eval_reports_supported_gaps(evaluation_repo, monkeypatch) -> None:
-    import access_review_engine.chatbot.diagnostics as diagnostics
+    import aurora.chatbot.diagnostics as diagnostics
 
     evaluation_repo.upsert("golden_sources", {"id": "golden", "active_version_id": "version"})
     evaluation_repo.upsert("golden_source_versions", {

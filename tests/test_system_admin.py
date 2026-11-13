@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import pytest
-from access_review_engine.system_admin import authenticate_user, change_password, ensure_bootstrap_user, init_system, list_users, upsert_user, upsert_idp, list_idps
+from aurora.system_admin import authenticate_user, change_password, ensure_bootstrap_user, init_system, list_users, upsert_user, upsert_idp, list_idps
 
 def test_system_users_and_scopes():
     c=sqlite3.connect(':memory:'); c.row_factory=sqlite3.Row; init_system(c)
@@ -27,13 +27,13 @@ def test_default_bootstrap_creates_hashed_admin_with_required_password_change():
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     init_system(c)
-    old_username = os.environ.pop("EARE_ADMIN_USERNAME", None)
-    old_password = os.environ.pop("EARE_ADMIN_PASSWORD", None)
+    old_username = os.environ.pop("AURORA_ADMIN_USERNAME", None)
+    old_password = os.environ.pop("AURORA_ADMIN_PASSWORD", None)
     try:
         ensure_bootstrap_user(c)
     finally:
-        if old_username is not None: os.environ["EARE_ADMIN_USERNAME"] = old_username
-        if old_password is not None: os.environ["EARE_ADMIN_PASSWORD"] = old_password
+        if old_username is not None: os.environ["AURORA_ADMIN_USERNAME"] = old_username
+        if old_password is not None: os.environ["AURORA_ADMIN_PASSWORD"] = old_password
     first = authenticate_user(c, "admin", "SecretPassword")
     assert first["role"] == "ADMIN"
     assert first["must_change_password"] is True
@@ -45,17 +45,17 @@ def test_bootstrap_environment_overrides_and_normal_policy():
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     init_system(c)
-    old_username = os.environ.get("EARE_ADMIN_USERNAME")
-    old_password = os.environ.get("EARE_ADMIN_PASSWORD")
-    os.environ["EARE_ADMIN_USERNAME"] = "custom"
-    os.environ["EARE_ADMIN_PASSWORD"] = "custom-password-long-enough"
+    old_username = os.environ.get("AURORA_ADMIN_USERNAME")
+    old_password = os.environ.get("AURORA_ADMIN_PASSWORD")
+    os.environ["AURORA_ADMIN_USERNAME"] = "custom"
+    os.environ["AURORA_ADMIN_PASSWORD"] = "custom-password-long-enough"
     try:
         ensure_bootstrap_user(c)
     finally:
-        if old_username is None: os.environ.pop("EARE_ADMIN_USERNAME", None)
-        else: os.environ["EARE_ADMIN_USERNAME"] = old_username
-        if old_password is None: os.environ.pop("EARE_ADMIN_PASSWORD", None)
-        else: os.environ["EARE_ADMIN_PASSWORD"] = old_password
+        if old_username is None: os.environ.pop("AURORA_ADMIN_USERNAME", None)
+        else: os.environ["AURORA_ADMIN_USERNAME"] = old_username
+        if old_password is None: os.environ.pop("AURORA_ADMIN_PASSWORD", None)
+        else: os.environ["AURORA_ADMIN_PASSWORD"] = old_password
     assert authenticate_user(c, "custom", "custom-password-long-enough") is not None
     with pytest.raises(ValueError):
         upsert_user(c, {"username": "ordinary", "role": "OPERATOR", "password": "admin"})

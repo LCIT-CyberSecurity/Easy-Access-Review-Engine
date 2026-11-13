@@ -126,7 +126,7 @@ nothing in it mutates data. Arrow keys move, `Enter` opens, `Esc` closes.
 - Section headings are stored as words and shouted by CSS in the rail only.
 - Every rail entry has its own icon (reviews, campaigns and actions no longer
   share a check mark; users and audit trail no longer reuse other glyphs).
-- Page titles drop the `EARE` eyebrow: the breadcrumb already names the section.
+- Page titles drop the `Aurora` eyebrow: the breadcrumb already names the section.
 - Introductory prose is held to a 76-character measure on wide screens.
 - Empty states open on an accent glyph and lead with a primary action.
 - The rail uses the LCIT mark without its tagline (`lcit-mark.png`), which was
@@ -142,7 +142,7 @@ nothing in it mutates data. Arrow keys move, `Enter` opens, `Esc` closes.
 Type is one step larger everywhere (16px body; every size from 10px to 15px went
 up by 1px), table cells read at 15px with the first column in primary ink, and
 rows are taller (20×24px cells). The rail is 280px; its links grow from 44px to
-58px and the LCIT mark with "EARE / Access governance" leads it. Spacing is
+58px and the LCIT mark with "Aurora / Access governance" leads it. Spacing is
 looser: 36px under the page title, 32px after the introduction, 24px between
 toolbar, cards and panels. Gutters scale from 24px to 48px; the content column
 stops at 1840px.
@@ -192,11 +192,11 @@ as random 500s and sign-outs. Each worker thread now gets its own connection.
 ### Dedicated read-only collection accounts
 
 Each source records whether it collects through a dedicated, read-only service
-account (`collection.read_only_account`, a boolean, off by default). The EARE
+account (`collection.read_only_account`, a boolean, off by default). The Aurora
 Guide adds "Dedicated read-only account per source" to the admin setup
 checklist and recommends creating one for every source not yet confirmed,
 naming them in `sources_without_read_only_account`. It is an attestation by the
-administrator: EARE cannot inspect a directory account's rights itself.
+administrator: Aurora cannot inspect a directory account's rights itself.
 
 ### A guide that walks the user through each step
 
@@ -205,7 +205,7 @@ administrator: EARE cannot inspect a directory account's rights itself.
   scrolls to the element (`data-guide-target`) and rings it until it is used.
   A step can be a short walk: the read-only step rings the source's
   "Configure" button, then the setting inside the drawer (`GUIDE_FOCUS`).
-- The "EARE Guide" button carries a badge with what is left to do.
+- The "Aurora Guide" button carries a badge with what is left to do.
 - The guide re-reads its facts after every successful change, and a notice
   says when a setup step completes and which one comes next.
 
@@ -233,16 +233,16 @@ The preview stack is deliberately separate from the integration deployment on
 4173: its own compose project, container names, port and data volume.
 
 ```bash
-cp .env.example .env            # set EARE_SESSION_SECRET / EARE_ADMIN_PASSWORD
+cp .env.example .env            # set AURORA_SESSION_SECRET / AURORA_ADMIN_PASSWORD
 docker compose -f docker/compose.aurora.yaml up -d --build
 ```
 
 | | Integration (unchanged) | Aurora preview |
 | --- | --- | --- |
 | Port | 4173 | **4175** |
-| Containers | `eare-api`, `eare-webui` | `eare-aurora-api`, `eare-aurora-webui` |
-| Images | `eare-api:python312`, `eare-webui:nginx` | `eare-api:aurora`, `eare-webui:aurora` |
-| Volume | `eare-data` | `eare-aurora-data` |
+| Containers | `aurora-api`, `aurora-webui` | `aurora-aurora-api`, `aurora-aurora-webui` |
+| Images | `aurora-api:python312`, `aurora-webui:nginx` | `aurora-api:aurora`, `aurora-webui:aurora` |
+| Volume | `aurora-data` | `aurora-aurora-data` |
 
 To stop it without touching anything else:
 

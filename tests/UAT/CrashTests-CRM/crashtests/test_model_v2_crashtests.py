@@ -1,4 +1,4 @@
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -9,7 +9,7 @@ from access_review_engine.domain import (
     Origin,
     Target,
 )
-from access_review_engine.services import (
+from aurora.services import (
     calculate_effective_accesses,
     compare_functional_access_models,
 )

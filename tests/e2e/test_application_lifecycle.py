@@ -5,10 +5,10 @@ from io import StringIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from access_review_engine.application import import_file_to_repository
-from access_review_engine.domain import Campaign, DecisionValue, Finding, OwnerRef
-from access_review_engine.reporting import write_reports
-from access_review_engine.services import (
+from aurora.application import import_file_to_repository
+from aurora.domain import Campaign, DecisionValue, Finding, OwnerRef
+from aurora.reporting import write_reports
+from aurora.services import (
     close_campaign,
     create_decision,
     create_golden_source,
@@ -18,10 +18,10 @@ from access_review_engine.services import (
     promote_snapshot,
     remediation_from_decisions,
 )
-from access_review_engine.storage import Repository
+from aurora.storage import Repository
 
 
-def test_full_eare_application_lifecycle_from_import_to_report_and_golden(tmp_path: Path) -> None:
+def test_full_aurora_application_lifecycle_from_import_to_report_and_golden(tmp_path: Path) -> None:
     repo = Repository(tmp_path / "review.db")
     try:
         first_snapshot = import_file_to_repository(repo, _ad_lifecycle_zip(tmp_path, "n1", variant="baseline"))

@@ -1,6 +1,6 @@
 # CrashTests-CRM Coverage Matrix
 
-| EARE feature | CrashTest(s) | Coverage |
+| Aurora feature | CrashTest(s) | Coverage |
 |---|---:|---|
 | Provider | CT-CRM-001, CT-CRM-029 | Covered |
 | Identity | CT-CRM-001, CT-CRM-010, CT-CRM-011 | Covered |

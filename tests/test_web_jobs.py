@@ -1,6 +1,6 @@
 import time
 
-from access_review_engine.web_jobs import create_job, get_job
+from aurora.web_jobs import create_job, get_job
 
 
 def test_failed_job_keeps_its_provider_context(tmp_path):

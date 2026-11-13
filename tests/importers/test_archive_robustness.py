@@ -5,8 +5,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from access_review_engine.application import import_file_to_repository
-from access_review_engine.storage import Repository
+from aurora.application import import_file_to_repository
+from aurora.storage import Repository
 
 
 def test_rejected_ad_archives_do_not_write_partial_repository_state(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@ import os
 import sqlite3
 import subprocess
 
-from access_review_engine.directory_auth import (
+from aurora.directory_auth import (
     DirectoryError,
     authenticate,
     escape_filter,
@@ -12,7 +12,7 @@ from access_review_engine.directory_auth import (
     test_directory as check_directory,
     validate_directory,
 )
-from access_review_engine.system_admin import (
+from aurora.system_admin import (
     authenticate_user,
     enabled_admins,
     init_system,
@@ -122,19 +122,19 @@ def test_connection_check_reports_visible_accounts():
 def test_configuration_errors_are_explicit():
     assert "base DN" in message_of(DirectoryError, validate_directory, {**CONFIG, "settings": {}})
     assert "LDAP" in message_of(DirectoryError, validate_directory, {**CONFIG, "kind": "OIDC"})
-    assert "password variable" in message_of(DirectoryError, validate_directory, {**CONFIG, "settings": {**CONFIG["settings"], "bind_dn": "cn=svc", "bind_password_env": "EARE_MISSING_VARIABLE"}})
+    assert "password variable" in message_of(DirectoryError, validate_directory, {**CONFIG, "settings": {**CONFIG["settings"], "bind_dn": "cn=svc", "bind_password_env": "AURORA_MISSING_VARIABLE"}})
 
 
 def test_service_account_password_comes_from_the_environment():
-    os.environ["EARE_TEST_BIND_PASSWORD"] = "service-secret"
+    os.environ["AURORA_TEST_BIND_PASSWORD"] = "service-secret"
     try:
-        config = {**CONFIG, "settings": {**CONFIG["settings"], "bind_dn": "cn=svc,dc=example,dc=test", "bind_password_env": "EARE_TEST_BIND_PASSWORD"}}
+        config = {**CONFIG, "settings": {**CONFIG["settings"], "bind_dn": "cn=svc,dc=example,dc=test", "bind_password_env": "AURORA_TEST_BIND_PASSWORD"}}
         run, seen = runner({"search": (0, ENTRIES)})
         search_accounts(config, "", runner=run)
         assert seen[0]["password"] == "service-secret"
         assert "cn=svc,dc=example,dc=test" in seen[0]["command"]
     finally:
-        del os.environ["EARE_TEST_BIND_PASSWORD"]
+        del os.environ["AURORA_TEST_BIND_PASSWORD"]
 
 
 def test_directory_users_authenticate_through_their_directory_only():

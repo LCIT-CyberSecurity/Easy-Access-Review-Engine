@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -13,7 +13,7 @@ from access_review_engine.domain import (
     Permission,
     Target,
 )
-from access_review_engine.services import calculate_effective_accesses, effective_access_diff
+from aurora.services import calculate_effective_accesses, effective_access_diff
 
 
 def test_simple_access_relation_grants_child_access() -> None:

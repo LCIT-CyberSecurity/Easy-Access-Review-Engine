@@ -12,7 +12,7 @@ PROVIDER = "nexa-crm"
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_DIR = ROOT / "policy"
 ARTIFACTS_DIR = ROOT / "artifacts"
-CONTAINER = "eare-crashtests-crm"
+CONTAINER = "aurora-crashtests-crm"
 
 ROLE_GROUPS = {
     "CRM-Compta": "crm-compta",

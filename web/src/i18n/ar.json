@@ -66,7 +66,7 @@
     "recordDecision": "Record the right decision",
     "productBy": "A product by",
     "identityGovernance": "Identity & access governance",
-    "protectedWorkspace": "Protected access to the EARE workspace",
+    "protectedWorkspace": "Protected access to the Aurora workspace",
     "welcomeBack": "مرحباً بعودتك",
     "signInContinue": "سجّل الدخول لمتابعة مراجعات الوصول.",
     "username": "اسم المستخدم",
@@ -87,7 +87,7 @@
   },
   "roles": {
     "help": {
-      "admin": "يهيئ EARE ويدير المستخدمين ويمكنه تنفيذ جميع عمليات الحوكمة.",
+      "admin": "يهيئ Aurora ويدير المستخدمين ويمكنه تنفيذ جميع عمليات الحوكمة.",
       "operator": "يدير الحملات فقط عندما يكون كل موفر ونطاق تعرضه الحملة مصرحاً به.",
       "groupOwner": "يرى ويقرر فقط المراجعات المسندة إليه.",
       "businessAdmin": "يراجع إجراءات المعالجة ضمن النطاقات المصرح بها. لا يمكن لهذا الدور تسجيل الإنجاز التشغيلي.",
@@ -159,7 +159,7 @@
     "permission": "الصلاحية",
     "resource": "المورد",
     "description": "الوصف",
-    "manualValueHint": "تقترح القوائم قيماً معروفة مسبقاً لدى EARE. ويمكن استخدام قيمة يدوية بعد اعتمادها من جهة الأعمال."
+    "manualValueHint": "تقترح القوائم قيماً معروفة مسبقاً لدى Aurora. ويمكن استخدام قيمة يدوية بعد اعتمادها من جهة الأعمال."
   },
   "campaign": {
     "reviewer": "المراجع",
@@ -386,13 +386,13 @@
     "noCampaignOpen": "لا توجد حملة مفتوحة",
     "reportExplain": "يصف التقرير القرارات المتخذة في الحملة. ابدأ حملة أولاً.",
     "reportDisplayed": "يُعرض التقرير هنا كمستند كامل. استخدم خيارات التنزيل أعلاه لتوزيعه.",
-    "remediationReadonly": "هذه تعليمات للمسؤولين. لا يغيّر EARE أنظمة AD أو LDAP أو السحابة أو التطبيقات.",
+    "remediationReadonly": "هذه تعليمات للمسؤولين. لا يغيّر Aurora أنظمة AD أو LDAP أو السحابة أو التطبيقات.",
     "actionCount_one": "إجراء",
     "actionCount_other": "إجراءات"
   },
   "guide": {
     "loading": "جارٍ تحميل وضعك الحالي…",
-    "loadError": "تعذر تحميل دليل EARE.",
+    "loadError": "تعذر تحميل دليل Aurora.",
     "setupTitle": "الإعداد الأولي",
     "readinessTitle": "جاهزية الحملة",
     "scopeDefined": "النطاق محدد",
@@ -416,22 +416,22 @@
       "remediation": "يعني Exported أن الإجراء أُرسل للعمل التشغيلي؛ وفقط Completed يؤكد اكتمال التصحيح.",
       "reportMeaning": "تلخص التقارير القرارات والأدلة، بينما تصف خطة المعالجة المتابعة التشغيلية المطلوبة."
     },
-    "title": "دليل EARE",
-    "open": "فتح دليل EARE",
-    "close": "إغلاق دليل EARE",
+    "title": "دليل Aurora",
+    "open": "فتح دليل Aurora",
+    "close": "إغلاق دليل Aurora",
     "role": "دورك",
     "currentSituation": "الوضع الحالي",
     "next": "الإجراء التالي الموصى به",
     "why": "لماذا هذه الخطوة؟",
     "pageHelp": "حول هذه الصفحة",
     "otherSuggestions": "اقتراحات أخرى",
-    "readOnly": "إرشاد فقط: لا ينفذ دليل EARE أي إجراءات تجارية.",
+    "readOnly": "إرشاد فقط: لا ينفذ دليل Aurora أي إجراءات تجارية.",
     "disable": "تعطيل الدليل",
     "enable": "تفعيل الدليل",
-    "onboardingTitle": "مرحباً بك في EARE",
-    "onboardingIntro": "يوضح دليل EARE ما هو جاهز وما يجب فعله تالياً.",
+    "onboardingTitle": "مرحباً بك في Aurora",
+    "onboardingIntro": "يوضح دليل Aurora ما هو جاهز وما يجب فعله تالياً.",
     "startSetup": "بدء الإعداد الموجّه",
-    "explore": "استكشاف EARE بنفسي",
+    "explore": "استكشاف Aurora بنفسي",
     "skip": "تخطي المقدمة",
     "enabled": "مفعّل",
     "disabled": "معطّل",
@@ -440,7 +440,7 @@
     "setupShort": {
       "sources": "تم تهيئة المصدر",
       "initialCollection": "تم جمع Snapshot الأولي",
-      "users": "تم تهيئة مستخدمي EARE",
+      "users": "تم تهيئة مستخدمي Aurora",
       "operatorCoverage": "تغطية المشغلين",
       "expectedState": "تم تحديد الحالة المتوقعة",
       "readOnlyAccounts": "حسابات القراءة فقط"
@@ -448,7 +448,7 @@
     "setup": {
       "sources": "تهيئة مصدر جمع",
       "initialCollection": "جمع Snapshot الأولي",
-      "users": "تهيئة مستخدمي EARE",
+      "users": "تهيئة مستخدمي Aurora",
       "operatorCoverage": "إنشاء تغطية المشغلين",
       "operatorCoverageIncomplete": "بعض المزوّدين المهيئين غير مغطّين بمشغّل مفعّل.",
       "expectedState": "تحديد الحالة المتوقعة",
@@ -480,8 +480,8 @@
       },
       "configureSources": {
         "title": "Configure your first source",
-        "description": "No source is configured for EARE yet.",
-        "reason": "EARE needs an authorized source connection before it can collect access data."
+        "description": "No source is configured for Aurora yet.",
+        "reason": "Aurora needs an authorized source connection before it can collect access data."
       },
       "collectSnapshot": {
         "title": "Collect an initial Snapshot",
@@ -511,7 +511,7 @@
       "adminContinue": {
         "title": "Continue governance as Administrator",
         "description": "You can prepare a campaign with your administrator permissions.",
-        "reason": "EARE does not prevent an Administrator from operating a campaign."
+        "reason": "Aurora does not prevent an Administrator from operating a campaign."
       },
       "operatorSource": {
         "title": "Make a source available",
@@ -541,7 +541,7 @@
       "campaignBlocked": {
         "title": "Campaign scope needs attention",
         "description": "The active campaign is outside the currently authorized scope.",
-        "reason": "EARE does not expose campaign details or actions outside your authorized domains."
+        "reason": "Aurora does not expose campaign details or actions outside your authorized domains."
       },
       "assignedReviews": {
         "title": "Complete your assigned reviews",
@@ -551,17 +551,17 @@
       "noReviews": {
         "title": "No review currently requires your decision",
         "description": "Your assigned review queue is currently complete.",
-        "reason": "EARE shows only review items assigned to you."
+        "reason": "Aurora shows only review items assigned to you."
       },
       "remediation": {
         "title": "Process remediation actions",
         "description": "Remediation actions are waiting for operational follow-up.",
-        "reason": "EARE records the requested outcome but does not modify the source system."
+        "reason": "Aurora records the requested outcome but does not modify the source system."
       },
       "noActions": {
         "title": "No remediation action requires attention",
         "description": "There are no visible pending remediation actions.",
-        "reason": "EARE shows actions only for your authorized domains."
+        "reason": "Aurora shows actions only for your authorized domains."
       },
       "unresolvedReviewers": {
         "title": "Resolve reviewer issues",
@@ -575,18 +575,18 @@
       },
       "readOnlyAccounts": {
         "title": "استخدم حسابًا مخصصًا للقراءة فقط لكل مصدر",
-        "description": "أنشئ لـ EARE حساب خدمة لكل مصدر بصلاحيات قراءة فقط، ثم أكّده في إعدادات المصدر.",
-        "reason": "لا يحتاج EARE إلا إلى القراءة. الحساب القادر على تعديل الدليل، أو الحساب الشخصي، يضاعف أثر تسرب بيانات الاعتماد ويشوّش أثر التدقيق."
+        "description": "أنشئ لـ Aurora حساب خدمة لكل مصدر بصلاحيات قراءة فقط، ثم أكّده في إعدادات المصدر.",
+        "reason": "لا يحتاج Aurora إلا إلى القراءة. الحساب القادر على تعديل الدليل، أو الحساب الشخصي، يضاعف أثر تسرب بيانات الاعتماد ويشوّش أثر التدقيق."
       }
     },
     "page": {
       "overview": {
         "title": "Overview",
-        "description": "This page summarizes the current EARE state and work waiting for you."
+        "description": "This page summarizes the current Aurora state and work waiting for you."
       },
       "sources": {
         "title": "Sources and IdPs",
-        "description": "Sources provide the observed identities, accesses, and collection status used by EARE."
+        "description": "Sources provide the observed identities, accesses, and collection status used by Aurora."
       },
       "golden": {
         "title": "Golden Source",
@@ -602,7 +602,7 @@
       },
       "actions": {
         "title": "Actions",
-        "description": "Actions record operational remediation follow-up; EARE does not change source systems."
+        "description": "Actions record operational remediation follow-up; Aurora does not change source systems."
       },
       "reports": {
         "title": "Reports",

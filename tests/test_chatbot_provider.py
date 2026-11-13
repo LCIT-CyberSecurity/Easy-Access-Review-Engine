@@ -5,8 +5,8 @@ import json
 import urllib.error
 
 import pytest
-from access_review_engine.chatbot.config import ChatbotConfig
-from access_review_engine.chatbot.providers.openai import (
+from aurora.chatbot.config import ChatbotConfig
+from aurora.chatbot.providers.openai import (
     OpenAIProvider,
     ProviderError,
     _openai_tools,

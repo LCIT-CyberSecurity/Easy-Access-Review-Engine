@@ -1,4 +1,4 @@
-# EARE WebUI — UX / product audit
+# Aurora WebUI — UX / product audit
 
 Audited revision: `webui-improvement` @ `47c70d5`. Audit only: no code, domain model or API was changed.
 
@@ -107,7 +107,7 @@ Priorities: **P0** blocks/damages a normal workflow · **P1** professional MVP �
 
 - Health/last sync come from the latest global snapshot: after the `corp-ad` import, `nexa-crm` shows "never synced", 0 identities ✔.
 - Cards only exist for sources with a connector file; imported providers without one are invisible ✔.
-- The failed job error ("Anonymous OpenLDAP export requires ALLOW_ANONYMOUS=1" ✔) is not displayed; test connection only returns "Source connection test failed" (502 ✔); failed syncs are not audited ✔.
+- The failed job error ("Anonymous OpenLDAP export requires AURORA_ALLOW_ANONYMOUS=1" ✔) is not displayed; test connection only returns "Source connection test failed" (502 ✔); failed syncs are not audited ✔.
 - Job panel: static text, raw JSON result, infinite polling, cards not refreshed; test/save messages render behind the drawer overlay, success in error red. OPERATOR sees Configure but saving is ADMIN-only.
 
 ### 13. Audit trail is raw — P1 · UX GAP + API GAP · M · ✔
@@ -122,7 +122,7 @@ Priorities: **P0** blocks/damages a normal workflow · **P1** professional MVP �
 
 | Screen | Additional notes | Prio |
 |---|---|---|
-| Global shell | Static breadcrumb and "EARE" eyebrow on every page; always-green "API connected"; raw role; no self-service password change (API exists → UI GAP); icons reused (`Check` ×4); "My Actions" and "Actions" highlighted together (NavLink ignores `?view=my`) and render the same page | P1 |
+| Global shell | Static breadcrumb and "Aurora" eyebrow on every page; always-green "API connected"; raw role; no self-service password change (API exists → UI GAP); icons reused (`Check` ×4); "My Actions" and "Actions" highlighted together (NavLink ignores `?view=my`) and render the same page | P1 |
 | Overview | Metrics not clickable; `attention` always empty; `campaigns` and `latest_snapshot` returned but unused; counts capped at 500 rows. Recommended: Needs attention, open campaigns, source health, first-run checklist | P1 |
 | Golden Source | "Origin" hard-coded; no version history although provenance fields exist; diff mixes added/removed/unchanged; confirm without summary; CSV export API not exposed; developer copy ("Compare mutates nothing…") | P1 |
 | Campaigns list | No status filter, raw due date, scope values hidden, full page reload on "New campaign" | P2 |

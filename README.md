@@ -1,10 +1,10 @@
-# Easy Access Review Engine
+# Aurora
 
-**Easy Access Review Engine (EARE)** is an open source, universal access review system.
+**Aurora** is an open source, universal access review system.
 
 It helps IAM, SecOps, audit, and compliance teams turn technical access evidence into reliable, traceable, automated reviews.
 
-EARE helps you:
+Aurora helps you:
 
 - collect identities, groups, roles, entitlements, and access relationships;
 - work either from an existing export or from direct read-only access to the IDP through the provided collectors;
@@ -19,9 +19,9 @@ The goal is practical: save a lot of manual review time, improve reliability, re
 
 ## MCP Read-Only Reports
 
-EARE can expose authorized structured report data to compatible AI clients through a strictly read-only MCP endpoint. The MCP interface cannot modify EARE or connected systems and does not expose report files. It is disabled by default and uses separate per-user credentials: users generate their own key, while administrators only authorize or revoke access. Hosts and Origins are explicitly configurable; source import IDs and raw snapshot internals are not exposed. See [docs/mcp.md](docs/mcp.md).
+Aurora can expose authorized structured report data to compatible AI clients through a strictly read-only MCP endpoint. The MCP interface cannot modify Aurora or connected systems and does not expose report files. It is disabled by default and uses separate per-user credentials: users generate their own key, while administrators only authorize or revoke access. Hosts and Origins are explicitly configurable; source import IDs and raw snapshot internals are not exposed. See [docs/mcp.md](docs/mcp.md).
 
-## Why EARE?
+## Why Aurora?
 
 Access reviews are often slow, fragile, and tied to manual exports. The same questions keep coming back:
 
@@ -32,7 +32,7 @@ Why does this access exist?
 What should be approved, investigated, or removed?
 ```
 
-EARE provides a common engine for those questions, whether the source is Active Directory, OpenLDAP, a business application, an IAM platform, a SaaS tool, or a future connector.
+Aurora provides a common engine for those questions, whether the source is Active Directory, OpenLDAP, a business application, an IAM platform, a SaaS tool, or a future connector.
 
 The core is intentionally IDP-agnostic:
 
@@ -42,7 +42,7 @@ The core is intentionally IDP-agnostic:
 - an AccessAssignment represents direct assignment;
 - an AccessRelation represents groups, roles, and access composition.
 
-This makes EARE useful across environments instead of locking review logic to one directory or one vendor.
+This makes Aurora useful across environments instead of locking review logic to one directory or one vendor.
 
 ## Golden Source
 
@@ -61,7 +61,7 @@ It is:
 - comparable with observed snapshots;
 - resilient to reliable renames when the source provides a stable native identifier, such as an Active Directory SID or an OpenLDAP `entryUUID`.
 
-EARE can distinguish:
+Aurora can distinguish:
 
 - expected and observed access;
 - unexpected access;
@@ -70,7 +70,7 @@ EARE can distinguish:
 
 ## Automated Reporting
 
-EARE produces reports that can be shared directly with auditors, reviewers, and remediation teams:
+Aurora produces reports that can be shared directly with auditors, reviewers, and remediation teams:
 
 - standalone HTML report;
 - CSV export;
@@ -84,7 +84,7 @@ Reports preserve the full review trail: observation, comparison, reviewer, decis
 
 ## Flexible Collection
 
-EARE is designed to fit real operating constraints. You can use it in two complementary ways:
+Aurora is designed to fit real operating constraints. You can use it in two complementary ways:
 
 1. **Start from an existing extraction**
    - import an Active Directory ZIP;
@@ -98,47 +98,41 @@ EARE is designed to fit real operating constraints. You can use it in two comple
    - use the provided collectors as the acquisition layer that turns those read-only queries into importable artifacts;
    - keep collection accounts separate from remediation or administration accounts.
 
-This makes adoption easier: teams can begin with offline files, then move to repeatable read-only collection when they are ready. Collectors are read-only. EARE observes, compares, supports decisions, and exports remediation evidence. It does not provision accounts and does not modify directories.
+This makes adoption easier: teams can begin with offline files, then move to repeatable read-only collection when they are ready. Collectors are read-only. Aurora observes, compares, supports decisions, and exports remediation evidence. It does not provision accounts and does not modify directories.
 
 ## CLI
 
-The CLI is the user-facing orchestration layer for the EARE engine. It is there to make daily work faster: initialize connector configuration, run checks, collect evidence, import data, analyze results, manage the Golden Source, and export reports without manually wiring each step.
+The CLI is the user-facing orchestration layer for the Aurora engine. It is there to make daily work faster: initialize connector configuration, run checks, collect evidence, import data, analyze results, manage the Golden Source, and export reports without manually wiring each step.
 
 The installed CLI interface is:
 
 ```bash
-eare provider ...
-eare analyze ...
-eare golden ...
-eare campaign ...
-eare export ...
-```
-
-The legacy alias remains available:
-
-```bash
-access-review ...
+aurora provider ...
+aurora analyze ...
+aurora golden ...
+aurora campaign ...
+aurora export ...
 ```
 
 Main command groups:
 
 - `config` manages connector YAML files;
-- `check` diagnoses a connector without changing EARE state;
+- `check` diagnoses a connector without changing Aurora state;
 - `collect` runs a read-only collector and writes an artifact;
 - `sync` runs collection plus import;
 - `import` imports an existing extraction;
-- `analyze` analyzes local EARE state without contacting a provider;
+- `analyze` analyzes local Aurora state without contacting a provider;
 - `golden` manages the Golden Source;
 - `campaign` manages review campaigns;
 - `export` produces reports and remediation exports.
 
-`--dry-run` is for import and sync workflows. It runs the real engine against an isolated temporary database copy to explain what would change, while leaving the real EARE database untouched.
+`--dry-run` is for import and sync workflows. It runs the real engine against an isolated temporary database copy to explain what would change, while leaving the real Aurora database untouched.
 
 ## Interactive Menu
 
-Run eare without arguments in a terminal to open the human-friendly menu:
+Run aurora without arguments in a terminal to open the human-friendly menu:
 
-Easy Access Review Engine
+Aurora
 
 1. Providers
 2. Analyze
@@ -147,20 +141,20 @@ Easy Access Review Engine
 5. Exports
 6. Quit
 
-The menu calls the same command handlers as direct CLI usage. In CI, pipes, and other non-interactive contexts, eare without arguments prints help and exits instead of waiting for input.
+The menu calls the same command handlers as direct CLI usage. In CI, pipes, and other non-interactive contexts, aurora without arguments prints help and exits instead of waiting for input.
 
 Provider workflows use the canonical namespace:
 
-eare provider list
-eare provider init corp-ad --type active_directory
-eare provider setup
-eare provider check --all
-eare provider sync corp-ad
-eare provider sync corp-ad --dry-run
+aurora provider list
+aurora provider init corp-ad --type active_directory
+aurora provider setup
+aurora provider check --all
+aurora provider sync corp-ad
+aurora provider sync corp-ad --dry-run
 
 ## Quick Start
 
-The fastest useful path is: connect EARE to an IDP with a read-only account, run a remote synchronization, inspect findings, and optionally create a Golden Source baseline.
+The fastest useful path is: connect Aurora to an IDP with a read-only account, run a remote synchronization, inspect findings, and optionally create a Golden Source baseline.
 
 ### 1. Install the CLI
 
@@ -168,24 +162,24 @@ The fastest useful path is: connect EARE to an IDP with a read-only account, run
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e ".[app]"
-eare --help
+aurora --help
 ```
 
-By default EARE stores its local state in `access-review.db`. To use another database file, pass `--db` before the command.
+By default Aurora stores its local state in `aurora.db`. To use another database file, pass `--db` before the command.
 
-The application can also use PostgreSQL with the same EARE repository model. Install the app extra (which includes SQLAlchemy, Alembic and psycopg 3), then configure `EARE_DATABASE_URL`:
+The application can also use PostgreSQL with the same Aurora repository model. Install the app extra (which includes SQLAlchemy, Alembic and psycopg 3), then configure `AURORA_DATABASE_URL`:
 
 ```sh
-EARE_DATABASE_URL='postgresql+psycopg://eare:<password>@localhost:5432/eare' eare analyze
+AURORA_DATABASE_URL='postgresql+psycopg://aurora:<password>@localhost:5432/aurora' aurora analyze
 ```
 
-SQLite paths and URLs remain supported; `EARE_DB_PATH` remains available for compatibility. `EARE_DATABASE_URL` takes precedence when no explicit `--db` is supplied. The application creates missing repository tables idempotently; for controlled schema management, run `alembic upgrade head` with the same `EARE_DATABASE_URL` before starting EARE.
+SQLite paths and URLs remain supported; `AURORA_DB_PATH` sets a SQLite path when `AURORA_DATABASE_URL` is not used. `AURORA_DATABASE_URL` takes precedence when no explicit `--db` is supplied. The application creates missing repository tables idempotently; for controlled schema management, run `alembic upgrade head` with the same `AURORA_DATABASE_URL` before starting Aurora.
 
 For local PostgreSQL contract tests, start the test-only service and pass its URL:
 
 ```sh
 docker compose -f docker-compose.postgres-test.yml up -d --wait
-EARE_TEST_POSTGRES_URL='postgresql+psycopg://eare_test:eare_test_only@localhost:55432/eare_test' .venv/bin/pytest -q tests/test_storage_backend_parity.py
+AURORA_TEST_POSTGRES_URL='postgresql+psycopg://aurora_test:aurora_test_only@localhost:55432/aurora_test' .venv/bin/pytest -q tests/test_storage_backend_parity.py
 docker compose -f docker-compose.postgres-test.yml down
 ```
 
@@ -198,20 +192,20 @@ Use a dedicated read-only account. Do not reuse an admin or remediation account.
 Active Directory remote read-only example:
 
 ```bash
-eare provider init corp-ad --type active_directory
-eare provider set corp-ad connection.server dc01.corp.local
-eare provider check corp-ad
+aurora provider init corp-ad --type active_directory
+aurora provider set corp-ad connection.server dc01.corp.local
+aurora provider check corp-ad
 ```
 
 OpenLDAP remote read-only example:
 
 ```bash
-eare provider init ldap-prod --type openldap
-eare provider set ldap-prod connection.uri ldaps://ldap.example.com:636
-eare provider set ldap-prod connection.base_dn dc=example,dc=com
-eare provider set ldap-prod connection.bind_dn cn=eare-readonly,ou=service-accounts,dc=example,dc=com
-export LDAP_PASSWORD_FILE=/run/secrets/eare-ldap-readonly-password
-eare provider check ldap-prod
+aurora provider init ldap-prod --type openldap
+aurora provider set ldap-prod connection.uri ldaps://ldap.example.com:636
+aurora provider set ldap-prod connection.base_dn dc=example,dc=com
+aurora provider set ldap-prod connection.bind_dn cn=aurora-readonly,ou=service-accounts,dc=example,dc=com
+export AURORA_LDAP_PASSWORD_FILE=/run/secrets/aurora-ldap-readonly-password
+aurora provider check ldap-prod
 ```
 
 The password value stays outside the command line and outside the repository; only the secret file path is referenced. Secrets belong in environment variables, `.env`, or secret-mounted files, never in connector YAML, reports, or SQLite.
@@ -219,32 +213,32 @@ The password value stays outside the command line and outside the repository; on
 ### 3. Run the first remote sync
 
 ```bash
-eare provider sync corp-ad
+aurora provider sync corp-ad
 # or
-eare provider sync ldap-prod
+aurora provider sync ldap-prod
 ```
 
-`sync` performs the read-only collection, normalizes the result, imports it into EARE, and creates the review snapshot. The IDP is never modified.
+`sync` performs the read-only collection, normalizes the result, imports it into Aurora, and creates the review snapshot. The IDP is never modified.
 
-To preview the impact without changing the EARE database:
+To preview the impact without changing the Aurora database:
 
 ```bash
-eare provider sync corp-ad --dry-run
+aurora provider sync corp-ad --dry-run
 ```
 
 ### 4. Inspect results immediately
 
 ```bash
-eare analyze --provider corp-ad
-eare analyze --identity alice
-eare analyze --access Finance
+aurora analyze --provider corp-ad
+aurora analyze --identity alice
+aurora analyze --access Finance
 ```
 
 These commands help you move quickly from IDP evidence to reviewable results: identities, observed access, findings, and effective access paths.
 
 ### 5. Optional: create a Golden Source baseline
 
-A Golden Source is optional, but it is what turns EARE from inventory into expected-vs-observed review.
+A Golden Source is optional, but it is what turns Aurora from inventory into expected-vs-observed review.
 
 You can build it from:
 
@@ -265,18 +259,18 @@ run the next sync against that Golden Source
 Typical CLI flow:
 
 ```bash
-eare golden promote baseline --snapshot latest
-eare golden diff baseline
+aurora golden promote baseline --snapshot latest
+aurora golden diff baseline
 ```
 
-The Golden Source workflow is described in [Golden Source](docs/golden-source.md). If you start without a Golden Source, EARE still saves time by producing inventory, findings, effective access, and reports; comparison states become more powerful once the baseline exists.
+The Golden Source workflow is described in [Golden Source](docs/golden-source.md). If you start without a Golden Source, Aurora still saves time by producing inventory, findings, effective access, and reports; comparison states become more powerful once the baseline exists.
 
 ### 6. Export a report
 
 When a campaign exists, export the review evidence:
 
 ```bash
-eare export report --output reports/
+aurora export report --output reports/
 ```
 
 The generated HTML report is standalone and opens without a backend.
@@ -289,7 +283,7 @@ The generated HTML report is standalone and opens without a backend.
 - [Active Directory](docs/active-directory.md)
 - [OpenLDAP](docs/openldap.md)
 - [Reports](docs/reports.md)
-- [EARE Guide](docs/eare-guide.md)
+- [Aurora Guide](docs/aurora-guide.md)
 - [Current implementation specification](docs/specs/2026-09-25-current-implementation.md)
 - [Golden V2 specification](docs/specs/2026-09-21-model-evolution-golden-v2.md)
 
@@ -321,7 +315,7 @@ The OpenLDAP V1 connector uses `ldapsearch` through the provided shell exporter.
 
 ## Intentional Limits
 
-EARE does not claim to compute every effective permission for every technology.
+Aurora does not claim to compute every effective permission for every technology.
 
 The project does not modify directories and does not provision access. It observes, compares, supports review, preserves decisions, and exports remediation evidence.
 
@@ -342,10 +336,10 @@ That restraint is deliberate: it keeps the model reliable, auditable, and extens
 After decisions have been recorded, export review-driven remediation actions without changing the provider:
 
 `bash
-eare export revocations --output reports/revocations.csv
+aurora export revocations --output reports/revocations.csv
 `
 
-The export is generated through the existing remediation service. EARE never applies revocations directly to an IDP.
+The export is generated through the existing remediation service. Aurora never applies revocations directly to an IDP.
 
 
 ## Golden Source Creation
@@ -353,9 +347,9 @@ The export is generated through the existing remediation service. EARE never app
 A Golden Source can start empty for a from-scratch review or be created from a CSV reference file:
 
 `bash
-eare golden create baseline
-eare golden create baseline --csv expected-access.csv
-eare golden edit baseline --csv updated-access.csv
+aurora golden create baseline
+aurora golden create baseline --csv expected-access.csv
+aurora golden edit baseline --csv updated-access.csv
 `
 
 CSV files use the columns access_provider, access_name, identity_provider, and identity_identifier. Optional native identifier columns are supported for stable matching. Each CSV operation creates an immutable Golden Source version.

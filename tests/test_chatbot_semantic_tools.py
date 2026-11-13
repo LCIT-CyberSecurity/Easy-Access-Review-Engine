@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from access_review_engine.chatbot.config import ChatbotConfig
-from access_review_engine.chatbot.context import AuthorizationContext, UIHints
-from access_review_engine.chatbot.security.tool_policy import validate_tool_arguments
-from access_review_engine.chatbot.service import AssistantService, FakeLLMProvider
-from access_review_engine.chatbot.tools.semantic import (
+from aurora.chatbot.config import ChatbotConfig
+from aurora.chatbot.context import AuthorizationContext, UIHints
+from aurora.chatbot.security.tool_policy import validate_tool_arguments
+from aurora.chatbot.service import AssistantService, FakeLLMProvider
+from aurora.chatbot.tools.semantic import (
     SEMANTIC_TOOL_SCHEMAS,
     aggregate_authorized_data,
     get_authentication_posture_summary,
@@ -17,8 +17,8 @@ from access_review_engine.chatbot.tools.semantic import (
     search_authorized_remediations,
     search_authorized_reviews,
 )
-from access_review_engine.chatbot.tools.ui import get_ui_help
-from access_review_engine.storage import Repository
+from aurora.chatbot.tools.ui import get_ui_help
+from aurora.storage import Repository
 
 
 def _context(role: str, *scopes: str, username: str = "alice") -> AuthorizationContext:

@@ -1,4 +1,4 @@
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     Campaign,
@@ -10,9 +10,9 @@ from access_review_engine.domain import (
     Origin,
     Provider,
 )
-from access_review_engine.services import create_golden_source, create_golden_version, create_snapshot
-from access_review_engine.storage import Repository
-from access_review_engine.web_use_cases import prepare_campaign_review, snapshot_collection_scope
+from aurora.services import create_golden_source, create_golden_version, create_snapshot
+from aurora.storage import Repository
+from aurora.web_use_cases import prepare_campaign_review, snapshot_collection_scope
 
 
 def test_campaign_comparison_preserves_snapshot_provider_scope(tmp_path):

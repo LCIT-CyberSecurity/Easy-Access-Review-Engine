@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,

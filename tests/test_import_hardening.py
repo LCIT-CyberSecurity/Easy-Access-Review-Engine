@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from access_review_engine.application import _reconcile_accesses, persist_import_result
-from access_review_engine.domain import (
+from aurora.application import _reconcile_accesses, persist_import_result
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -22,13 +22,13 @@ from access_review_engine.domain import (
     ProviderType,
     Target,
 )
-from access_review_engine.importers.ad import ImportResult
-from access_review_engine.services import (
+from aurora.importers.ad import ImportResult
+from aurora.services import (
     create_golden_source,
     create_snapshot,
     promote_snapshot,
 )
-from access_review_engine.storage import Repository, hydrate_snapshot
+from aurora.storage import Repository, hydrate_snapshot
 
 
 def _provider() -> Provider:

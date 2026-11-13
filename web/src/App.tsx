@@ -404,7 +404,7 @@ export function BusinessContext({ context, manualStatus, includeOwner = true }: 
           return (
             <div key={field}>
               <strong>{label}</strong>
-              {manual ? <span>{manual}<small>Reference entered in EARE</small></span> : null}
+              {manual ? <span>{manual}<small>Reference entered in Aurora</small></span> : null}
               {source ? <span>{source}<small>{provenanceLabel(sourceEntry ?? {})}</small>{sourceEntry?.attribute ? <details><summary>Technical details</summary><small>Attribute: {s(sourceEntry.attribute)} · Mapping: {s(sourceEntry.mapping_mode)}</small></details> : null}</span> : null}
               {conflict ? <Status v="warning" /> : null}
             </div>
@@ -467,7 +467,7 @@ function App() {
   useTranslation();
   const q = useQuery({ queryKey: ["session"], queryFn: getSession, retry: false });
   return q.isLoading ? (
-    <div className="loading-page">{ui("common.loading")} EARE</div>
+    <div className="loading-page">{ui("common.loading")} Aurora</div>
   ) : q.isError ? (
     <Login />
   ) : q.data!.must_change_password ? (
@@ -485,7 +485,7 @@ function AuthFrame({ children }: { children: ReactNode }) {
         <aside className="auth-intro">
           <div className="auth-product">
             <span className="auth-product-icon"><ShieldCheck size={22} strokeWidth={1.8} /></span>
-            <span><strong>EARE</strong><small>Access Review Engine</small></span>
+            <span><strong>Aurora</strong><small>Access Review Engine</small></span>
           </div>
           <div className="auth-message">
             <span className="auth-eyebrow">{ui("auth.accessGovernance")}</span>
@@ -569,7 +569,7 @@ function PasswordChange() {
     </AuthFrame>
   );
 }
-const SIGNED_OUT_KEY = "eare.signed-out";
+const SIGNED_OUT_KEY = "aurora.signed-out";
 function markSignedOut() {
   try {
     window.sessionStorage.setItem(SIGNED_OUT_KEY, "1");
@@ -990,7 +990,7 @@ function Shell({ principal }: { principal: Principal }) {
         <div className="brand">
           <img className="brand-logo" src="/lcit-mark.png" alt="LCIT Cybersecurity" />
           <div>
-            <span>EARE</span>
+            <span>Aurora</span>
             <small>Access governance</small>
           </div>
         </div>
@@ -1086,7 +1086,7 @@ function Shell({ principal }: { principal: Principal }) {
       {guideOpen ? <GuideDrawer data={guidance.data} loading={guidance.isLoading} error={guidance.isError} retry={() => guidance.refetch()} principal={principal} enabled={guideEnabled} close={() => setGuideOpen(false)} setEnabled={setGuideEnabled} focus={(id) => setGuideFocus(GUIDE_FOCUS[id] ?? [])} /> : null}
       {guideEnabled && !onboardingSeen && guidance.data ? <GuideOnboarding data={guidance.data} principal={principal} close={() => setGuideOpen(true)} onSeen={() => setOnboardingSeen(true)} /> : null}
       {paletteOpen ? <CommandPalette role={principal.role} close={() => setPaletteOpen(false)} /> : null}
-      {assistantAvailable ? <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Ouvrir le Chatbot EARE">
+      {assistantAvailable ? <button className="chatbot-launcher" type="button" onClick={() => setAssistantOpen(true)} aria-label="Ouvrir le Chatbot Aurora">
         <Sparkles size={22} aria-hidden="true" /> <span>Chatbot</span>
       </button> : null}
       {assistantAvailable ? <AssistantDrawer route={location.pathname} role={principal.role} open={assistantOpen} close={() => setAssistantOpen(false)} /> : null}
@@ -1578,7 +1578,7 @@ function McpTokenPanel({ menuOpen }: { menuOpen: boolean }) {
 }
 
 function guideStorageKey(principal: Principal, suffix: string): string {
-  return `eare.guide.${suffix}.${principal.subject}`;
+  return `aurora.guide.${suffix}.${principal.subject}`;
 }
 export const guideChecklistLabelKey = (item: Row): string => `guide.setupShort.${s(item.id, "").replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())}`;
 export const guideTranslation = (key: unknown): string => {
@@ -2530,7 +2530,7 @@ function Perimeters({ principal }: { principal: Principal }) {
   const editor = editing ? <form className="panel perimeter-editor" onSubmit={(event) => { event.preventDefault(); save.mutate(editing); }}><strong>Edit {editing.kind === "organization" ? "organization" : "information system"}</strong><input value={s(editing.name)} onChange={(event) => setEditing({ ...editing, name: event.target.value })} aria-label="Perimeter name" required /><select value={s(editing.parent_id, "")} onChange={(event) => setEditing({ ...editing, parent_id: event.target.value || null })} aria-label="Perimeter parent"><option value="">Root</option>{(editing.kind === "organization" ? organizations : systems).filter((row) => row.id !== editing.id).map((row) => <option key={s(row.id)} value={s(row.id)}>{label(row)}</option>)}</select><button className="button primary" disabled={save.isPending}>Save</button><button type="button" className="button subtle" onClick={() => setEditing(null)}>Cancel</button></form> : null;
   return (
     <>
-      <Head title="Tags" subtitle="Classify and target EARE objects without changing access semantics." />
+      <Head title="Tags" subtitle="Classify and target Aurora objects without changing access semantics." />
       {editor}
       <div className="workspace-grid">
         <section className="panel">
@@ -2764,7 +2764,7 @@ function Accesses() {
       <PageGuide
         total={x.q.data?.total ?? 0}
         title="Say which access is expected"
-        text="These access rights were collected from your systems. Declare the ones that should exist in the Golden Source, and EARE reports everything else as unexpected."
+        text="These access rights were collected from your systems. Declare the ones that should exist in the Golden Source, and Aurora reports everything else as unexpected."
         actions={[{ label: "Open the Golden Source", to: "/golden", primary: true }, { label: "Connect another source", to: "/sources" }]}
       />
       </div>
@@ -3255,7 +3255,7 @@ export function ReviewDrawer({
         <h4>BUSINESS CONTEXT</h4>
         <BusinessContextWarning context={item.business_context} />
         <BusinessContext context={item.business_context} manualStatus={s(item.manual_context_capture_status)} />
-        <p className="muted">This information comes from the source or EARE reference. It helps review, but does not independently verify permissions in the target application.</p>
+        <p className="muted">This information comes from the source or Aurora reference. It helps review, but does not independently verify permissions in the target application.</p>
         {feedbackSent ? <p role="status">Context feedback submitted. This does not change your review decision.</p> : null}
         {(principal.role === "ADMIN" || principal.role === "OPERATOR" || (principal.role === "GROUP_OWNER" && s((item.reviewer as Row | undefined)?.identity, "") === principal.username)) && (!feedbackOpen ? <button className="button subtle" onClick={() => { setFeedbackOpen(true); setFeedbackSent(false); }}>Report incorrect or incomplete context</button> : <div className="drawer-form business-context-feedback">
           <strong>What needs review?</strong>
@@ -3566,7 +3566,7 @@ function ActionDrawer({ row, principal, close }: { row: Row; principal: Principa
       {s((row.details as Row | undefined)?.status_comment, "") ? <p className="muted"><strong>Administrator follow-up:</strong> {s((row.details as Row | undefined)?.status_comment)}</p> : null}
       </section>
       {principal.role !== "BUSINESS_ADMIN" ? <section className="drawer-section"><h4>UPDATE FOLLOW-UP</h4>
-      <label className="drawer-check"><input type="checkbox" checked={mitigated} onChange={(event) => setMitigated(event.target.checked)} /><span>Action mitigated / corrected</span><small>{mitigated ? "The administrator confirms the change was applied outside EARE." : "If the action is not mitigated, explain why in the comment below."}</small></label>
+      <label className="drawer-check"><input type="checkbox" checked={mitigated} onChange={(event) => setMitigated(event.target.checked)} /><span>Action mitigated / corrected</span><small>{mitigated ? "The administrator confirms the change was applied outside Aurora." : "If the action is not mitigated, explain why in the comment below."}</small></label>
       <label className="drawer-field">
         Administrator follow-up comment
         <textarea className="drawer-comment" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Describe what was changed, or why the action was not completed." />
@@ -3583,7 +3583,7 @@ function RemediationManager({ principal }: { principal: Principal }) {
       <Head title="Remediation follow-up" />
       <div className="panel page-intro">
         <h3>Operational remediation queue</h3>
-        <p className="muted">Administrators record what was done or not done. EARE only records the follow-up and never changes a source.</p>
+        <p className="muted">Administrators record what was done or not done. Aurora only records the follow-up and never changes a source.</p>
       </div>
       <List path="remediation-actions" title="Actions to follow up" principal={principal} />
     </>
@@ -5275,7 +5275,7 @@ export function Golden({ principal }: { principal: Principal }) {
       </p>
       {(principal.role === "ADMIN" || principal.role === "OPERATOR") && <section className="panel panel--quiet" aria-label="Business context issues">
         <h2>Business context issues <span className="muted">{s(feedbackQuery.data?.total, "0")} open</span></h2>
-        <p className="muted">Reviewer reports request verification; they do not change the Golden Source or a past decision. Source and EARE reference values are not independently verified target ACLs.</p>
+        <p className="muted">Reviewer reports request verification; they do not change the Golden Source or a past decision. Source and Aurora reference values are not independently verified target ACLs.</p>
         {feedbackQuery.isError ? <p role="alert">Unable to load context feedback.</p> : null}
         {arr(feedbackQuery.data?.items).map((feedback) => <BusinessFeedbackRow key={s(feedback.id)} feedback={feedback} pending={resolveFeedback.isPending} onReview={() => { setTab("accesses"); setSearch(s(feedback.access_name, "")); }} onResolve={(status) => resolveFeedback.mutate({ id: s(feedback.id), status })} />)}
         {Number(feedbackQuery.data?.total) > 20 ? <div className="button-row" aria-label="Feedback pages"><button className="button subtle" disabled={feedbackOffset === 0} onClick={() => setFeedbackOffset(Math.max(0, feedbackOffset - 20))}>Previous</button><span>{feedbackOffset + 1}–{Math.min(feedbackOffset + 20, Number(feedbackQuery.data?.total))} of {s(feedbackQuery.data?.total)}</span><button className="button subtle" disabled={feedbackOffset + 20 >= Number(feedbackQuery.data?.total)} onClick={() => setFeedbackOffset(feedbackOffset + 20)}>Next</button></div> : null}
@@ -5348,7 +5348,7 @@ export function Golden({ principal }: { principal: Principal }) {
           {createMode === "snapshot" && snapshots.length ? (
             <>
               <p>
-                Start from what the systems contain today: EARE reads the latest collected state and declares
+                Start from what the systems contain today: Aurora reads the latest collected state and declares
                 it expected. You can then correct it access by access.
               </p>
               <p className="muted">
@@ -6208,7 +6208,7 @@ function SourceBrowser() {
       <Head title={`Browse source · ${provider}`}>
         <NavLink className="button subtle" to="/sources"><ArrowLeft className="directional-icon" size={15} /> Sources</NavLink>
       </Head>
-      <p className="muted">Read-only, bounded inspection. EARE cannot create, edit, rename or delete directory objects here.</p>
+      <p className="muted">Read-only, bounded inspection. Aurora cannot create, edit, rename or delete directory objects here.</p>
       {treeEnabled ? (
         <section className="panel">
           <div className="panel-title">
@@ -6388,7 +6388,7 @@ function Sources({ principal }: { principal: Principal }) {
         {principal.role === "ADMIN" ? <button className="button primary" data-guide-target="add-source" onClick={() => edit()}>+ Add source</button> : null}
       </Head>
       <p>
-        Connect and monitor the identity and access systems EARE audits. Secrets remain referenced through
+        Connect and monitor the identity and access systems Aurora audits. Secrets remain referenced through
         environment variables and are never stored in the WebUI.
       </p>
       {!cfg.isLoading && !configs.length && principal.role === "ADMIN" && (
@@ -6524,7 +6524,7 @@ function Sources({ principal }: { principal: Principal }) {
               <>
                 <label>Customer ID<input required value={s((editing.connection as Row | undefined)?.customer_id, "")} onChange={(e) => updateNested("connection", "customer_id", e.target.value)} /></label>
                 <label>Delegated administrator<input required type="email" value={s((editing.connection as Row | undefined)?.delegated_admin, "")} onChange={(e) => updateNested("connection", "delegated_admin", e.target.value)} /></label>
-                <p className="field-note">The credential environment variable must point to a readable service-account file. Private key contents are never stored in EARE.</p>
+                <p className="field-note">The credential environment variable must point to a readable service-account file. Private key contents are never stored in Aurora.</p>
               </>
             ) : editing.type === "gcp_iam" ? (
               <>
@@ -6616,7 +6616,7 @@ function Sources({ principal }: { principal: Principal }) {
               />
               This source uses a dedicated, read-only service account
             </label>
-            <p className="field-note">EARE only reads identities and group memberships. Create one account for EARE in each directory, with read rights only: never a personal account, and never one that can change the directory.</p>
+            <p className="field-note">Aurora only reads identities and group memberships. Create one account for Aurora in each directory, with read rights only: never a personal account, and never one that can change the directory.</p>
             {supportsAttributeMapping ? <>
               <h4>BUSINESS MAPPING</h4>
               <p className="field-note">Technical identifiers and group membership remain connector-controlled. Suggestions are bounded; safe custom attribute names can also be typed and are validated when saved.</p>
@@ -6656,11 +6656,11 @@ function Sources({ principal }: { principal: Principal }) {
             </> : null}
             {editing.type === "google_workspace" || editing.type === "gcp_iam" ? <>
               <h4>GOOGLE CREDENTIAL REFERENCE</h4>
-              <label>Service-account file environment variable<input placeholder="EARE_WORKSPACE_CREDENTIALS_FILE" value={s((editing.credentials as Row | undefined)?.service_account_file_env, "")} onChange={(e) => updateNested("credentials", "service_account_file_env", e.target.value || undefined)} /></label>
+              <label>Service-account file environment variable<input placeholder="AURORA_WORKSPACE_CREDENTIALS_FILE" value={s((editing.credentials as Row | undefined)?.service_account_file_env, "")} onChange={(e) => updateNested("credentials", "service_account_file_env", e.target.value || undefined)} /></label>
               {editing.type === "gcp_iam" ? <label className="checkbox-label"><input type="checkbox" checked={(editing.credentials as Row | undefined)?.application_default !== false} onChange={(e) => updateNested("credentials", "application_default", e.target.checked)} />Use Application Default Credentials</label> : null}
             </> : editing.type === "keycloak" ? <>
               <h4>KEYCLOAK CREDENTIAL REFERENCE</h4>
-              <label>Client secret environment variable<input required placeholder="EARE_KEYCLOAK_CLIENT_SECRET" value={s((editing.credentials as Row | undefined)?.client_secret_env, "")} onChange={(e) => updateNested("credentials", "client_secret_env", e.target.value || undefined)} /></label>
+              <label>Client secret environment variable<input required placeholder="AURORA_KEYCLOAK_CLIENT_SECRET" value={s((editing.credentials as Row | undefined)?.client_secret_env, "")} onChange={(e) => updateNested("credentials", "client_secret_env", e.target.value || undefined)} /></label>
               <p className="field-note">Only the environment variable name is stored; the secret is never displayed or persisted.</p>
             </> : <>
             <h4>SECRET REFERENCES</h4>
@@ -6675,7 +6675,7 @@ function Sources({ principal }: { principal: Principal }) {
             <label>
               Password environment variable
               <input
-                placeholder="LDAP_PASSWORD"
+                placeholder="AURORA_LDAP_PASSWORD"
                 value={s((editing.credentials as Row | undefined)?.password_env, "")}
                 onChange={(e) => updateNested("credentials", "password_env", e.target.value || undefined)}
               />
@@ -6718,7 +6718,7 @@ function AuditTrail() {
   return (
     <>
       <Head title="Audit trail" />
-      <p className="muted">Immutable trace of sensitive EARE governance operations.</p>
+      <p className="muted">Immutable trace of sensitive Aurora governance operations.</p>
       <Table
         cols={["When", "Actor", "Event", "Object", "Details"]}
         q={q}
@@ -6854,7 +6854,7 @@ export function Reports() {
           <div>
             <span className="eyebrow">{uiLabel("Governance evidence")}</span>
             <h2>{s(campaign.display_name, s(campaign.name, "Campaign report"))}</h2>
-            <p className="muted">Native EARE restitution workspace · {s(campaign.pilot, "Pilot not recorded")}</p>
+            <p className="muted">Native Aurora restitution workspace · {s(campaign.pilot, "Pilot not recorded")}</p>
           </div>
         </div>
         <section className="panel report-profile"><div className="panel-title"><h3>Campaign profile</h3><Status v={s(campaign.status)} /></div><div className="report-facts"><span><b>Period</b>{campaign.opened_at ? when(campaign.opened_at) : "Not opened"} → {campaign.closed_at ? when(campaign.closed_at) : "Not closed"}</span><span><b>Scope</b>{readableDetails(campaign.scope)}</span><span><b>Snapshot</b>{s(campaign.snapshot_id)}</span><span><b>Golden baseline</b>{s(campaign.golden_source_version_id)}</span><span><b>Reviewer coverage</b>{reviewerCoverage(campaign.reviewer_resolution)}</span></div></section>
@@ -7025,10 +7025,10 @@ function McpDocumentation({ enabled, onToggle, pending = false }: { enabled: boo
   return (
     <section className="panel" aria-labelledby="mcp-title">
       <div className="section-heading">
-        <div><span className="eyebrow">MCP Server</span><h2 id="mcp-title">Read-only report access</h2><p className="muted">Expose authorized structured EARE reports to compatible AI clients. MCP does not modify EARE or connected systems.</p></div>
+        <div><span className="eyebrow">MCP Server</span><h2 id="mcp-title">Read-only report access</h2><p className="muted">Expose authorized structured Aurora reports to compatible AI clients. MCP does not modify Aurora or connected systems.</p></div>
         <strong>{enabled ? "Enabled" : "Disabled"}</strong>
       </div>
-      <p className="field-note">Endpoint: <code>/mcp</code>. Access is disabled by default and uses separate <code>eare_mcp_</code> credentials.</p>
+      <p className="field-note">Endpoint: <code>/mcp</code>. Access is disabled by default and uses separate <code>aurora_mcp_</code> credentials.</p>
       <button className="button subtle" type="button" onClick={() => onToggle?.(!enabled)} disabled={!onToggle || pending}>{enabled ? "Disable MCP server" : "Enable MCP server"}</button>
     </section>
   );
@@ -7060,7 +7060,7 @@ function ChatbotAdministration({ enabled, deploymentEnabled, provider, model, co
   return (
     <section className="panel" aria-labelledby="chatbot-admin-title">
       <div className="section-heading">
-        <div><span className="eyebrow">CHATBOT</span><h2 id="chatbot-admin-title">Chatbot</h2><p className="muted">Provide authorized users with the EARE Chatbot. The Chatbot remains limited to each user's existing EARE permissions.</p></div>
+        <div><span className="eyebrow">CHATBOT</span><h2 id="chatbot-admin-title">Chatbot</h2><p className="muted">Provide authorized users with the Aurora Chatbot. The Chatbot remains limited to each user's existing Aurora permissions.</p></div>
         <strong>{enabled ? "Enabled" : "Disabled"}</strong>
       </div>
       <p className="field-note">Provider: {provider || "—"} · Model: {model || "—"} · Configuration: {configured ? "Ready" : "Not configured"}</p>
@@ -7418,7 +7418,7 @@ function UsersPage() {
           title={`Reset the password of ${s(confirming.user.display_name, s(confirming.user.username))}?`}
           intro={
             <p className="muted">
-              Give them this password through a channel they trust. EARE asks them to choose a new one at
+              Give them this password through a channel they trust. Aurora asks them to choose a new one at
               their next sign-in.
             </p>
           }
@@ -7521,7 +7521,7 @@ function UsersPage() {
             {fromDirectory ? (
               <>
                 <p>
-                  Signs in with <strong>{source}</strong>. EARE stores no password for this account.
+                  Signs in with <strong>{source}</strong>. Aurora stores no password for this account.
                 </p>
                 <p className="muted">{s(form.external_id)}</p>
               </>
@@ -7553,7 +7553,7 @@ function UsersPage() {
             <p className="field-note">Allows this user to query authorized structured reports through MCP. MCP is read-only; disabling access revokes existing MCP keys.</p>
             <h4>CHATBOT</h4>
             <label className="check-row"><input type="checkbox" checked={Boolean(form.chatbot_access_enabled)} onChange={(e) => setForm({ ...form, chatbot_access_enabled: e.target.checked })} /> Chatbot access enabled for this user</label>
-            <p className="field-note">Allows this user to use the EARE Chatbot when the Chatbot is globally enabled. The Chatbot inherits the user's existing EARE role and authorized domains.</p>
+            <p className="field-note">Allows this user to use the Aurora Chatbot when the Chatbot is globally enabled. The Chatbot inherits the user's existing Aurora role and authorized domains.</p>
             <h4>STATUS</h4>
             {form.id ? (
               <div className="status-row">
@@ -7684,7 +7684,7 @@ function Auth() {
         </button>
       </Head>
       <p className="page-intro">
-        How people sign in to EARE. The directories EARE audits are configured in Sources &amp; IdPs.
+        How people sign in to Aurora. The directories Aurora audits are configured in Sources &amp; IdPs.
       </p>
       {notice && <p className={notice.tone === "ok" ? "form-success" : "form-error"}>{notice.text}</p>}
       <section className="panel auth-method">
@@ -7808,7 +7808,7 @@ function Auth() {
             <label>
               Password environment variable
               <input
-                placeholder="EARE_DIRECTORY_PASSWORD"
+                placeholder="AURORA_DIRECTORY_PASSWORD"
                 value={s(settings.bind_password_env, "")}
                 onChange={(e) => updateSettings("bind_password_env", e.target.value)}
               />

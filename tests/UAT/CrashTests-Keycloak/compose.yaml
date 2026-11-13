@@ -1,15 +1,15 @@
-name: eare-keycloak-crashtest
+name: aurora-keycloak-crashtest
 
 services:
   openldap:
     image: osixia/openldap:1.5.0
     environment:
-      LDAP_ORGANISATION: EARE
-      LDAP_DOMAIN: eare.test
-      LDAP_ADMIN_PASSWORD: ${EARE_LDAP_PASSWORD:?set in .env.runtime}
+      LDAP_ORGANISATION: Aurora
+      LDAP_DOMAIN: aurora.test
+      LDAP_ADMIN_PASSWORD: ${AURORA_LDAP_PASSWORD:?set in .env.runtime}
       LDAP_TLS: "false"
     healthcheck:
-      test: ["CMD-SHELL", "ldapsearch -x -H ldap://127.0.0.1:389 -D cn=admin,dc=eare,dc=test -w \"$$LDAP_ADMIN_PASSWORD\" -b dc=eare,dc=test -s base >/dev/null"]
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://127.0.0.1:389 -D cn=admin,dc=aurora,dc=test -w \"$$LDAP_ADMIN_PASSWORD\" -b dc=aurora,dc=test -s base >/dev/null"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -55,20 +55,20 @@ services:
       timeout: 3s
       retries: 30
 
-  eare-api:
+  aurora-api:
     build:
       context: ../../..
       dockerfile: docker/backend.Dockerfile
     environment:
-      EARE_DB_PATH: /data/access-review.db
-      EARE_SESSION_SECRET: ${EARE_SESSION_SECRET:?set in .env.runtime}
-      EARE_ADMIN_USERNAME: admin
-      EARE_ADMIN_PASSWORD: ${EARE_ADMIN_PASSWORD:?set in .env.runtime}
-      EARE_COOKIE_SECURE: "false"
+      AURORA_DB_PATH: /data/aurora.db
+      AURORA_SESSION_SECRET: ${AURORA_SESSION_SECRET:?set in .env.runtime}
+      AURORA_ADMIN_USERNAME: admin
+      AURORA_ADMIN_PASSWORD: ${AURORA_ADMIN_PASSWORD:?set in .env.runtime}
+      AURORA_COOKIE_SECURE: "false"
     env_file:
       - .env.runtime
     volumes:
-      - eare-data:/data
+      - aurora-data:/data
     depends_on:
       keycloak:
         condition: service_healthy
@@ -78,22 +78,22 @@ services:
       timeout: 3s
       retries: 20
 
-  eare-webui:
+  aurora-webui:
     build:
       context: ../../../web
       dockerfile: Dockerfile
     depends_on:
-      eare-api:
+      aurora-api:
         condition: service_healthy
     ports:
       - "192.168.1.5:4175:80"
 
 volumes:
   keycloak-db-data:
-    name: eare-keycloak-crashtest-keycloak-db
-  eare-data:
-    name: eare-keycloak-crashtest-eare-data
+    name: aurora-keycloak-crashtest-keycloak-db
+  aurora-data:
+    name: aurora-keycloak-crashtest-aurora-data
 
 networks:
   default:
-    name: eare-keycloak-crashtest_default
+    name: aurora-keycloak-crashtest_default

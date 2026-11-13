@@ -1,18 +1,18 @@
 # MCP read-only reports
 
-EARE MCP V1 exposes only structured report data already available through the
-authorized EARE reporting model. It is deliberately **report-only**, strictly
-read-only, and does not expose a generic EARE query interface.
+Aurora MCP V1 exposes only structured report data already available through the
+authorized Aurora reporting model. It is deliberately **report-only**, strictly
+read-only, and does not expose a generic Aurora query interface.
 
 ## Security model
 
 - The server is disabled by default (`mcp_enabled=false`).
 - Each user must separately have `mcp_access_enabled=true`.
-- MCP uses dedicated `eare_mcp_...` credentials; REST `eare_pat_...` keys and
+- MCP uses dedicated `aurora_mcp_...` credentials; REST `aurora_pat_...` keys and
   browser sessions are rejected.
 - Tokens are hashed, shown once, expire after 90 days, and a new token revokes
   the previous active token.
-- Role and provider-scope authorization is reloaded from EARE on every request.
+- Role and provider-scope authorization is reloaded from Aurora on every request.
 - Missing and unauthorized reports are intentionally indistinguishable.
 - Responses use explicit allowlists and never include raw metadata, origins,
   connector configuration, credentials, or secrets.
@@ -24,15 +24,15 @@ official Python MCP SDK Streamable HTTP transport with Host/Origin protections.
 Transport validation is configurable without disabling DNS-rebinding protection:
 
 ```text
-EARE_MCP_ALLOWED_HOSTS=127.0.0.1,127.0.0.1:*,localhost,localhost:*
-EARE_MCP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*
+AURORA_MCP_ALLOWED_HOSTS=127.0.0.1,127.0.0.1:*,localhost,localhost:*
+AURORA_MCP_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*
 ```
 
 For a remote HTTPS deployment, configure the public values explicitly, for example:
 
 ```text
-EARE_MCP_ALLOWED_HOSTS=eare.example.com
-EARE_MCP_ALLOWED_ORIGINS=https://eare.example.com
+AURORA_MCP_ALLOWED_HOSTS=aurora.example.com
+AURORA_MCP_ALLOWED_ORIGINS=https://aurora.example.com
 ```
 
 Requests are limited to 64 KiB because MCP V1 accepts only small structured parameters.
@@ -41,9 +41,9 @@ Requests are limited to 64 KiB because MCP V1 accepts only small structured para
 
 The only tools exposed are:
 
-`eare_get_current_user`, `eare_list_reports`, `eare_get_report_summary`,
-`eare_get_report_details`, `eare_get_report_findings`,
-`eare_get_report_decisions`, and `eare_get_report_remediation_summary`.
+`aurora_get_current_user`, `aurora_list_reports`, `aurora_get_report_summary`,
+`aurora_get_report_details`, `aurora_get_report_findings`,
+`aurora_get_report_decisions`, and `aurora_get_report_remediation_summary`.
 
 All collections use a default page size of 25 and a maximum of 100. MCP cannot
 list or fetch identities, accesses, snapshots, campaigns, Golden Sources, or

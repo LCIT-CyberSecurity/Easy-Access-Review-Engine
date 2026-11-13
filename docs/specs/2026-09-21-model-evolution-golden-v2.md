@@ -1,4 +1,4 @@
-# EARE Model Evolution — Golden Source V2
+# Aurora Model Evolution — Golden Source V2
 
 **Status:** normative design and implementation contract  
 **Date:** 2026-09-21  
@@ -6,14 +6,14 @@
 
 ## 1. Purpose and scope
 
-This specification additively evolves EARE's core into a provider-agnostic
+This specification additively evolves Aurora's core into a provider-agnostic
 access-review model that can represent directory, identity, SaaS, cloud,
 database, Linux, file, Kubernetes, and offline/custom access sources. It extends
 the current model; it does not replace its identity, access, assignment,
 relation, snapshot, or Golden contracts. Semantic stability, historical
 integrity, and conservative conclusions take priority over guessing.
 
-The core and generic services operate on canonical EARE concepts. They must not
+The core and generic services operate on canonical Aurora concepts. They must not
 branch on provider names, provider types, native permission spellings, SIDs,
 DNs, membership attributes, cloud actions, or other source-native constructs.
 Collectors, importers, source adapters, and explicit mapping layers translate
@@ -164,7 +164,7 @@ the other.
 Functional model completeness is independent from collection completeness and
 has exactly three values:
 
-- `NOT_DEFINED`: EARE does not know the Access's functional rights. It does not
+- `NOT_DEFINED`: Aurora does not know the Access's functional rights. It does not
   mean an empty set and generates no functional mismatch conclusion.
 - `PARTIAL`: listed rights are known, but not exhaustive. Listed rights can be
   checked; additional observed rights are `UNKNOWN / NOT_ASSERTED`, never
@@ -225,7 +225,7 @@ restrictions stay intact. Golden/Snapshot data must not contain secrets.
 
 ## 10. Positive grants and unsupported models
 
-EARE is provider-agnostic but is not a universal policy evaluation engine. The
+Aurora is provider-agnostic but is not a universal policy evaluation engine. The
 current graph evaluates positive `GRANTS` relationships well for groups,
 roles, nested access, and cross-provider graphs. It does not fully evaluate
 explicit DENY, ABAC, policy conditions, runtime context, AWS SCP/permission

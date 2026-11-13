@@ -1,8 +1,8 @@
-# EARE Engineering Design
+# Aurora Engineering Design
 
 ## 1. Purpose and design boundary
 
-Easy Access Review Engine (EARE) is an access review and recertification engine. It observes
+Aurora (Aurora) is an access review and recertification engine. It observes
 access assignments, compares them with an optional Golden Source, opens review campaigns, records
 decisions and produces evidence/remediation exports.
 
@@ -321,11 +321,11 @@ reviewer saw.
 The repository uses SQLAlchemy Core over SQLite or PostgreSQL, with canonical JSON `TEXT`
 payloads and the existing explicit tables for providers, identities, accesses, assignments,
 relations, imports, snapshots, Golden versions, campaigns, review items, decisions and
-remediation actions. `EARE_DATABASE_URL` selects the backend; a plain path and `EARE_DB_PATH`
+remediation actions. `AURORA_DATABASE_URL` selects the backend; a plain path and `AURORA_DB_PATH`
 remain compatible with existing SQLite installations. Alembic revision `0001_repository_schema`
 creates the repository schema; application initialization remains idempotent for development.
 
-Storage roadmap: V1 adds PostgreSQL support and backend parity without changing the EARE model;
+Storage roadmap: V1 adds PostgreSQL support and backend parity without changing the Aurora model;
 V2 covers copying existing SQLite data and production cutover; V3 may add PostgreSQL-specific
 optimizations only when justified. V1 does not convert data or use JSONB.
 

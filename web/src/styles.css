@@ -1,5 +1,5 @@
 /* ===========================================================================
-   EARE — Aurora design system
+   Aurora — Aurora design system
    ---------------------------------------------------------------------------
    One stylesheet, three layers, in this order:
 
@@ -2040,7 +2040,7 @@ p + .button-row { margin-top: 14px; }
 .access-drawer-holders-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .access-drawer-holders-summary p { margin: 5px 0 0; color: var(--text-secondary); font-size: 15.5px; }
 
-/* --- EARE Guide ---------------------------------------------------------- */
+/* --- Aurora Guide ---------------------------------------------------------- */
 
 .guide-trigger {
   display: inline-flex;

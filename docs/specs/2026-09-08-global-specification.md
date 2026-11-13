@@ -1,15 +1,15 @@
-# Easy Access Review Engine - Global Specification
+# Aurora - Global Specification
 
 **Date:** 2026-09-08  
 **Status:** Current implementation specification, aligned with branch `fix/ad-collector-hardening-v2`  
-**Repository:** `LCIT-CyberSecurity/Easy-Access-Review-Engine`  
+**Repository:** `LCIT-CyberSecurity/Easy-Access-Review-Engine`
 **Document scope:** Product behavior, implemented MVP boundaries, safety invariants, and future constraints.
 
 ---
 
 ## 1. Purpose
 
-Easy Access Review Engine (EARE) is an open source access review, comparison and recertification engine. It is designed to import observed access data from identity and directory systems, normalize that data into a provider-neutral model, compare it against an optional Golden Source, support access review campaigns, record decisions, and export evidence for audit and remediation.
+Aurora (Aurora) is an open source access review, comparison and recertification engine. It is designed to import observed access data from identity and directory systems, normalize that data into a provider-neutral model, compare it against an optional Golden Source, support access review campaigns, record decisions, and export evidence for audit and remediation.
 
 The project is intentionally not a full IAM or IGA platform. It does not own identities, authenticate users, provide SSO, manage passwords, replace directories, or directly provision and revoke access in source systems. Its core mission is narrower and safer:
 
@@ -63,7 +63,7 @@ Environment limitations from the last local validation:
 
 ## 3. Explicit Non-Goals
 
-EARE must not become a monolithic IAM platform. The following are outside the current core product scope:
+Aurora must not become a monolithic IAM platform. The following are outside the current core product scope:
 
 - SSO or identity provider functionality.
 - Password management.
@@ -170,7 +170,7 @@ The descriptors have deliberately narrow responsibilities:
   for opaque entitlements.
 - `Permission` identifies one provider-specific action and is optional. Examples include `read`,
   `write`, `SELECT`, `get`, `list` and `s3:GetObject`.
-- `Origin` and metadata preserve source context, conditions and native details without turning EARE
+- `Origin` and metadata preserve source context, conditions and native details without turning Aurora
   into a universal policy evaluator.
 
 Examples:
@@ -727,10 +727,10 @@ A broken or incomplete collection must produce uncertainty, not false compliance
 The CLI provides minimal administrative workflows. Current documented examples include:
 
 ```bash
-access-review import corp-ad-export.zip
-access-review findings-list
-access-review import directory.ldif --provider internal-ldap
-access-review campaign-export reports/
+aurora provider import corp-ad-export.zip
+aurora analyze
+aurora provider import directory.ldif --provider internal-ldap
+aurora export report --output reports/
 ```
 
 The API module exists as a thin interface layer. It is not yet a complete production API surface.

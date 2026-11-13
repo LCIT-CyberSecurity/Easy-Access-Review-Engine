@@ -8,9 +8,9 @@ import tempfile
 import time
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from access_review_engine.application import import_file_to_repository
-from access_review_engine.services import create_golden_source, promote_snapshot
-from access_review_engine.storage import Repository
+from aurora.application import import_file_to_repository
+from aurora.services import create_golden_source, promote_snapshot
+from aurora.storage import Repository
 
 
 def main() -> int:

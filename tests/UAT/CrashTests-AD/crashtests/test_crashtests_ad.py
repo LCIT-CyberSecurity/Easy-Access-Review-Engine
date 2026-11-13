@@ -26,8 +26,8 @@ def test_ct_ad_002_real_ad_environment_contract_is_available() -> None:
         pytest.skip(f"CrashTests-AD real lab unavailable: {reason}")
 
     payload = {
-        "host_configured": bool(os.environ.get("EARE_AD_UAT_HOST")),
-        "domain_configured": bool(os.environ.get("EARE_AD_UAT_DOMAIN")),
+        "host_configured": bool(os.environ.get("AURORA_AD_UAT_HOST")),
+        "domain_configured": bool(os.environ.get("AURORA_AD_UAT_DOMAIN")),
         "pwsh": shutil.which("pwsh"),
     }
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
@@ -58,10 +58,10 @@ def test_ct_ad_003_powershell_can_run_ad_probe_script() -> None:
 def _ad_environment_ready() -> tuple[bool, str]:
     if shutil.which("pwsh") is None:
         return False, "pwsh is not installed"
-    if not os.environ.get("EARE_AD_UAT_HOST"):
-        return False, "EARE_AD_UAT_HOST is not set"
-    if not os.environ.get("EARE_AD_UAT_DOMAIN"):
-        return False, "EARE_AD_UAT_DOMAIN is not set"
+    if not os.environ.get("AURORA_AD_UAT_HOST"):
+        return False, "AURORA_AD_UAT_HOST is not set"
+    if not os.environ.get("AURORA_AD_UAT_DOMAIN"):
+        return False, "AURORA_AD_UAT_DOMAIN is not set"
     return True, ""
 
 def test_ct_ad_004_uat_powershell_exporter_uses_existing_ad_archive_format() -> None:

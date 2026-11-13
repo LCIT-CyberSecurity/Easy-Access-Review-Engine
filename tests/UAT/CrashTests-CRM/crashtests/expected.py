@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from access_review_engine.domain import ComparisonState, Snapshot
+from aurora.domain import ComparisonState, Snapshot
 
 
 def state(snapshot: Snapshot, access_name: str, identity: str) -> dict[str, object]:

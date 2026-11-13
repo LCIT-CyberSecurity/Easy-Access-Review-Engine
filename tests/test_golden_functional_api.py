@@ -5,9 +5,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from access_review_engine.api import create_app
-from access_review_engine.storage import Repository
-from access_review_engine.system_admin import init_system, upsert_user
+from aurora.api import create_app
+from aurora.storage import Repository
+from aurora.system_admin import init_system, upsert_user
 
 
 def _client(db: Path, username: str, role: str) -> TestClient:

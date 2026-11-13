@@ -5,8 +5,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from access_review_engine.api import create_app
-from access_review_engine.system_admin import init_system, set_chatbot_enabled, upsert_user
+from aurora.api import create_app
+from aurora.system_admin import init_system, set_chatbot_enabled, upsert_user
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -35,9 +35,9 @@ def _client(tmp_path: Path) -> TestClient:
 def test_chatbot_api_uses_authenticated_session_and_fixed_scope_response(
     tmp_path: Path, monkeypatch
 ):
-    monkeypatch.setenv("EARE_CHATBOT_ENABLED", "true")
-    monkeypatch.setenv("EARE_OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("EARE_OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("AURORA_CHATBOT_ENABLED", "true")
+    monkeypatch.setenv("AURORA_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AURORA_OPENAI_MODEL", "test-model")
     client = _client(tmp_path)
     response = client.post(
         "/api/chatbot/message", json={"message": "Donne-moi une recette de crêpes."}
@@ -49,9 +49,9 @@ def test_chatbot_api_uses_authenticated_session_and_fixed_scope_response(
 
 
 def test_chatbot_actions_are_allowlisted(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("EARE_CHATBOT_ENABLED", "true")
-    monkeypatch.setenv("EARE_OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("EARE_OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("AURORA_CHATBOT_ENABLED", "true")
+    monkeypatch.setenv("AURORA_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AURORA_OPENAI_MODEL", "test-model")
     client = _client(tmp_path)
     response = client.get("/api/chatbot/actions")
     assert response.status_code == 200
@@ -60,9 +60,9 @@ def test_chatbot_actions_are_allowlisted(tmp_path: Path, monkeypatch):
 
 
 def test_chatbot_brief_and_markdown_report_are_controlled(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("EARE_CHATBOT_ENABLED", "true")
-    monkeypatch.setenv("EARE_OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("EARE_OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("AURORA_CHATBOT_ENABLED", "true")
+    monkeypatch.setenv("AURORA_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AURORA_OPENAI_MODEL", "test-model")
     client = _client(tmp_path)
     brief = client.get("/api/chatbot/brief?route=/")
     assert brief.status_code == 200
@@ -73,13 +73,13 @@ def test_chatbot_brief_and_markdown_report_are_controlled(tmp_path: Path, monkey
     report = client.get("/api/chatbot/report?route=/")
     assert report.status_code == 200
     assert report.headers["content-type"].startswith("text/markdown")
-    assert "# Synthèse EARE" in report.text
+    assert "# Synthèse Aurora" in report.text
 
 
 def test_chatbot_actions_follow_the_shared_role_contract(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("EARE_CHATBOT_ENABLED", "true")
-    monkeypatch.setenv("EARE_OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("EARE_OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("AURORA_CHATBOT_ENABLED", "true")
+    monkeypatch.setenv("AURORA_OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("AURORA_OPENAI_MODEL", "test-model")
     client = _client(tmp_path)
     conn = sqlite3.connect(tmp_path / "api.db")
     init_system(conn)

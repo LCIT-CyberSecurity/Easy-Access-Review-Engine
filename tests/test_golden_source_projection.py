@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from access_review_engine.domain import Access, ControlObject, PermissionCapabilityMapping
-from access_review_engine.golden_functional import _context_projection
-from access_review_engine.storage import Repository
+from aurora.domain import Access, ControlObject, PermissionCapabilityMapping
+from aurora.golden_functional import _context_projection
+from aurora.storage import Repository
 
 
 def test_source_mapping_becomes_reviewable_golden_suggestion_only(tmp_path: Path) -> None:
@@ -14,7 +14,7 @@ def test_source_mapping_becomes_reviewable_golden_suggestion_only(tmp_path: Path
         provider="AD-CORP",
         control_object=ControlObject("group", "GG-Finance"),
         metadata={
-            "eare_business_context": {
+            "aurora_business_context": {
                 "application": {
                     "value": "Sage",
                     "provenance": "source_attribute",

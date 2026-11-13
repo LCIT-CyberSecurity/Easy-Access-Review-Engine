@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 ARTIFACTS="${SCRIPT_DIR}/artifacts"
 COMPOSE_FILE="${SCRIPT_DIR}/compose.yaml"
-API_CONTAINER="${EARE_CRASHTESTS_API_CONTAINER:-eare-crashtests-api}"
-OPENLDAP_CONTAINER="${EARE_CRASHTESTS_OPENLDAP_CONTAINER:-eare-crashtests-crm-openldap}"
+API_CONTAINER="${AURORA_CRASHTESTS_API_CONTAINER:-aurora-crashtests-api}"
+OPENLDAP_CONTAINER="${AURORA_CRASHTESTS_OPENLDAP_CONTAINER:-aurora-crashtests-crm-openldap}"
 
 fail() {
   printf 'CrashTests-CRM run failed: %s\n' "$*" >&2
@@ -16,14 +16,14 @@ fail() {
 capture_diagnostics() {
   mkdir -p "${ARTIFACTS}"
   docker compose -f "${COMPOSE_FILE}" logs --no-color >"${ARTIFACTS}/docker.log" 2>&1 || true
-  docker inspect eare-crashtests-crm >"${ARTIFACTS}/container-inspect.json" 2>/dev/null || true
-  docker inspect eare-crashtests-webui >"${ARTIFACTS}/webui-container-inspect.json" 2>/dev/null || true
+  docker inspect aurora-crashtests-crm >"${ARTIFACTS}/container-inspect.json" 2>/dev/null || true
+  docker inspect aurora-crashtests-webui >"${ARTIFACTS}/webui-container-inspect.json" 2>/dev/null || true
   docker inspect "${API_CONTAINER}" >"${ARTIFACTS}/api-container-inspect.json" 2>/dev/null || true
   docker inspect "${OPENLDAP_CONTAINER}" >"${ARTIFACTS}/openldap-container-inspect.json" 2>/dev/null || true
-  docker exec eare-crashtests-crm getfacl -R /srv/crm >"${ARTIFACTS}/filesystem-acl.txt" 2>&1 || true
-  docker exec eare-crashtests-crm getent passwd >"${ARTIFACTS}/users.txt" 2>&1 || true
-  docker exec eare-crashtests-crm getent group >"${ARTIFACTS}/groups.txt" 2>&1 || true
-  docker exec eare-crashtests-crm sh -c 'for g in crm-compta crm-sales crm-logistics crm-support crm-admin; do printf "%s:" "$g"; getent group "$g" | cut -d: -f4; done' >"${ARTIFACTS}/role-memberships.txt" 2>&1 || true
+  docker exec aurora-crashtests-crm getfacl -R /srv/crm >"${ARTIFACTS}/filesystem-acl.txt" 2>&1 || true
+  docker exec aurora-crashtests-crm getent passwd >"${ARTIFACTS}/users.txt" 2>&1 || true
+  docker exec aurora-crashtests-crm getent group >"${ARTIFACTS}/groups.txt" 2>&1 || true
+  docker exec aurora-crashtests-crm sh -c 'for g in crm-compta crm-sales crm-logistics crm-support crm-admin; do printf "%s:" "$g"; getent group "$g" | cut -d: -f4; done' >"${ARTIFACTS}/role-memberships.txt" 2>&1 || true
 }
 
 main() {
@@ -33,7 +33,7 @@ main() {
   docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin is not available"
   mkdir -p "${ARTIFACTS}"
   docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate
-  state="$(docker inspect -f '{{.State.Status}}' eare-crashtests-crm 2>/dev/null || true)"
+  state="$(docker inspect -f '{{.State.Status}}' aurora-crashtests-crm 2>/dev/null || true)"
   docker exec "${API_CONTAINER}" mkdir -p /data/connectors
   docker cp "${SCRIPT_DIR}/config/connectors/crashtests-openldap.yaml" "${API_CONTAINER}:/data/connectors/crashtests-openldap.yaml"
   docker exec --user 0 "${API_CONTAINER}" chown 10001:10001 /data/connectors/crashtests-openldap.yaml
@@ -44,7 +44,7 @@ main() {
   }
   [[ "${state}" == "running" ]] || fail "container is not running; current state: ${state:-unknown}"
   for attempt in $(seq 1 60); do
-    if docker exec eare-crashtests-crm test -f /srv/crm/.ready >/dev/null 2>&1; then
+    if docker exec aurora-crashtests-crm test -f /srv/crm/.ready >/dev/null 2>&1; then
       break
     fi
     if [[ "${attempt}" == "60" ]]; then
@@ -54,7 +54,7 @@ main() {
     sleep 1
   done
   for attempt in $(seq 1 30); do
-    webui_health="$(docker inspect -f '{{.State.Health.Status}}' eare-crashtests-webui 2>/dev/null || true)"
+    webui_health="$(docker inspect -f '{{.State.Health.Status}}' aurora-crashtests-webui 2>/dev/null || true)"
     if [[ "${webui_health}" == "healthy" ]]; then
       break
     fi
@@ -68,10 +68,10 @@ main() {
   (
     cd "${REPO_ROOT}"
     pytest tests/UAT/CrashTests-CRM/crashtests -v --junitxml="${ARTIFACTS}/pytest.xml"
-  ) >"${ARTIFACTS}/eare.stdout.log" 2>"${ARTIFACTS}/eare.stderr.log" || {
+  ) >"${ARTIFACTS}/aurora.stdout.log" 2>"${ARTIFACTS}/aurora.stderr.log" || {
     printf 'CT-CRM suite failed. Relevant artifacts are in %s\n' "${ARTIFACTS}" >&2
-    tail -n 80 "${ARTIFACTS}/eare.stdout.log" >&2 || true
-    tail -n 80 "${ARTIFACTS}/eare.stderr.log" >&2 || true
+    tail -n 80 "${ARTIFACTS}/aurora.stdout.log" >&2 || true
+    tail -n 80 "${ARTIFACTS}/aurora.stderr.log" >&2 || true
     exit 1
   }
   printf '{"suite":"CrashTests-CRM","status":"passed","artifacts":"tests/UAT/CrashTests-CRM/artifacts"}\n' >"${ARTIFACTS}/summary.json"

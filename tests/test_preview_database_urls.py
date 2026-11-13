@@ -8,8 +8,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 import pytest
-from access_review_engine.storage import TABLES, Repository
-from access_review_engine.web_use_cases import preview_import
+from aurora.storage import TABLES, Repository
+from aurora.web_use_cases import preview_import
 
 OPENLDAP_FIXTURE = Path(__file__).parent / "UAT" / "CrashTests-OpenLDAP" / "fixture.ldif"
 
@@ -97,11 +97,11 @@ def test_preview_import_with_sqlite_url(tmp_path: Path) -> None:
 
 @pytest.fixture
 def postgres_source() -> Generator[str, None, None]:
-    base_url = os.environ.get("EARE_TEST_POSTGRES_URL")
+    base_url = os.environ.get("AURORA_TEST_POSTGRES_URL")
     if not base_url:
-        pytest.skip("Set EARE_TEST_POSTGRES_URL to run PostgreSQL preview tests")
+        pytest.skip("Set AURORA_TEST_POSTGRES_URL to run PostgreSQL preview tests")
     assert base_url is not None
-    schema = "eare_preview_test"
+    schema = "aurora_preview_test"
     admin_engine = create_engine(base_url, hide_parameters=True)
     try:
         with admin_engine.begin() as connection:

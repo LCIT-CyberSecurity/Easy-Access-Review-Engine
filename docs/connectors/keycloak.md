@@ -1,6 +1,6 @@
 # Keycloak V1 / V2 / V3 connector
 
-The connector is read-only and uses the Keycloak Admin REST API. One EARE
+The connector is read-only and uses the Keycloak Admin REST API. One Aurora
 provider is bound to exactly one realm; changing the realm for an existing
 provider is rejected as `KEYCLOAK_REALM_SCOPE_CHANGED`.
 
@@ -15,7 +15,7 @@ The collector requests users, groups and nested groups, memberships, clients,
 realm roles, client roles, user and group mappings, composite relations and
 service accounts. It emits the versioned Keycloak artifact consumed by the
 Keycloak normalizer. Direct mappings are observations (`AccessAssignment`); group and
-composite inheritance remains in `AccessRelation` and is calculated by EARE.
+composite inheritance remains in `AccessRelation` and is calculated by Aurora.
 
 ## Keycloak V1
 
@@ -34,12 +34,12 @@ Authorization Services not enabled is not an error. A client is recorded as
 enabled resource server cannot be read, the artifact records an explicit
 `error` state and remains scoped/non-authoritative for safe replay.
 
-EARE does not infer functional permissions from role names. A functional right
+Aurora does not infer functional permissions from role names. A functional right
 is derived only for a positive, single-role RBAC policy whose resource and
 scope references resolve unambiguously to existing Keycloak objects. Resource
 maps to the generic `Target`, a known system scope maps to an existing
 `Capability`, and the Keycloak scope remains in `native_permission`. Roles
-remain EARE `Access` objects; permissions and policies are not converted into
+remain Aurora `Access` objects; permissions and policies are not converted into
 Access objects.
 
 Complex or dynamic Keycloak policies are preserved as source evidence and are
@@ -61,18 +61,18 @@ OAuth token request.
 
 Unsupported: Organizations, fine-grained admin permissions as audited
 objects, automatic AD/LDAP identity reconciliation, provisioning, writes to
-Keycloak, and multiple realms in one EARE source.
+Keycloak, and multiple realms in one Aurora source.
 
 ## Keycloak Authorization Services V3
 
 V3 keeps the native Authorization Services evidence separate from its cautious
 interpretation. The path is:
 
-`Keycloak Admin REST → JSONL artifact → Keycloak importer → generic EARE Target / Capability / FunctionalRight → Golden / Campaign / Review`.
+`Keycloak Admin REST → JSONL artifact → Keycloak importer → generic Aurora Target / Capability / FunctionalRight → Golden / Campaign / Review`.
 
 Resources become generic `Target` nodes (`Keycloak` service, client/application
 component, native resource identifier). Scopes remain native actions and become
-system Capabilities only when an explicit EARE mapping exists; otherwise EARE
+system Capabilities only when an explicit Aurora mapping exists; otherwise Aurora
 creates a stable custom Capability whose human label is the native scope name.
 The scope ID is retained as `native_permission`. Roles remain `Access` objects
 and assignments remain `Identity → Access`.
@@ -88,7 +88,7 @@ The reviewer-facing model has three possible completeness states:
 
 Collection completeness and semantic completeness are separate. A `full`
 collection can legitimately produce a `partial` or `not_defined` functional
-model. During resolution EARE considers the Resource Server enforcement mode
+model. During resolution Aurora considers the Resource Server enforcement mode
 and decision strategies. A present Resource Server with an omitted
 `policyEnforcementMode` uses Keycloak's documented `ENFORCING` default; an
 absent Resource Server record is treated as unknown. `ENFORCING` is required
@@ -104,7 +104,7 @@ single-role RBAC permission with no unresolved policy combination.
 Keycloak's default decision strategy is `UNANIMOUS` for permissions and
 policies. Multi-policy, multi-role and aggregate policies remain evidence and
 are not flattened into a role right merely because one referenced role is
-known. EARE does not reproduce the Keycloak PDP: it does not evaluate runtime
+known. Aurora does not reproduce the Keycloak PDP: it does not evaluate runtime
 identity or resource context, JavaScript, dynamic attributes, external/custom
 policy providers, or other runtime conditions. Unknown future strategy values
 fail closed to `partial`/`not_defined`.
@@ -112,7 +112,7 @@ fail closed to `partial`/`not_defined`.
 A resource-based permission with no scope is retained as native evidence but
 does not invent a `read` (or any other) Capability. Multi-policy, multi-role
 and aggregate policies retain their referenced native role IDs and downgrade
-the affected Access when the relationship cannot be proven statically. EARE
+the affected Access when the relationship cannot be proven statically. Aurora
 does not execute the Keycloak PDP, runtime context rules or JavaScript policies.
 
 Role names, resource names and scope names are never used as authorization

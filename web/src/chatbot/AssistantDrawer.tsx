@@ -116,10 +116,10 @@ export function AssistantDrawer({ route, role = "ADMIN", open = true, close }: {
     }
   };
   return (
-    <aside className="chatbot-drawer" aria-label="Chatbot EARE" hidden={!open}>
-      <div className="chatbot-header"><strong>Chatbot EARE</strong><button className="text-button" type="button" aria-label="Fermer le Chatbot EARE" onClick={close}>×</button></div>
+    <aside className="chatbot-drawer" aria-label="Chatbot Aurora" hidden={!open}>
+      <div className="chatbot-header"><strong>Chatbot Aurora</strong><button className="text-button" type="button" aria-label="Fermer le Chatbot Aurora" onClick={close}>×</button></div>
       <div className="chatbot-messages">
-        {!messages.length ? <p className="muted">Je peux vous aider à utiliser EARE, analyser les informations auxquelles vous avez accès et répondre à vos questions sur le contrôle d'accès.</p> : null}
+        {!messages.length ? <p className="muted">Je peux vous aider à utiliser Aurora, analyser les informations auxquelles vous avez accès et répondre à vos questions sur le contrôle d'accès.</p> : null}
         {messages.map((item, index) => {
           if (item.role === "assistant" && item.action?.route.startsWith("/")) {
             return <button className="chatbot-action" key={`${item.role}-${index}`} onClick={() => { navigate(item.action!.route); close(); }}>{item.action.label}</button>;
@@ -143,7 +143,7 @@ export function AssistantDrawer({ route, role = "ADMIN", open = true, close }: {
         {assistantSuggestions(route, role).map((suggestion) => <button key={suggestion} onClick={() => void send(suggestion)}>{suggestion}</button>)}
       </div>
       <form className="chatbot-form" onSubmit={(event) => { event.preventDefault(); void send(); }}>
-        <input value={value} maxLength={8000} onChange={(event) => setValue(event.target.value)} placeholder="Posez une question au chatbot EARE…" aria-label="Question au chatbot" />
+        <input value={value} maxLength={8000} onChange={(event) => setValue(event.target.value)} placeholder="Posez une question au chatbot Aurora…" aria-label="Question au chatbot" />
         <button className="button primary" disabled={loading || !value.trim()}>Envoyer</button>
       </form>
     </aside>

@@ -1,16 +1,18 @@
+name: aurora
+
 services:
-  eare-api:
+  aurora-api:
     build:
       context: ..
       dockerfile: docker/backend.Dockerfile
-    image: eare-api:python312
-    container_name: eare-api
+    image: aurora-api:python312
+    container_name: aurora-app-api
     env_file:
       - ../.env
     environment:
-      EARE_DB_PATH: /data/access-review.db
+      AURORA_DB_PATH: /data/aurora.db
     volumes:
-      - eare-data:/data
+      - aurora-data:/data
     expose:
       - "8000"
     healthcheck:
@@ -21,17 +23,17 @@ services:
       retries: 6
     restart: unless-stopped
 
-  eare-webui:
+  aurora-webui:
     build:
       context: .
       dockerfile: Dockerfile
-    image: eare-webui:nginx
-    container_name: eare-webui
+    image: aurora-webui:nginx
+    container_name: aurora-app-webui
     depends_on:
-      eare-api:
+      aurora-api:
         condition: service_healthy
     ports:
-      - "0.0.0.0:4175:80"
+      - "127.0.0.1:4173:80"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
       interval: 10s
@@ -41,5 +43,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  eare-data:
-    name: eare-data
+  aurora-data:
+    name: aurora-data

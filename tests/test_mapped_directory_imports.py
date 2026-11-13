@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from access_review_engine.collector_runner import build_command
-from access_review_engine.importers.ad import import_ad_zip
-from access_review_engine.importers.openldap import import_openldap_ldif
-from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
+from aurora.collector_runner import build_command
+from aurora.importers.ad import import_ad_zip
+from aurora.importers.openldap import import_openldap_ldif
+from aurora.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
 
 
 def _mapping() -> dict[str, object]:
@@ -95,4 +95,4 @@ def test_collectors_request_configured_attributes_without_executable_interpolati
         **_mapping(),
     }
     _, environment = build_command(ldap, tmp_path / "ldap.zip", tmp_path)
-    assert environment["EXTRA_GROUP_ATTRIBUTES"] == "extensionAttribute5,extensionAttribute6,extensionAttribute7"
+    assert environment["AURORA_EXTRA_GROUP_ATTRIBUTES"] == "extensionAttribute5,extensionAttribute6,extensionAttribute7"

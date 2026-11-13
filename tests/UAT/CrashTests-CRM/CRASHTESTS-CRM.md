@@ -1,11 +1,11 @@
 # CrashTests-CRM
 
-`CrashTests-CRM` is a reproducible UAT lab for Easy Access Review Engine using a fictitious
+`CrashTests-CRM` is a reproducible UAT lab for Aurora using a fictitious
 NexaByte IT CRM scenario.
 
-The lab validates the generic EARE model:
+The lab validates the generic Aurora model:
 
-- source collection to generic EARE model to review;
+- source collection to generic Aurora model to review;
 - Provider, Identity, Access, ControlObject, Permission, Target, Origin;
 - direct and effective access;
 - AccessAssignment and AccessRelation;
@@ -43,7 +43,7 @@ Remote execution example:
 
 ```bash
 ssh vm-integrations \
-  'cd ~/Easy-Access-Review-Engine && tests/UAT/CrashTests-CRM/Run_CrashTests-CRM.sh'
+  'cd ~/Aurora && tests/UAT/CrashTests-CRM/Run_CrashTests-CRM.sh'
 ```
 
 ## Docker Lab
@@ -57,21 +57,21 @@ debian:13-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b625
 The container exposes no network port and uses `network_mode: none`. It does not mount the Docker
 socket, the host home directory, SSH keys, tokens, credentials or environment files.
 
-The Compose lab also builds and runs the EARE Web UI as `eare-crashtests-webui` from `web/Dockerfile`,
-backed by a lab-only API as `eare-crashtests-api` from `docker/backend.Dockerfile`. `web/nginx.conf`
-proxies `/api` to the fixed upstream name `eare-api`, so the API service carries that network alias;
-without it nginx refuses to start with `host not found in upstream "eare-api"`.
+The Compose lab also builds and runs the Aurora Web UI as `aurora-crashtests-webui` from `web/Dockerfile`,
+backed by a lab-only API as `aurora-crashtests-api` from `docker/backend.Dockerfile`. `web/nginx.conf`
+proxies `/api` to the fixed upstream name `aurora-api`, so the API service carries that network alias;
+without it nginx refuses to start with `host not found in upstream "aurora-api"`.
 
 The Web UI publishes port `4174` and uses an nginx healthcheck on `/healthz` to verify that the
 compiled UI starts and serves HTTP before the CRM assertions run. Port `4174` deliberately differs
 from the `4173` of the integration stack in `web/compose.yaml`, so both can run on the same host.
 
 The API bootstrap values are lab-only literals in the Compose file. The lab publishes no API port,
-recreates the `eare-crashtests-crm-api-data` volume content on every run and must never be pointed at
+recreates the `aurora-crashtests-crm-api-data` volume content on every run and must never be pointed at
 a real directory or a populated `.env`.
 
 The CRM filesystem is under `/srv/crm` inside the container and is backed by the dedicated Docker
-volume `eare-crashtests-crm-data`. Files are owned by `root:root` inside the container so access is
+volume `aurora-crashtests-crm-data`. Files are owned by `root:root` inside the container so access is
 governed by role groups and POSIX ACLs, not by file ownership of the fictitious users.
 
 Reset command:
@@ -135,8 +135,8 @@ Expected files include:
 
 - `summary.json`;
 - `pytest.xml`;
-- `eare.stdout.log`;
-- `eare.stderr.log`;
+- `aurora.stdout.log`;
+- `aurora.stderr.log`;
 - `docker.log`;
 - `container-inspect.json`;
 - `filesystem-acl.txt`;

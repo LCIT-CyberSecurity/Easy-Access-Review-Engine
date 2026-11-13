@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from access_review_engine.domain import (
+from aurora.domain import (
     SYSTEM_CAPABILITIES,
     Access,
     AccessAssignment,
@@ -24,7 +24,7 @@ from access_review_engine.domain import (
     target_path,
     target_semantically_equal,
 )
-from access_review_engine.services import (
+from aurora.services import (
     calculate_effective_accesses,
     compare_functional_access_models,
 )

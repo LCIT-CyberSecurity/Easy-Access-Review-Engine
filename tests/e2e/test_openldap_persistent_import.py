@@ -9,11 +9,11 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from access_review_engine.application import import_file_to_repository
-from access_review_engine.domain import Finding, GoldenSourceAssignment, IdentityStatus
-from access_review_engine.importers.openldap import DEFAULT_OPENLDAP_FILTER
-from access_review_engine.services import create_golden_source, create_golden_version, promote_snapshot
-from access_review_engine.storage import Repository
+from aurora.application import import_file_to_repository
+from aurora.domain import Finding, GoldenSourceAssignment, IdentityStatus
+from aurora.importers.openldap import DEFAULT_OPENLDAP_FILTER
+from aurora.services import create_golden_source, create_golden_version, promote_snapshot
+from aurora.storage import Repository
 
 
 def test_openldap_zip_routes_through_application_import(tmp_path: Path) -> None:
@@ -82,9 +82,9 @@ def test_openldap_exporter_default_filter_routes_as_authoritative(tmp_path: Path
     archive = tmp_path / "exporter.zip"
     env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "BASE_DN": "ou=Accounts,dc=example,dc=com",
-        "ALLOW_ANONYMOUS": "1",
-        "PROVIDER_NAME": "corp-ldap",
+        "AURORA_BASE_DN": "ou=Accounts,dc=example,dc=com",
+        "AURORA_ALLOW_ANONYMOUS": "1",
+        "AURORA_PROVIDER_NAME": "corp-ldap",
     }
     subprocess.run(
         ["bash", "exporters/openldap/export-openldap.sh", str(archive)],
@@ -752,10 +752,10 @@ def test_openldap_exporter_rejects_ldaps_with_starttls(tmp_path: Path) -> None:
     fake.chmod(0o755)
     env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "BASE_DN": "dc=example,dc=com",
-        "BIND_DN": "cn=admin,dc=example,dc=com",
-        "LDAP_URI": "ldaps://ldap.example.test",
-        "START_TLS": "1",
+        "AURORA_BASE_DN": "dc=example,dc=com",
+        "AURORA_BIND_DN": "cn=admin,dc=example,dc=com",
+        "AURORA_LDAP_URI": "ldaps://ldap.example.test",
+        "AURORA_START_TLS": "1",
     }
     result = subprocess.run(
         ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "bad.zip")],
@@ -766,7 +766,7 @@ def test_openldap_exporter_rejects_ldaps_with_starttls(tmp_path: Path) -> None:
         text=True,
     )
     assert result.returncode == 2
-    assert "cannot combine ldaps:// with START_TLS=1" in result.stderr
+    assert "cannot combine ldaps:// with AURORA_START_TLS=1" in result.stderr
 
 
 
@@ -854,7 +854,7 @@ def test_openldap_unknown_zero_assignments_surfaces_collection_incomplete_in_cli
     )
     env = os.environ | {"PYTHONPATH": "src"}
     subprocess.run(
-        [sys.executable, "-m", "access_review_engine.cli", "--db", str(db), "import", str(archive)],
+        [sys.executable, "-m", "aurora.cli", "--db", str(db), "import", str(archive)],
         cwd=Path.cwd(),
         env=env,
         check=True,
@@ -862,7 +862,7 @@ def test_openldap_unknown_zero_assignments_surfaces_collection_incomplete_in_cli
         text=True,
     )
     findings = subprocess.run(
-        [sys.executable, "-m", "access_review_engine.cli", "--db", str(db), "findings-list"],
+        [sys.executable, "-m", "aurora.cli", "--db", str(db), "findings-list"],
         cwd=Path.cwd(),
         env=env,
         check=True,
@@ -899,11 +899,11 @@ def test_openldap_exporter_command_modes_and_manifest(tmp_path: Path) -> None:
     log = tmp_path / "ldapsearch.args"
     fake = fake_bin / "ldapsearch"
     fake.write_text(
-        "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"$LDAPSEARCH_LOG\"\nprintf 'dn: uid=alice,ou=People,dc=example,dc=com\\nobjectClass: inetOrgPerson\\nentryUUID: uuid-u1\\nuid: alice\\ncn: Alice\\n'\n",
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > \"$AURORA_LDAPSEARCH_LOG\"\nprintf 'dn: uid=alice,ou=People,dc=example,dc=com\\nobjectClass: inetOrgPerson\\nentryUUID: uuid-u1\\nuid: alice\\ncn: Alice\\n'\n",
         encoding="utf-8",
     )
     fake.chmod(0o755)
-    env = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}", "LDAPSEARCH_LOG": str(log), "BASE_DN": "dc=example,dc=com", "ALLOW_ANONYMOUS": "1", "PROVIDER_NAME": "openldap-prod"}
+    env = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}", "AURORA_LDAPSEARCH_LOG": str(log), "AURORA_BASE_DN": "dc=example,dc=com", "AURORA_ALLOW_ANONYMOUS": "1", "AURORA_PROVIDER_NAME": "openldap-prod"}
     out = tmp_path / "export.zip"
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(out)], cwd=Path.cwd(), env=env, check=True)
     args = log.read_text(encoding="utf-8")
@@ -913,10 +913,10 @@ def test_openldap_exporter_command_modes_and_manifest(tmp_path: Path) -> None:
     assert "-D" not in args
 
     env = env | {
-        "BIND_DN": "cn=admin,dc=example,dc=com",
-        "LDAP_URI": "ldaps://ldap.example.test",
-        "ALLOW_ANONYMOUS": "0",
-        "LDAP_PASSWORD": "fake-secret",
+        "AURORA_BIND_DN": "cn=admin,dc=example,dc=com",
+        "AURORA_LDAP_URI": "ldaps://ldap.example.test",
+        "AURORA_ALLOW_ANONYMOUS": "0",
+        "AURORA_LDAP_PASSWORD": "fake-secret",
     }
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "ldaps.zip")], cwd=Path.cwd(), env=env, check=True)
     args = log.read_text(encoding="utf-8")
@@ -926,7 +926,7 @@ def test_openldap_exporter_command_modes_and_manifest(tmp_path: Path) -> None:
     assert "cn=admin,dc=example,dc=com" in args
     assert "fake-secret" not in args
 
-    env = env | {"LDAP_URI": "ldap://ldap.example.test", "START_TLS": "1"}
+    env = env | {"AURORA_LDAP_URI": "ldap://ldap.example.test", "AURORA_START_TLS": "1"}
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "starttls.zip")], cwd=Path.cwd(), env=env, check=True)
     assert "-ZZ" in log.read_text(encoding="utf-8")
 
@@ -947,17 +947,17 @@ def test_openldap_exporter_sets_strict_tls_verification_for_ldaps_and_starttls(t
     base_env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "LDAP_TLS_LOG": str(log),
-        "BASE_DN": "dc=example,dc=com",
-        "BIND_DN": "cn=admin,dc=example,dc=com",
-        "LDAP_PASSWORD": "fake-secret",
-        "ALLOW_ANONYMOUS": "0",
-        "LDAP_CA_CERT": str(tmp_path / "ca.pem"),
+        "AURORA_BASE_DN": "dc=example,dc=com",
+        "AURORA_BIND_DN": "cn=admin,dc=example,dc=com",
+        "AURORA_LDAP_PASSWORD": "fake-secret",
+        "AURORA_ALLOW_ANONYMOUS": "0",
+        "AURORA_LDAP_CA_CERT": str(tmp_path / "ca.pem"),
     }
 
     subprocess.run(
         ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "ldaps.zip")],
         cwd=Path.cwd(),
-        env=base_env | {"LDAP_URI": "ldaps://ldap.example.test"},
+        env=base_env | {"AURORA_LDAP_URI": "ldaps://ldap.example.test"},
         check=True,
     )
     ldaps_log = log.read_text(encoding="utf-8")
@@ -969,7 +969,7 @@ def test_openldap_exporter_sets_strict_tls_verification_for_ldaps_and_starttls(t
     subprocess.run(
         ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "starttls.zip")],
         cwd=Path.cwd(),
-        env=base_env | {"LDAP_URI": "ldap://ldap.example.test", "START_TLS": "1"},
+        env=base_env | {"AURORA_LDAP_URI": "ldap://ldap.example.test", "AURORA_START_TLS": "1"},
         check=True,
     )
     starttls_log = log.read_text(encoding="utf-8")
@@ -993,11 +993,11 @@ def test_openldap_exporter_tls_failures_are_unknown(tmp_path: Path) -> None:
         archive = tmp_path / f"tls-failure-{index}.zip"
         env = os.environ | {
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            "BASE_DN": "dc=example,dc=com",
-            "BIND_DN": "cn=admin,dc=example,dc=com",
-            "LDAP_URI": "ldaps://ldap.example.test",
-            "LDAP_PASSWORD": "fake-secret",
-            "ALLOW_PARTIAL": "1",
+            "AURORA_BASE_DN": "dc=example,dc=com",
+            "AURORA_BIND_DN": "cn=admin,dc=example,dc=com",
+            "AURORA_LDAP_URI": "ldaps://ldap.example.test",
+            "AURORA_LDAP_PASSWORD": "fake-secret",
+            "AURORA_ALLOW_PARTIAL": "1",
         }
         subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(archive)], cwd=Path.cwd(), env=env, check=True)
         with ZipFile(archive) as zf:
@@ -1013,7 +1013,7 @@ def test_openldap_exporter_fails_closed_and_partial_zip_has_unknown_manifest(tmp
     fake = fake_bin / "ldapsearch"
     fake.write_text("#!/usr/bin/env bash\necho 'Size limit exceeded' >&2\nexit 4\n", encoding="utf-8")
     fake.chmod(0o755)
-    env = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}", "BASE_DN": "dc=example,dc=com", "ALLOW_ANONYMOUS": "1"}
+    env = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}", "AURORA_BASE_DN": "dc=example,dc=com", "AURORA_ALLOW_ANONYMOUS": "1"}
     failed = subprocess.run(
         ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "fail.zip")],
         cwd=Path.cwd(),
@@ -1024,7 +1024,7 @@ def test_openldap_exporter_fails_closed_and_partial_zip_has_unknown_manifest(tmp
     )
     assert failed.returncode == 1
 
-    env = env | {"ALLOW_PARTIAL": "1"}
+    env = env | {"AURORA_ALLOW_PARTIAL": "1"}
     partial = tmp_path / "partial.zip"
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(partial)], cwd=Path.cwd(), env=env, check=True)
     with ZipFile(partial) as zf:
@@ -1037,7 +1037,7 @@ def test_openldap_exporter_fails_closed_and_partial_zip_has_unknown_manifest(tmp
 
 
 def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_path: Path) -> None:
-    sentinel = "EaRE*Test?[Secret]$ 93481\\ ' \""
+    sentinel = "Aurora*Test?[Secret]$ 93481\\ ' \""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake = fake_bin / "ldapsearch"
@@ -1050,7 +1050,7 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
         "secret=$(cat \"$LDAP_EXPECTED_SECRET_FILE\")\n"
         "printf '%s\n' \"$@\" > \"$LDAPSEARCH_ARGS_LOG\"\n"
         "env > \"$LDAPSEARCH_ENV_LOG\"\n"
-        "if [[ \"${LDAP_PASSWORD+x}\" == x ]]; then echo 'LDAP_PASSWORD leaked to ldapsearch environment' >&2; exit 77; fi\n"
+        "if [[ \"${AURORA_LDAP_PASSWORD+x}\" == x ]]; then echo 'AURORA_LDAP_PASSWORD leaked to ldapsearch environment' >&2; exit 77; fi\n"
         "if env | grep -Fq -- \"$secret\"; then echo 'secret leaked to ldapsearch environment' >&2; exit 77; fi\n"
         "if printf '%s\n' \"$@\" | grep -Fq -- \"$secret\"; then echo 'secret leaked to ldapsearch argv' >&2; exit 77; fi\n"
         "password_file=''\n"
@@ -1067,11 +1067,11 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
     env_secret = "'" + sentinel.replace("'", "'\\''") + "'"
     env_file = tmp_path / ".env"
     env_file.write_text(
-        f"LDAP_URI=ldaps://ldap.example.test\n"
-        f"BASE_DN=dc=example,dc=com\n"
-        f"BIND_DN=cn=admin,dc=example,dc=com\n"
-        f"LDAP_PASSWORD={env_secret}\n"
-        f"ALLOW_PARTIAL=1\n",
+        f"AURORA_LDAP_URI=ldaps://ldap.example.test\n"
+        f"AURORA_BASE_DN=dc=example,dc=com\n"
+        f"AURORA_BIND_DN=cn=admin,dc=example,dc=com\n"
+        f"AURORA_LDAP_PASSWORD={env_secret}\n"
+        f"AURORA_ALLOW_PARTIAL=1\n",
         encoding="utf-8",
     )
     archive = tmp_path / "redacted.zip"
@@ -1094,7 +1094,7 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
     assert sentinel not in args_log.read_text(encoding="utf-8")
     ldapsearch_env = env_log.read_text(encoding="utf-8")
     assert sentinel not in ldapsearch_env
-    assert "LDAP_PASSWORD=" not in ldapsearch_env
+    assert "AURORA_LDAP_PASSWORD=" not in ldapsearch_env
     with ZipFile(archive) as zf:
         names = zf.namelist()
         assert "manifest.yaml" in names
@@ -1112,7 +1112,7 @@ def test_openldap_exporter_uses_env_file_and_redacts_secret_from_artifacts(tmp_p
         repo.close()
 
 def test_openldap_exporter_rejects_secret_in_authoritative_payload_without_redacting_ldif(tmp_path: Path) -> None:
-    sentinel = "EaRE*Test?[Secret]$ 93481\\ ' \""
+    sentinel = "Aurora*Test?[Secret]$ 93481\\ ' \""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake = fake_bin / "ldapsearch"
@@ -1127,12 +1127,12 @@ def test_openldap_exporter_rejects_secret_in_authoritative_payload_without_redac
     archive = tmp_path / "rejected.zip"
     env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "BASE_DN": "dc=example,dc=com",
-        "BIND_DN": "cn=admin,dc=example,dc=com",
-        "LDAP_URI": "ldaps://ldap.example.test",
-        "LDAP_PASSWORD": sentinel,
+        "AURORA_BASE_DN": "dc=example,dc=com",
+        "AURORA_BIND_DN": "cn=admin,dc=example,dc=com",
+        "AURORA_LDAP_URI": "ldaps://ldap.example.test",
+        "AURORA_LDAP_PASSWORD": sentinel,
         "LDAP_EXPECTED_SECRET": sentinel,
-        "ALLOW_PARTIAL": "1",
+        "AURORA_ALLOW_PARTIAL": "1",
     }
     result = subprocess.run(
         ["bash", "exporters/openldap/export-openldap.sh", str(archive)],
@@ -1172,9 +1172,9 @@ def test_openldap_exporter_paged_search_keeps_all_entries_once(tmp_path: Path) -
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "LDAP_PAGE_LOG": str(page_log),
         "LDAP_PAGE_ARGS_LOG": str(args_log),
-        "BASE_DN": "dc=example,dc=com",
-        "ALLOW_ANONYMOUS": "1",
-        "PAGE_SIZE": "2",
+        "AURORA_BASE_DN": "dc=example,dc=com",
+        "AURORA_ALLOW_ANONYMOUS": "1",
+        "AURORA_PAGE_SIZE": "2",
     }
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(archive)], cwd=Path.cwd(), env=env, check=True)
     repo = Repository(tmp_path / "review.db")
@@ -1209,10 +1209,10 @@ def test_openldap_exporter_failed_page_is_unknown_and_not_full(tmp_path: Path) -
     archive = tmp_path / "paged-fail.zip"
     env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "BASE_DN": "dc=example,dc=com",
-        "ALLOW_ANONYMOUS": "1",
-        "ALLOW_PARTIAL": "1",
-        "PAGE_SIZE": "1",
+        "AURORA_BASE_DN": "dc=example,dc=com",
+        "AURORA_ALLOW_ANONYMOUS": "1",
+        "AURORA_ALLOW_PARTIAL": "1",
+        "AURORA_PAGE_SIZE": "1",
     }
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(archive)], cwd=Path.cwd(), env=env, check=True)
     with ZipFile(archive) as zf:
@@ -1231,10 +1231,10 @@ def test_openldap_exporter_timeout_partial_zip_is_unknown(tmp_path: Path) -> Non
     archive = tmp_path / "timeout.zip"
     env = os.environ | {
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "BASE_DN": "dc=example,dc=com",
-        "ALLOW_ANONYMOUS": "1",
-        "ALLOW_PARTIAL": "1",
-        "COMMAND_TIMEOUT_SECONDS": "1",
+        "AURORA_BASE_DN": "dc=example,dc=com",
+        "AURORA_ALLOW_ANONYMOUS": "1",
+        "AURORA_ALLOW_PARTIAL": "1",
+        "AURORA_COMMAND_TIMEOUT_SECONDS": "1",
     }
     subprocess.run(["bash", "exporters/openldap/export-openldap.sh", str(archive)], cwd=Path.cwd(), env=env, check=True)
     with ZipFile(archive) as zf:
@@ -1246,11 +1246,11 @@ def test_openldap_exporter_timeout_partial_zip_is_unknown(tmp_path: Path) -> Non
 def test_openldap_exporter_rejects_authenticated_cleartext_and_missing_password(tmp_path: Path) -> None:
     env = os.environ | {
         "ENV_FILE": str(tmp_path / "no-local-env"),
-        "LDAP_PASSWORD": "",
-        "LDAP_PASSWORD_FILE": "",
-        "BASE_DN": "dc=example,dc=com",
-        "BIND_DN": "cn=admin,dc=example,dc=com",
-        "LDAP_URI": "ldap://ldap.example.test",
+        "AURORA_LDAP_PASSWORD": "",
+        "AURORA_LDAP_PASSWORD_FILE": "",
+        "AURORA_BASE_DN": "dc=example,dc=com",
+        "AURORA_BIND_DN": "cn=admin,dc=example,dc=com",
+        "AURORA_LDAP_URI": "ldap://ldap.example.test",
     }
     cleartext = subprocess.run(
         ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "clear.zip")],
@@ -1261,18 +1261,18 @@ def test_openldap_exporter_rejects_authenticated_cleartext_and_missing_password(
         text=True,
     )
     assert cleartext.returncode == 2
-    assert "requires ldaps:// or START_TLS=1" in cleartext.stderr
+    assert "requires ldaps:// or AURORA_START_TLS=1" in cleartext.stderr
 
     missing_password = subprocess.run(
         ["bash", "exporters/openldap/export-openldap.sh", str(tmp_path / "missing-password.zip")],
         cwd=Path.cwd(),
-        env=env | {"LDAP_URI": "ldaps://ldap.example.test"},
+        env=env | {"AURORA_LDAP_URI": "ldaps://ldap.example.test"},
         check=False,
         capture_output=True,
         text=True,
     )
     assert missing_password.returncode == 2
-    assert "requires LDAP_PASSWORD or LDAP_PASSWORD_FILE" in missing_password.stderr
+    assert "requires AURORA_LDAP_PASSWORD or AURORA_LDAP_PASSWORD_FILE" in missing_password.stderr
 
 
 def _ids_by_native(repo: Repository, table: str) -> dict[str, str]:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -19,7 +19,7 @@ from access_review_engine.domain import (
     ProviderType,
     Target,
 )
-from access_review_engine.services import (
+from aurora.services import (
     calculate_effective_accesses,
     close_campaign,
     create_decision,

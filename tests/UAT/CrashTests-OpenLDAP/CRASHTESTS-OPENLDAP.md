@@ -1,6 +1,6 @@
 # CrashTests-OpenLDAP
 
-`CrashTests-OpenLDAP` validates EARE against a real OpenLDAP environment on the current Debian
+`CrashTests-OpenLDAP` validates Aurora against a real OpenLDAP environment on the current Debian
 stable family.
 
 Current target, verified on official Debian release information:
@@ -17,9 +17,9 @@ The suite is separate from `CrashTests-CRM`. It is intended to validate OpenLDAP
 - DN escaping and multi-valued RDNs;
 - scoped and unknown collections;
 - StartTLS/LDAPS behavior when configured by the environment;
-- OpenLDAP-specific archive routing into the generic EARE model.
+- OpenLDAP-specific archive routing into the generic Aurora model.
 
-The suite must still map collected data into generic EARE concepts: Provider, Identity, Access,
+The suite must still map collected data into generic Aurora concepts: Provider, Identity, Access,
 AccessAssignment, AccessRelation, Origin, Golden Source, snapshots and campaigns.
 
 ## Commands
@@ -42,7 +42,7 @@ Remote execution example:
 
 ```bash
 ssh vm-integrations \
-  'cd ~/Easy-Access-Review-Engine && tests/UAT/CrashTests-OpenLDAP/Run_CrashTests-OpenLDAP.sh'
+  'cd ~/Aurora && tests/UAT/CrashTests-OpenLDAP/Run_CrashTests-OpenLDAP.sh'
 ```
 
 ## Docker Target
@@ -64,4 +64,4 @@ tests/UAT/CrashTests-OpenLDAP/artifacts/
 ```
 
 Expected files include `pytest.xml`, `slapd-version.txt`, `ldapsearch-rootdse.ldif`,
-`export.zip`, `observed.json`, `snapshot.json`, `findings.json` and `eare.stdout.log`.
+`export.zip`, `observed.json`, `snapshot.json`, `findings.json` and `aurora.stdout.log`.

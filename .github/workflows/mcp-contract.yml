@@ -3,9 +3,9 @@ name: MCP contract
 on:
   pull_request:
     paths:
-      - "src/access_review_engine/mcp_*.py"
-      - "src/access_review_engine/system_admin.py"
-      - "src/access_review_engine/api.py"
+      - "src/aurora/mcp_*.py"
+      - "src/aurora/system_admin.py"
+      - "src/aurora/api.py"
       - "tests/test_mcp_*.py"
       - "web/nginx.conf"
       - "web/src/App.tsx"
@@ -13,9 +13,9 @@ on:
       - ".github/workflows/mcp-contract.yml"
   push:
     paths:
-      - "src/access_review_engine/mcp_*.py"
-      - "src/access_review_engine/system_admin.py"
-      - "src/access_review_engine/api.py"
+      - "src/aurora/mcp_*.py"
+      - "src/aurora/system_admin.py"
+      - "src/aurora/api.py"
       - "tests/test_mcp_*.py"
       - "web/nginx.conf"
       - "web/src/App.tsx"

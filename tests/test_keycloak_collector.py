@@ -7,15 +7,15 @@ from zipfile import ZipFile
 import yaml
 
 import pytest
-from access_review_engine.application import _apply_keycloak_authoritative_scope
-from access_review_engine.collectors.keycloak import (
+from aurora.application import _apply_keycloak_authoritative_scope
+from aurora.collectors.keycloak import (
     KeycloakError,
     _HTTPClient,
     _pages,
     _retry,
     collect,
 )
-from access_review_engine.config_loader import ConfigError, validate_connector
+from aurora.config_loader import ConfigError, validate_connector
 
 SURFACES = (
     "users",
@@ -150,10 +150,10 @@ def _config() -> dict[str, object]:
         "type": "keycloak",
         "connection": {
             "base_url": "https://keycloak.test",
-            "realm": "eare-crashtest",
-            "client_id": "eare-collector",
+            "realm": "aurora-crashtest",
+            "client_id": "aurora-collector",
         },
-        "credentials": {"client_secret_env": "EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK"},
+        "credentials": {"client_secret_env": "AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK"},
         "collection": {
             **{surface: True for surface in SURFACES},
             "page_size": 2,
@@ -169,12 +169,12 @@ def test_live_collector_emits_the_v0_contract_and_paginates(tmp_path: Path) -> N
     manifest = collect(_config(), output, fake)
     assert manifest["completeness"] == "full"
     assert set(manifest["completed_surfaces"]) == set(SURFACES)
-    assert manifest["realm"] == "eare-crashtest"
+    assert manifest["realm"] == "aurora-crashtest"
     assert any(surface == "groups" and page == 1 for surface, page, _ in fake.calls) is False
     with ZipFile(output) as archive:
         assert "manifest.yaml" in archive.namelist()
         assert json.loads(archive.read("collection-errors.json")) == []
-        assert b"EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK" not in archive.read("manifest.yaml")
+        assert b"AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK" not in archive.read("manifest.yaml")
         parsed = yaml.safe_load(archive.read("manifest.yaml"))
         assert parsed["counts"]["groups"] == 2
 
@@ -294,7 +294,7 @@ def test_check_only_uses_only_valid_parent_contexts(tmp_path: Path) -> None:
 
 def test_http_client_builds_read_only_admin_api_paths(monkeypatch) -> None:
     config = _config()
-    monkeypatch.setenv("EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "test-secret")
+    monkeypatch.setenv("AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "test-secret")
     monkeypatch.setattr(_HTTPClient, "_token", lambda _self: "t0")
     client = _HTTPClient(config)
     captured: list[tuple[str, dict[str, object]]] = []
@@ -471,7 +471,7 @@ class _Response:
 
 def test_http_client_refreshes_once_per_admin_request(monkeypatch) -> None:
     config = _config()
-    monkeypatch.setenv("EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "test-secret")
+    monkeypatch.setenv("AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "test-secret")
     monkeypatch.setattr(_HTTPClient, "_token", lambda _self: "t0")
     client = _HTTPClient(config)
     issued = iter(("t1", "t2"))
@@ -498,7 +498,7 @@ def test_http_client_refreshes_once_per_admin_request(monkeypatch) -> None:
 
 def test_http_client_fails_after_second_401(monkeypatch) -> None:
     config = _config()
-    monkeypatch.setenv("EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "test-secret")
+    monkeypatch.setenv("AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "test-secret")
     monkeypatch.setattr(_HTTPClient, "_token", lambda _self: "t0")
     client = _HTTPClient(config)
     monkeypatch.setattr(client, "_token", lambda: "t1")
@@ -595,7 +595,7 @@ def test_authorization_services_is_optional_and_keeps_native_client_identity(
         assert resources[0]["id"] == "resource-invoices"
         assert {row["client_uuid"] for row in resources} == {"client-erp-uuid"}
         assert (
-            "EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK" not in archive.read("manifest.yaml").decode()
+            "AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK" not in archive.read("manifest.yaml").decode()
         )
     settings_calls = [call for call in fake.calls if call[0] == "authorization_resource_servers"]
     assert [(page, kwargs["client"]["id"]) for _, page, kwargs in settings_calls] == [
@@ -648,7 +648,7 @@ def test_same_authorization_names_in_two_clients_do_not_collide(tmp_path: Path) 
 
 def test_authorization_http_paths_are_read_only_and_use_client_uuid(monkeypatch) -> None:
     config = _config()
-    monkeypatch.setenv("EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "secret-canary")
+    monkeypatch.setenv("AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "secret-canary")
     monkeypatch.setattr(_HTTPClient, "_token", lambda _self: "token")
     client = _HTTPClient(config)
     captured: list[tuple[str, dict[str, object]]] = []
@@ -679,7 +679,7 @@ def test_authorization_http_paths_are_read_only_and_use_client_uuid(monkeypatch)
 
 
 def test_every_admin_api_request_is_get_only(monkeypatch) -> None:
-    monkeypatch.setenv("EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "secret-canary")
+    monkeypatch.setenv("AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "secret-canary")
     monkeypatch.setattr(_HTTPClient, "_token", lambda _self: "token")
     client = _HTTPClient(_config())
     methods: list[str] = []
@@ -700,7 +700,7 @@ def test_every_admin_api_request_is_get_only(monkeypatch) -> None:
 
 
 def test_authorization_permission_collects_keycloak_associations(monkeypatch) -> None:
-    monkeypatch.setenv("EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "secret-canary")
+    monkeypatch.setenv("AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "secret-canary")
     monkeypatch.setattr(_HTTPClient, "_token", lambda _self: "token")
     client = _HTTPClient(_config())
     paths = []
@@ -726,7 +726,7 @@ def test_authorization_permission_collects_keycloak_associations(monkeypatch) ->
 
 
 def test_aggregate_policy_collects_child_evidence_without_deriving_rights(monkeypatch) -> None:
-    monkeypatch.setenv("EARE_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "secret-canary")
+    monkeypatch.setenv("AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK", "secret-canary")
     monkeypatch.setattr(_HTTPClient, "_token", lambda _self: "token")
     client = _HTTPClient(_config())
 

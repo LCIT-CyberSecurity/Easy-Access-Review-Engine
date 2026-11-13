@@ -1,7 +1,7 @@
-# EARE Access Review & Identity Governance Assistant
+# Aurora Access Review & Identity Governance Assistant
 
-The chatbot is a bounded, read-only EARE copilot. It explains product screens and
-the EARE model, answers access-review/IAM/IAG questions, analyzes authorized
+The chatbot is a bounded, read-only Aurora copilot. It explains product screens and
+the Aurora model, answers access-review/IAM/IAG questions, analyzes authorized
 dashboard/campaign/Golden/review/source data, recommends safe next steps, and offers
 validated internal navigation actions. It is not a general-purpose chatbot and never
 performs business changes.
@@ -9,7 +9,7 @@ performs business changes.
 There are three response modes:
 
 - product and domain knowledge, answered directly without private data when possible;
-- analysis of the user's authorized EARE projections through bounded read-only tools;
+- analysis of the user's authorized Aurora projections through bounded read-only tools;
 - workflow and navigation guidance using server-validated semantic actions.
 
 When a provider returns no usable text, the backend and WebUI both return a visible,
@@ -17,7 +17,7 @@ controlled message instead of rendering an empty assistant bubble. Provider fail
 tool denials and empty provider responses remain distinct in server diagnostics.
 
 Clearly unrelated questions are handled locally, before any provider call. The response starts
-with `Hors périmètre du Chatbot EARE`, uses `intent=OUT_OF_SCOPE` and
+with `Hors périmètre du Chatbot Aurora`, uses `intent=OUT_OF_SCOPE` and
 `security_state=out_of_scope`; the drawer displays a neutral “Hors périmètre” marker.
 
 ## Architecture and authorization
@@ -25,7 +25,7 @@ with `Hors périmètre du Chatbot EARE`, uses `intent=OUT_OF_SCOPE` and
 Chatbot availability has three independent gates plus local provider readiness:
 
 ```text
-EARE_CHATBOT_ENABLED
+AURORA_CHATBOT_ENABLED
         -> system_settings.chatbot_enabled
         -> system_users.chatbot_access_enabled
         -> local OpenAI provider configuration
@@ -55,25 +55,25 @@ and usable without an LLM.
 ## OpenAI V1
 
 ```text
-EARE_CHATBOT_ENABLED=true
-EARE_CHATBOT_PROVIDER=openai
-EARE_OPENAI_API_KEY=<server-injected-secret>
-EARE_OPENAI_MODEL=<server-configured-model>
-EARE_CHATBOT_TIMEOUT=20
-EARE_CHATBOT_MAX_TOOL_ROUNDS=3
-EARE_CHATBOT_MAX_TOOL_CALLS=6
-EARE_CHATBOT_MAX_CONTEXT_CHARS=24000
-EARE_CHATBOT_MAX_RESULT_ITEMS=100
-EARE_CHATBOT_STORE_MESSAGE_CONTENT=true
-EARE_CHATBOT_LOG_CONVERSATIONS=true
-EARE_CHATBOT_LOG_TOOL_CALLS=true
-EARE_CHATBOT_TRACE_RETENTION_DAYS=30
+AURORA_CHATBOT_ENABLED=true
+AURORA_CHATBOT_PROVIDER=openai
+AURORA_OPENAI_API_KEY=<server-injected-secret>
+AURORA_OPENAI_MODEL=<server-configured-model>
+AURORA_CHATBOT_TIMEOUT=20
+AURORA_CHATBOT_MAX_TOOL_ROUNDS=3
+AURORA_CHATBOT_MAX_TOOL_CALLS=6
+AURORA_CHATBOT_MAX_CONTEXT_CHARS=24000
+AURORA_CHATBOT_MAX_RESULT_ITEMS=100
+AURORA_CHATBOT_STORE_MESSAGE_CONTENT=true
+AURORA_CHATBOT_LOG_CONVERSATIONS=true
+AURORA_CHATBOT_LOG_TOOL_CALLS=true
+AURORA_CHATBOT_TRACE_RETENTION_DAYS=30
 ```
 
-The provider uses the Responses API with custom EARE function tools only. OpenAI
+The provider uses the Responses API with custom Aurora function tools only. OpenAI
 built-ins (web search, file search, computer use, code interpreter, remote MCP) are
 not enabled. Each function has a strict schema and server-side argument validation. Responses use `store=false`; this prevents use of OpenAI remote response
-storage as conversation state but is not a claim of Zero Data Retention. EARE owns its
+storage as conversation state but is not a claim of Zero Data Retention. Aurora owns its
 bounded history and sanitized traces. Stateless tool continuation replays required opaque output
 items in memory, including reasoning items; reasoning content is never persisted.
 Multiple tool calls replay the provider reasoning/function items once, then append outputs in the
@@ -97,7 +97,7 @@ errors, headers and credentials are never returned or audited.
 
 ## Semantic catalog and tools
 
-`chatbot/semantic_catalog.py` defines the logical EARE vocabulary independently from SQL.
+`chatbot/semantic_catalog.py` defines the logical Aurora vocabulary independently from SQL.
 `Permission` is a source-native technical right, `FunctionalRight` is the functional
 `Target + Capability` representation, and `Access` is the reviewed object. Functional rights
 are never inferred from role names. Built-in capabilities are documented but extensible.
@@ -113,7 +113,7 @@ The provider can request only allowlisted, server-side tools:
 - `search_access_control_knowledge`, `get_ui_help`.
 
 Every result is authorized before transmission, bounded, secret-filtered and marked as untrusted
-EARE data. There is no SQL tool, arbitrary URL tool, database connection or physical database
+Aurora data. There is no SQL tool, arbitrary URL tool, database connection or physical database
 schema in the provider context. Organization and InformationSystem remain filters/classification
 scopes; this layer does not turn them into new permissions.
 
@@ -130,7 +130,7 @@ Normative sources in `AssistantResponse.sources` come only from
 bounded; source URLs must be credential-free HTTPS both when loading the catalog and when shown
 in the drawer. When no verified entry supports a request, the tool returns an explicit catalog
 limitation instead of inviting the model to invent a citation. Reports include only sources used
-for their recommendations and distinguish deterministic EARE sections from advice.
+for their recommendations and distinguish deterministic Aurora sections from advice.
 
 ## Administration Guardrails
 
@@ -147,7 +147,7 @@ provider settings remain environment configuration.
 ## Context contract
 
 The browser sends only a bounded route and optional selected object reference. The server
-rebuilds the authorized context from the current authenticated principal and EARE read
+rebuilds the authorized context from the current authenticated principal and Aurora read
 models before calling the provider. The model receives only allowlisted aggregate DTOs,
 validated page help, deterministic Guidance and validated semantic action IDs. It never
 receives ORM objects, provider credentials, connector configuration, raw database data or
@@ -160,8 +160,8 @@ change campaigns, launch remediation, import data or modify providers.
 ## Deterministic diagnostics and evaluations
 
 The chatbot exposes bounded projections for campaign readiness, campaign finding summaries,
-Golden quality and source/snapshot status. These calculations remain in EARE; the LLM only
-explains their results. Finding explanations are defined for the EARE comparison categories
+Golden quality and source/snapshot status. These calculations remain in Aurora; the LLM only
+explains their results. Finding explanations are defined for the Aurora comparison categories
 (`expected_and_observed`, `unexpected`, `missing`, `unknown_due_to_scope` and `no_reference`).
 Unknown categories remain explicit and are never guessed.
 
@@ -183,8 +183,8 @@ is aggregated across all tool rounds.
 ## Safety and retention
 
 Input size, Unicode normalization, out-of-scope classification, suspicious injection
-heuristics, and secret redaction run before provider access. EARE payloads are wrapped as
-`{type: "eare_data", untrusted: true, tool, data}` and are DATA, not instructions. Outputs
+heuristics, and secret redaction run before provider access. Aurora payloads are wrapped as
+`{type: "aurora_data", untrusted: true, tool, data}` and are DATA, not instructions. Outputs
 reject dangerous schemes/HTML and unknown actions. Conversation rows are scoped by user ID;
 retention cleanup applies to messages, traces and old orphan conversations. V1 has no business-
 data cache and no write tools.

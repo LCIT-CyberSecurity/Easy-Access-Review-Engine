@@ -1,4 +1,4 @@
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessRelation,
     Capability,
@@ -9,7 +9,7 @@ from access_review_engine.domain import (
     Provenance,
     Target,
 )
-from access_review_engine.functional_context import functional_context
+from aurora.functional_context import functional_context
 
 
 def test_functional_context_uses_capability_labels_without_rewriting_ids() -> None:

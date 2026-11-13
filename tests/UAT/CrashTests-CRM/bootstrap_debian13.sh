@@ -60,7 +60,7 @@ main() {
   [[ -f "${COMPOSE_FILE}" ]] || fail "missing compose file: ${COMPOSE_FILE}"
   docker compose -f "${COMPOSE_FILE}" build
   docker compose -f "${COMPOSE_FILE}" up -d --force-recreate
-  state="$(docker inspect -f '{{.State.Status}}' eare-crashtests-crm 2>/dev/null || true)"
+  state="$(docker inspect -f '{{.State.Status}}' aurora-crashtests-crm 2>/dev/null || true)"
   [[ "${state}" == "running" ]] || {
     docker compose -f "${COMPOSE_FILE}" logs --no-color crashtests-crm >&2 || true
     fail "container is not running; current state: ${state:-unknown}"

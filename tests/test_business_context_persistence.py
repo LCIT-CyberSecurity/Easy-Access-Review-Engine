@@ -4,27 +4,27 @@ from dataclasses import asdict
 
 import pytest
 
-from access_review_engine.access_context import (
+from aurora.access_context import (
     access_context_for_payload,
     access_enrichment,
     save_access_enrichment,
     split_multi_value,
 )
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     ControlObject,
     GoldenSourceAssignment,
     Permission,
 )
-from access_review_engine.golden_annotations import (
+from aurora.golden_annotations import (
     annotation_for_assignment,
     copy_assignment_annotations,
     normalize_assignment_comment,
     set_assignment_annotation,
 )
-from access_review_engine.services import create_golden_source, create_golden_version
-from access_review_engine.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
-from access_review_engine.storage import Repository
+from aurora.services import create_golden_source, create_golden_version
+from aurora.source_mapping import BUSINESS_CONTEXT_METADATA_KEY
+from aurora.storage import Repository
 
 
 def _access(name: str = "GG_SAGE_RW:member", native_id: str = "SID-G1", object_id: str = "access-1") -> Access:

@@ -9,9 +9,9 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 
 import pytest
-from access_review_engine.database import connect_database
-from access_review_engine.storage import TABLES, Repository
-from access_review_engine.system_admin import init_system
+from aurora.database import connect_database
+from aurora.storage import TABLES, Repository
+from aurora.system_admin import init_system
 
 SYSTEM_TABLES = {
     "system_users",
@@ -26,12 +26,12 @@ SYSTEM_TABLES = {
 
 @pytest.mark.postgres
 def test_alembic_initial_schema_is_usable_on_postgresql() -> None:
-    base_url = os.environ.get("EARE_TEST_POSTGRES_URL")
+    base_url = os.environ.get("AURORA_TEST_POSTGRES_URL")
     if not base_url:
-        pytest.skip("Set EARE_TEST_POSTGRES_URL to run PostgreSQL Alembic tests")
+        pytest.skip("Set AURORA_TEST_POSTGRES_URL to run PostgreSQL Alembic tests")
     assert base_url is not None
 
-    schema = "eare_alembic_test"
+    schema = "aurora_alembic_test"
     admin_engine = create_engine(base_url, hide_parameters=True)
     repository_url = (
         make_url(base_url)
@@ -39,7 +39,7 @@ def test_alembic_initial_schema_is_usable_on_postgresql() -> None:
         .render_as_string(hide_password=False)
     )
     environment = os.environ.copy()
-    environment["EARE_DATABASE_URL"] = repository_url
+    environment["AURORA_DATABASE_URL"] = repository_url
     root = Path(__file__).parents[1]
     try:
         with admin_engine.begin() as connection:

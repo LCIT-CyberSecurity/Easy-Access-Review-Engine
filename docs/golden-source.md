@@ -24,7 +24,7 @@ Alice -> CRM-Sales
 
 It does not need to list every effective access granted by `CRM-Sales`. Effective access can be calculated by applying the access-relation graph to direct assignments.
 
-A role composition change can therefore alter effective access while the direct Golden assignment remains unchanged. EARE can expose that drift without rewriting the Golden Source as derived assignments.
+A role composition change can therefore alter effective access while the direct Golden assignment remains unchanged. Aurora can expose that drift without rewriting the Golden Source as derived assignments.
 
 ## Comparison States
 

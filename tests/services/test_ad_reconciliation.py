@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from access_review_engine.domain import Identity, IdentityStatus, IdentityType
-from access_review_engine.services import reconcile_identities
+from aurora.domain import Identity, IdentityStatus, IdentityType
+from aurora.services import reconcile_identities
 
 
 def test_ad_rename_same_sid_keeps_internal_uuid() -> None:

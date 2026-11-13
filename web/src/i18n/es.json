@@ -66,7 +66,7 @@
     "recordDecision": "Record the right decision",
     "productBy": "A product by",
     "identityGovernance": "Identity & access governance",
-    "protectedWorkspace": "Protected access to the EARE workspace",
+    "protectedWorkspace": "Protected access to the Aurora workspace",
     "welcomeBack": "Te damos la bienvenida",
     "signInContinue": "Inicia sesión para continuar con tus revisiones de acceso.",
     "username": "Usuario",
@@ -87,7 +87,7 @@
   },
   "roles": {
     "help": {
-      "admin": "Configura EARE, gestiona usuarios y puede ejecutar todas las operaciones de gobernanza.",
+      "admin": "Configura Aurora, gestiona usuarios y puede ejecutar todas las operaciones de gobernanza.",
       "operator": "Gestiona campañas solo cuando todos los proveedores y dominios expuestos por la campaña están autorizados.",
       "groupOwner": "Solo ve y decide las revisiones asignadas a esta persona.",
       "businessAdmin": "Revisa las acciones de remediación de los dominios autorizados. Este rol no puede registrar la finalización operativa.",
@@ -159,7 +159,7 @@
     "permission": "Permiso",
     "resource": "Recurso",
     "description": "Descripción",
-    "manualValueHint": "Las listas sugieren valores ya conocidos por EARE. Es posible usar un valor manual cuando el negocio lo haya validado."
+    "manualValueHint": "Las listas sugieren valores ya conocidos por Aurora. Es posible usar un valor manual cuando el negocio lo haya validado."
   },
   "campaign": {
     "reviewer": "Revisor",
@@ -386,13 +386,13 @@
     "noCampaignOpen": "No hay ninguna campaña abierta",
     "reportExplain": "Un informe describe las decisiones de una campaña. Ejecute una primero.",
     "reportDisplayed": "El informe se muestra aquí como un documento completo. Use las descargas anteriores para distribuirlo.",
-    "remediationReadonly": "Son instrucciones para administradores. EARE no modifica AD, LDAP, la nube ni las aplicaciones.",
+    "remediationReadonly": "Son instrucciones para administradores. Aurora no modifica AD, LDAP, la nube ni las aplicaciones.",
     "actionCount_one": "acción",
     "actionCount_other": "acciones"
   },
   "guide": {
     "loading": "Cargando su situación actual…",
-    "loadError": "No se pudo cargar la Guía EARE.",
+    "loadError": "No se pudo cargar la Guía Aurora.",
     "setupTitle": "Configuración inicial",
     "readinessTitle": "Preparación de la campaña",
     "scopeDefined": "Ámbito definido",
@@ -416,22 +416,22 @@
       "remediation": "Exported significa enviado para trabajo operativo; solo Completed confirma la corrección.",
       "reportMeaning": "Los informes resumen decisiones y evidencias; el plan de remediación describe el seguimiento solicitado."
     },
-    "title": "EARE Guide",
-    "open": "Abrir EARE Guide",
-    "close": "Cerrar EARE Guide",
+    "title": "Aurora Guide",
+    "open": "Abrir Aurora Guide",
+    "close": "Cerrar Aurora Guide",
     "role": "Su rol",
     "currentSituation": "Situación actual",
     "next": "Siguiente acción recomendada",
     "why": "¿Por qué este paso?",
     "pageHelp": "Acerca de esta página",
     "otherSuggestions": "Otras sugerencias",
-    "readOnly": "Solo orientación: EARE Guide nunca realiza acciones de negocio.",
+    "readOnly": "Solo orientación: Aurora Guide nunca realiza acciones de negocio.",
     "disable": "Desactivar la guía",
     "enable": "Activar la guía",
-    "onboardingTitle": "Bienvenido a EARE",
-    "onboardingIntro": "EARE Guide muestra lo que está listo y lo que debe hacer a continuación.",
+    "onboardingTitle": "Bienvenido a Aurora",
+    "onboardingIntro": "Aurora Guide muestra lo que está listo y lo que debe hacer a continuación.",
     "startSetup": "Iniciar la configuración guiada",
-    "explore": "Explorar EARE por mi cuenta",
+    "explore": "Explorar Aurora por mi cuenta",
     "skip": "Omitir la introducción",
     "enabled": "Activada",
     "disabled": "Desactivada",
@@ -440,7 +440,7 @@
     "setupShort": {
       "sources": "Fuente configurada",
       "initialCollection": "Snapshot inicial recopilado",
-      "users": "Usuarios EARE configurados",
+      "users": "Usuarios Aurora configurados",
       "operatorCoverage": "Cobertura de Operadores",
       "expectedState": "Estado esperado definido",
       "readOnlyAccounts": "Cuentas de solo lectura"
@@ -448,7 +448,7 @@
     "setup": {
       "sources": "Configurar una fuente de recopilación",
       "initialCollection": "Recopilar el Snapshot inicial",
-      "users": "Configurar los usuarios de EARE",
+      "users": "Configurar los usuarios de Aurora",
       "operatorCoverage": "Establecer la cobertura de Operadores",
       "operatorCoverageIncomplete": "Algunos proveedores configurados no están cubiertos por un Operador activo.",
       "expectedState": "Definir el estado esperado",
@@ -480,8 +480,8 @@
       },
       "configureSources": {
         "title": "Configure your first source",
-        "description": "No source is configured for EARE yet.",
-        "reason": "EARE needs an authorized source connection before it can collect access data."
+        "description": "No source is configured for Aurora yet.",
+        "reason": "Aurora needs an authorized source connection before it can collect access data."
       },
       "collectSnapshot": {
         "title": "Collect an initial Snapshot",
@@ -511,7 +511,7 @@
       "adminContinue": {
         "title": "Continue governance as Administrator",
         "description": "You can prepare a campaign with your administrator permissions.",
-        "reason": "EARE does not prevent an Administrator from operating a campaign."
+        "reason": "Aurora does not prevent an Administrator from operating a campaign."
       },
       "operatorSource": {
         "title": "Make a source available",
@@ -541,7 +541,7 @@
       "campaignBlocked": {
         "title": "Campaign scope needs attention",
         "description": "The active campaign is outside the currently authorized scope.",
-        "reason": "EARE does not expose campaign details or actions outside your authorized domains."
+        "reason": "Aurora does not expose campaign details or actions outside your authorized domains."
       },
       "assignedReviews": {
         "title": "Complete your assigned reviews",
@@ -551,17 +551,17 @@
       "noReviews": {
         "title": "No review currently requires your decision",
         "description": "Your assigned review queue is currently complete.",
-        "reason": "EARE shows only review items assigned to you."
+        "reason": "Aurora shows only review items assigned to you."
       },
       "remediation": {
         "title": "Process remediation actions",
         "description": "Remediation actions are waiting for operational follow-up.",
-        "reason": "EARE records the requested outcome but does not modify the source system."
+        "reason": "Aurora records the requested outcome but does not modify the source system."
       },
       "noActions": {
         "title": "No remediation action requires attention",
         "description": "There are no visible pending remediation actions.",
-        "reason": "EARE shows actions only for your authorized domains."
+        "reason": "Aurora shows actions only for your authorized domains."
       },
       "unresolvedReviewers": {
         "title": "Resolve reviewer issues",
@@ -575,18 +575,18 @@
       },
       "readOnlyAccounts": {
         "title": "Usar una cuenta dedicada de solo lectura para cada fuente",
-        "description": "Cree para EARE una cuenta de servicio por fuente, solo con permisos de lectura, y confírmela en la configuración de la fuente.",
-        "reason": "EARE solo necesita leer. Una cuenta que puede modificar el directorio, o una cuenta personal, agrava el impacto de una fuga de credenciales y enturbia la pista de auditoría."
+        "description": "Cree para Aurora una cuenta de servicio por fuente, solo con permisos de lectura, y confírmela en la configuración de la fuente.",
+        "reason": "Aurora solo necesita leer. Una cuenta que puede modificar el directorio, o una cuenta personal, agrava el impacto de una fuga de credenciales y enturbia la pista de auditoría."
       }
     },
     "page": {
       "overview": {
         "title": "Overview",
-        "description": "This page summarizes the current EARE state and work waiting for you."
+        "description": "This page summarizes the current Aurora state and work waiting for you."
       },
       "sources": {
         "title": "Sources and IdPs",
-        "description": "Sources provide the observed identities, accesses, and collection status used by EARE."
+        "description": "Sources provide the observed identities, accesses, and collection status used by Aurora."
       },
       "golden": {
         "title": "Golden Source",
@@ -602,7 +602,7 @@
       },
       "actions": {
         "title": "Actions",
-        "description": "Actions record operational remediation follow-up; EARE does not change source systems."
+        "description": "Actions record operational remediation follow-up; Aurora does not change source systems."
       },
       "reports": {
         "title": "Reports",

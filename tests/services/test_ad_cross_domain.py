@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from access_review_engine.domain import Identity, IdentityStatus, IdentityType
-from access_review_engine.importers.ad import import_ad_zip
+from aurora.domain import Identity, IdentityStatus, IdentityType
+from aurora.importers.ad import import_ad_zip
 from ad_test_helpers import zip_fixture
 
 

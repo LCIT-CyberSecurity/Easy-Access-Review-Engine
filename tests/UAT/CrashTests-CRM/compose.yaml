@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: eare-crashtests-crm:debian13-slim
-    container_name: eare-crashtests-crm
+    image: aurora-crashtests-crm:debian13-slim
+    container_name: aurora-crashtests-crm
     network_mode: none
     volumes:
       - crashtests-crm-data:/srv/crm
@@ -16,8 +16,8 @@ services:
     build:
       context: ../CrashTests-OpenLDAP
       dockerfile: Dockerfile
-    image: eare-crashtests-crm-openldap:debian13-slim
-    container_name: eare-crashtests-crm-openldap
+    image: aurora-crashtests-crm-openldap:debian13-slim
+    container_name: aurora-crashtests-crm-openldap
     ulimits:
       nofile:
         soft: 4096
@@ -33,15 +33,15 @@ services:
     build:
       context: ../../..
       dockerfile: docker/backend.Dockerfile
-    image: eare-crashtests-api:python312
-    container_name: eare-crashtests-api
+    image: aurora-crashtests-api:python312
+    container_name: aurora-crashtests-api
     # Lab-only bootstrap values. The lab publishes no API port and is recreated on every run.
     environment:
-      EARE_DB_PATH: /data/access-review.db
-      EARE_SESSION_SECRET: crashtests-crm-lab-session-secret-not-for-production
-      EARE_ADMIN_USERNAME: admin
-      EARE_ADMIN_PASSWORD: crashtests-crm-lab-admin
-      EARE_COOKIE_SECURE: "0"
+      AURORA_DB_PATH: /data/aurora.db
+      AURORA_SESSION_SECRET: crashtests-crm-lab-session-secret-not-for-production
+      AURORA_ADMIN_USERNAME: admin
+      AURORA_ADMIN_PASSWORD: crashtests-crm-lab-admin
+      AURORA_COOKIE_SECURE: "0"
     volumes:
       - crashtests-crm-api-data:/data
     depends_on:
@@ -49,9 +49,9 @@ services:
         condition: service_healthy
     networks:
       default:
-        # web/nginx.conf proxies /api to the fixed upstream name `eare-api`.
+        # web/nginx.conf proxies /api to the fixed upstream name `aurora-api`.
         aliases:
-          - eare-api
+          - aurora-api
     expose:
       - "8000"
     healthcheck:
@@ -65,8 +65,8 @@ services:
     build:
       context: ../../../web
       dockerfile: Dockerfile
-    image: eare-crashtests-webui:nginx
-    container_name: eare-crashtests-webui
+    image: aurora-crashtests-webui:nginx
+    container_name: aurora-crashtests-webui
     depends_on:
       crashtests-api:
         condition: service_healthy
@@ -80,6 +80,6 @@ services:
 
 volumes:
   crashtests-crm-data:
-    name: eare-crashtests-crm-data
+    name: aurora-crashtests-crm-data
   crashtests-crm-api-data:
-    name: eare-crashtests-crm-api-data
+    name: aurora-crashtests-crm-api-data

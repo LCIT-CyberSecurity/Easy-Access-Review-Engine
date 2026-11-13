@@ -25,7 +25,7 @@ describe("WebUI locale contract", () => {
     for (const catalogue of [fr, es, pt, itLocale, ar]) expect(keys(catalogue).sort()).toEqual(source);
   });
 
-  it("translates the core EARE Guide labels in every supported locale", () => {
+  it("translates the core Aurora Guide labels in every supported locale", () => {
     const core = ["open", "currentSituation", "next", "onboardingTitle"];
     for (const catalogue of [fr, es, pt, ar, itLocale]) {
       for (const key of core) expect(catalogue.guide[key as keyof typeof catalogue.guide]).not.toBe(en.guide[key as keyof typeof en.guide]);
@@ -53,14 +53,14 @@ describe("WebUI locale contract", () => {
     await setLocale("invalid");
     expect(document.documentElement.lang).toBe("en");
     expect(document.documentElement.dir).toBe("ltr");
-    expect(window.localStorage.getItem("eare.ui.locale")).toBe("en");
+    expect(window.localStorage.getItem("aurora.ui.locale")).toBe("en");
     const technical = ["GG-CRM-Compta", "NexaByte CRM", "openldap-corp", "salesdb.public.orders", "SELECT", "member", "s3:GetObject", "user comment"];
     expect(technical).toEqual(["GG-CRM-Compta", "NexaByte CRM", "openldap-corp", "salesdb.public.orders", "SELECT", "member", "s3:GetObject", "user comment"]);
   });
 
   it("switches Arabic to RTL and back to LTR", async () => {
     await setLocale("ar");
-    expect(window.localStorage.getItem("eare.ui.locale")).toBe("ar");
+    expect(window.localStorage.getItem("aurora.ui.locale")).toBe("ar");
     expect(document.documentElement.lang).toBe("ar");
     expect(document.documentElement.dir).toBe("rtl");
     await setLocale("fr");

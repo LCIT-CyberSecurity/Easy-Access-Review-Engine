@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     Campaign,
@@ -17,7 +17,7 @@ from access_review_engine.domain import (
     Provider,
     ReviewItem,
 )
-from access_review_engine.services import (
+from aurora.services import (
     create_golden_source,
     create_golden_version,
     create_snapshot,
@@ -39,7 +39,7 @@ def test_campaign_promotion_preserves_and_derives_stable_technical_metadata() ->
         ControlObject("group", "GG_SAGE_RW", native_id="SID-G1"),
         Permission("member"),
         metadata={
-            "eare_business_context": {
+            "aurora_business_context": {
                 "business_permission": {
                     "value": "ReadWrite",
                     "provenance": "source_attribute",

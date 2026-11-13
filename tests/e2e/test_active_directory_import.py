@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from access_review_engine.domain import AccessAssignment, Origin
-from access_review_engine.importers.ad import import_ad_zip
-from access_review_engine.storage import Repository
+from aurora.domain import AccessAssignment, Origin
+from aurora.importers.ad import import_ad_zip
+from aurora.storage import Repository
 from ad_test_helpers import zip_fixture
 
 

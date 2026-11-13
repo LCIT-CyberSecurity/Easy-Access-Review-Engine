@@ -4,4 +4,4 @@
 memberships in connector UATs. Keycloak federates this directory; application
 clients, roles and Authorization Services remain native to Keycloak.
 
-Base DN: `dc=eare,dc=test`. No production credentials are included.
+Base DN: `dc=aurora,dc=test`. No production credentials are included.

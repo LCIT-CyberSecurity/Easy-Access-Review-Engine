@@ -6,13 +6,13 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from access_review_engine.application import import_file_to_repository
-from access_review_engine.services import create_golden_source, promote_snapshot
-from access_review_engine.storage import Repository
+from aurora.application import import_file_to_repository
+from aurora.services import create_golden_source, promote_snapshot
+from aurora.storage import Repository
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / "artifacts"
-CONTAINER = "eare-crashtests-openldap"
+CONTAINER = "aurora-crashtests-openldap"
 
 
 def test_ct_openldap_001_targets_current_debian_stable() -> None:
@@ -80,7 +80,7 @@ def _docker_exec(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_ct_openldap_004_real_export_import_preserves_eare_model(tmp_path: Path) -> None:
+def test_ct_openldap_004_real_export_import_preserves_aurora_model(tmp_path: Path) -> None:
     available, reason = _docker_container_ready()
     if not available:
         pytest.skip(f"CrashTests-OpenLDAP real lab unavailable: {reason}")
@@ -99,10 +99,10 @@ def test_ct_openldap_004_real_export_import_preserves_eare_model(tmp_path: Path)
     collect = subprocess.run(
         [
             "docker", "exec",
-            "--env", "LDAP_URI=ldap://127.0.0.1",
-            "--env", "BASE_DN=dc=example,dc=com",
-            "--env", "PROVIDER_NAME=crashtests-openldap",
-            "--env", "ALLOW_ANONYMOUS=1",
+            "--env", "AURORA_LDAP_URI=ldap://127.0.0.1",
+            "--env", "AURORA_BASE_DN=dc=example,dc=com",
+            "--env", "AURORA_PROVIDER_NAME=crashtests-openldap",
+            "--env", "AURORA_ALLOW_ANONYMOUS=1",
             CONTAINER, "bash", container_exporter, archive_in_container,
         ],
         text=True,

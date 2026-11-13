@@ -24,11 +24,11 @@ COPY exporters ./exporters
 COPY scripts ./scripts
 RUN pip install --no-cache-dir '.[app,google]'
 
-RUN useradd --create-home --uid 10001 eare \
+RUN useradd --create-home --uid 10001 aurora \
     && mkdir -p /data \
-    && chown -R eare:eare /app /data
-USER eare
+    && chown -R aurora:aurora /app /data
+USER aurora
 
 EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=6 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"
-CMD ["uvicorn", "access_review_engine.api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "aurora.api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

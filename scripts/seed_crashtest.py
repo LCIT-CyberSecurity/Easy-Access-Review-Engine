@@ -10,9 +10,9 @@ CRASHTESTS = ROOT / "tests" / "UAT" / "CrashTests-CRM" / "crashtests"
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(CRASHTESTS))
 
-from access_review_engine.domain import Campaign, Completeness, ImportBatch, OwnerRef, stable_checksum
-from access_review_engine.services import create_golden_source, create_golden_version, create_snapshot, open_campaign
-from access_review_engine.storage import Repository
+from aurora.domain import Campaign, Completeness, ImportBatch, OwnerRef, stable_checksum
+from aurora.services import create_golden_source, create_golden_version, create_snapshot, open_campaign
+from aurora.storage import Repository
 from crm_collector import collect_crm
 from crm_lab import PROVIDER, golden_assignments
 from crm_collector import golden_authentication_policy
@@ -23,7 +23,7 @@ def seed(db_path: str | Path) -> dict[str, int | str]:
     golden_source = create_golden_source("crashtests-crm", "CrashTests CRM")
     access_by_key = {(item.provider, item.name): item for item in collection.accesses}
     identity_by_key = {(item.provider, item.identifier): item for item in collection.identities}
-    from access_review_engine.domain import GoldenSourceAssignment
+    from aurora.domain import GoldenSourceAssignment
 
     golden_items = [
         GoldenSourceAssignment(
@@ -103,7 +103,7 @@ def seed(db_path: str | Path) -> dict[str, int | str]:
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Seed the CrashTests-CRM dataset into an EARE SQLite database")
+    parser = argparse.ArgumentParser(description="Seed the CrashTests-CRM dataset into an Aurora SQLite database")
     parser.add_argument("db", nargs="?", default="integration.db")
     args = parser.parse_args()
     print(seed(args.db))

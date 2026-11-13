@@ -83,7 +83,7 @@ describe("ActionMenu", () => {
   });
 });
 
-describe("EARE Assistant launcher contracts", () => {
+describe("Aurora Assistant launcher contracts", () => {
   it("fails closed when chatbot status is absent or unavailable", () => {
     expect(isAssistantAvailable(undefined)).toBe(false);
     expect(isAssistantAvailable({ available: false })).toBe(false);
@@ -151,12 +151,12 @@ describe("Campaign review labels", () => {
   it("explains Keycloak role and group targets without hiding technical identifiers", () => {
     const role = reviewTargetText({
       access_provider: "keycloak-integration",
-      access_display_name: "default-roles-eare-crashtest",
+      access_display_name: "default-roles-aurora-crashtest",
       permission: { identifier: "role" },
-      target: { service: { identifier: "Keycloak", realm: "eare-crashtest" }, component: { identifier: "realm" }, resource: { identifier: "role-id" } },
+      target: { service: { identifier: "Keycloak", realm: "aurora-crashtest" }, component: { identifier: "realm" }, resource: { identifier: "role-id" } },
     });
     expect(reviewPermissionText({ identifier: "role" })).toBe("Role assignment");
-    expect(role.label).toBe("eare-crashtest · Role default-roles-eare-crashtest");
+    expect(role.label).toBe("aurora-crashtest · Role default-roles-aurora-crashtest");
     expect(role.technical).toContain("role-id");
     expect(reviewPermissionText({ identifier: "member" })).toBe("Group membership");
     expect(reviewDerivedAccessText({ derived_accesses: [{ display_name: "view-profile" }, { display_name: "offline_access" }] })).toBe("view-profile, offline_access");
@@ -223,8 +223,8 @@ describe("MCP self-service controls", () => {
     expect(mcpAccessStatus(true, false)).toBe("MCP access is disabled by an administrator.");
   });
   it("removes the one-time plaintext from closed-menu output", () => {
-    expect(renderToStaticMarkup(createElement(McpTokenOnce, { menuOpen: true, token: "eare_mcp_test" }))).toContain("eare_mcp_test");
-    expect(renderToStaticMarkup(createElement(McpTokenOnce, { menuOpen: false, token: "eare_mcp_test" }))).not.toContain("eare_mcp_test");
+    expect(renderToStaticMarkup(createElement(McpTokenOnce, { menuOpen: true, token: "aurora_mcp_test" }))).toContain("aurora_mcp_test");
+    expect(renderToStaticMarkup(createElement(McpTokenOnce, { menuOpen: false, token: "aurora_mcp_test" }))).not.toContain("aurora_mcp_test");
   });
 });
 

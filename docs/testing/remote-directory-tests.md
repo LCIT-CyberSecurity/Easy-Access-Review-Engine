@@ -25,7 +25,7 @@ the normal suite does not pull images or require network access.
 
 ## Application / E2E
 
-`tests/e2e/test_application_lifecycle.py` covers the EARE lifecycle from import through SQLite,
+`tests/e2e/test_application_lifecycle.py` covers the Aurora lifecycle from import through SQLite,
 snapshot, Golden, campaign decisions, remediation, reports, and campaign promotion.
 
 ## Performance smoke

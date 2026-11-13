@@ -1,16 +1,16 @@
-# EARE User Guide
+# Aurora User Guide
 
-## 1. What EARE Does
+## 1. What Aurora Does
 
-Easy Access Review Engine helps answer three operational questions:
+Aurora helps answer three operational questions:
 
 1. What access is currently observed?
 2. Does that access match what is expected?
 3. What should be approved, investigated, removed, or documented?
 
-EARE stores observations, compares them with an optional Golden Source, opens review campaigns, preserves decisions, and generates reusable reports for audit and remediation. It is built to reduce manual spreadsheet work, shorten review cycles, improve evidence quality, and make access reviews repeatable.
+Aurora stores observations, compares them with an optional Golden Source, opens review campaigns, preserves decisions, and generates reusable reports for audit and remediation. It is built to reduce manual spreadsheet work, shorten review cycles, improve evidence quality, and make access reviews repeatable.
 
-You can feed EARE in two ways:
+You can feed Aurora in two ways:
 
 - import an existing export produced by another trusted process;
 - use direct read-only access to the IDP through the provided collectors, then import the generated artifact.
@@ -55,7 +55,7 @@ It can be created from:
 
 This lets teams start with what they already have, then improve quality over time without blocking the first review campaign.
 
-It lets EARE classify observed access as:
+It lets Aurora classify observed access as:
 
 ```text
 expected_and_observed   expected and present
@@ -65,50 +65,46 @@ unknown_due_to_scope    no safe conclusion because collection is scoped or unkno
 no_reference            observed without any Golden Source reference
 ```
 
-Stable native identifiers, such as AD SID or OpenLDAP `entryUUID`, let EARE keep matching across reliable renames without turning those identifiers into new business keys.
+Stable native identifiers, such as AD SID or OpenLDAP `entryUUID`, let Aurora keep matching across reliable renames without turning those identifiers into new business keys.
 
 ## 4. CLI Overview
 
-The CLI is designed to simplify day-to-day operations. It wraps the existing EARE engine so operators can configure connectors, collect evidence, import artifacts, run analysis, manage Golden Source versions, and export reports with clear commands instead of manual scripting.
+The CLI is designed to simplify day-to-day operations. It wraps the existing Aurora engine so operators can configure connectors, collect evidence, import artifacts, run analysis, manage Golden Source versions, and export reports with clear commands instead of manual scripting.
 
 The recommended command name is:
 
 ```bash
-eare
-```
-
-The compatibility alias remains:
-
-```bash
-access-review
+aurora
 ```
 
 Available command groups:
 
 ```bash
-eare provider ...
-eare analyze ...
-eare golden ...
-eare campaign ...
-eare export ...
+aurora provider ...
+aurora analyze ...
+aurora golden ...
+aurora campaign ...
+aurora export ...
 ```
 
-Current compatibility commands include:
+Typical commands include:
 
 ```bash
-access-review validate <file>
-access-review import <file>
-access-review findings-list
-access-review identities-list
-access-review access-effective <identity>
-access-review campaign-export <output-dir>
+aurora provider list
+aurora provider init corp-ad --type active_directory
+aurora provider check --all
+aurora provider sync corp-ad
+aurora provider import extraction.zip --provider corp-ad
+aurora analyze
+aurora export report --output reports/
 ```
+
 
 ## Interactive Menu
 
-Run eare without arguments in a terminal to open the human-friendly menu:
+Run aurora without arguments in a terminal to open the human-friendly menu:
 
-Easy Access Review Engine
+Aurora
 
 1. Providers
 2. Analyze
@@ -117,37 +113,37 @@ Easy Access Review Engine
 5. Exports
 6. Quit
 
-The menu calls the same command handlers as direct CLI usage. In CI, pipes, and other non-interactive contexts, eare without arguments prints help and exits instead of waiting for input.
+The menu calls the same command handlers as direct CLI usage. In CI, pipes, and other non-interactive contexts, aurora without arguments prints help and exits instead of waiting for input.
 
 Provider workflows use the canonical namespace:
 
-eare provider list
-eare provider init corp-ad --type active_directory
-eare provider setup
-eare provider check --all
-eare provider sync corp-ad
-eare provider sync corp-ad --dry-run
+aurora provider list
+aurora provider init corp-ad --type active_directory
+aurora provider setup
+aurora provider check --all
+aurora provider sync corp-ad
+aurora provider sync corp-ad --dry-run
 
 ## 5. Configuration, Secrets, and State
 
-EARE separates configuration, secrets, and business state:
+Aurora separates configuration, secrets, and business state:
 
 ```text
 YAML connector files  -> provider configuration
 .env / environment    -> secrets
-SQLite database       -> EARE state: imports, snapshots, Golden Source, campaigns, decisions
+SQLite database       -> Aurora state: imports, snapshots, Golden Source, campaigns, decisions
 ```
 
 Connector YAML files should describe provider settings only. They must not contain passwords, tokens, private keys, API keys, or client secrets.
 
-Secrets belong in environment variables or local files referenced by environment variables. For OpenLDAP, the exporter supports `LDAP_PASSWORD` and `LDAP_PASSWORD_FILE`.
+Secrets belong in environment variables or local files referenced by environment variables. For OpenLDAP, the exporter supports `AURORA_LDAP_PASSWORD` and `AURORA_LDAP_PASSWORD_FILE`.
 
 ## 6. Check, Collect, Sync, Import
 
-EARE supports both operating models:
+Aurora supports both operating models:
 
 - **offline import**, when you already have an export file;
-- **direct read-only IDP access**, when EARE can query the provider through the existing collector/exporter.
+- **direct read-only IDP access**, when Aurora can query the provider through the existing collector/exporter.
 
 The CLI commands are available shortcuts around the same engine, not a second implementation.
 
@@ -156,8 +152,8 @@ The CLI commands are available shortcuts around the same engine, not a second im
 `check` is diagnostic. It validates configuration and, when supported, asks the existing collector to verify the provider. It must not modify SQLite or the provider.
 
 ```bash
-eare provider check corp-ad
-eare provider check ldap-prod
+aurora provider check corp-ad
+aurora provider check ldap-prod
 ```
 
 Running `check` is useful, but it is not required before `sync`.
@@ -167,17 +163,17 @@ Running `check` is useful, but it is not required before `sync`.
 `collect` uses direct read-only IDP access through the existing exporter and writes an artifact. It does not import into SQLite. Use it when collection and import are separated by process, approval, or change-control requirements.
 
 ```bash
-eare provider collect corp-ad --output /tmp/corp-ad.zip
-eare provider collect ldap-prod --output /tmp/ldap-prod.zip
+aurora provider collect corp-ad --output /tmp/corp-ad.zip
+aurora provider collect ldap-prod --output /tmp/ldap-prod.zip
 ```
 
 ### import
 
-`import` loads an existing artifact into EARE by calling the application import engine. Use it when the evidence already exists as a ZIP, LDIF, CSV-derived artifact, or another supported extraction.
+`import` loads an existing artifact into Aurora by calling the application import engine. Use it when the evidence already exists as a ZIP, LDIF, CSV-derived artifact, or another supported extraction.
 
 ```bash
-eare provider import corp-ad-export.zip
-eare provider import directory.ldif --provider ldap-prod
+aurora provider import corp-ad-export.zip
+aurora provider import directory.ldif --provider ldap-prod
 ```
 
 The import path reuses `import_file_to_repository(...)`; the CLI must not reimplement reconciliation.
@@ -187,55 +183,55 @@ The import path reuses `import_file_to_repository(...)`; the CLI must not reimpl
 `sync` is the main operator workflow for repeatable direct read-only IDP collection. It combines configuration, collection, and import:
 
 ```bash
-eare provider sync corp-ad
-eare provider sync ldap-prod
-eare provider sync --all
+aurora provider sync corp-ad
+aurora provider sync ldap-prod
+aurora provider sync --all
 ```
 
 Multi-provider sync is sequential. If one provider fails, previous successful providers remain processed; there is no global multi-provider transaction.
 
 ## 7. Dry Run
 
-`--dry-run` does not simulate changes to AD or LDAP. EARE collectors are already read-only.
+`--dry-run` does not simulate changes to AD or LDAP. Aurora collectors are already read-only.
 
-For EARE, dry-run means:
+For Aurora, dry-run means:
 
 ```text
 perform the real read-only collection
 parse and normalize the real artifact
 run the real import and reconciliation engine
-show what would change in EARE
+show what would change in Aurora
 leave the real SQLite database unchanged
 ```
 
-The safe MVP strategy is to run the real engine against an isolated temporary SQLite database copy. If the real database does not exist yet, EARE can dry-run against a temporary empty database and report what would be created.
+The safe MVP strategy is to run the real engine against an isolated temporary SQLite database copy. If the real database does not exist yet, Aurora can dry-run against a temporary empty database and report what would be created.
 
 Examples:
 
 ```bash
-eare provider import corp-ad-export.zip --dry-run
-eare provider sync corp-ad --dry-run
-eare provider sync --all --dry-run
+aurora provider import corp-ad-export.zip --dry-run
+aurora provider sync corp-ad --dry-run
+aurora provider sync --all --dry-run
 ```
 
 For scoped or unknown collections, dry-run must preserve the same safety rules as real imports: no false deletion, no false missing access, and no authoritative conclusion outside the observed scope.
 
 ## 8. Analyze
 
-`analyze` is local only. It reads existing EARE state and must not contact AD, LDAP, or any connector.
+`analyze` is local only. It reads existing Aurora state and must not contact AD, LDAP, or any connector.
 
 ```bash
-eare analyze
-eare analyze --provider corp-ad
-eare analyze --identity alice
-eare analyze --access Finance
+aurora analyze
+aurora analyze --provider corp-ad
+aurora analyze --identity alice
+aurora analyze --access Finance
 ```
 
-If no snapshot exists, the CLI explains that no local analysis is available and suggest `eare provider sync <provider>` or `eare provider import <file>`.
+If no snapshot exists, the CLI explains that no local analysis is available and suggest `aurora provider sync <provider>` or `aurora provider import <file>`.
 
 ## 9. Active Directory Collection
 
-Use the existing exporter; do not reimplement AD collection in Python. The exporter performs read-only queries and produces an artifact that EARE imports through the same engine as offline files.
+Use the existing exporter; do not reimplement AD collection in Python. The exporter performs read-only queries and produces an artifact that Aurora imports through the same engine as offline files.
 
 ```powershell
 .\export-active-directory.ps1 `
@@ -249,20 +245,20 @@ Use the existing exporter; do not reimplement AD collection in Python. The expor
 
 ## 10. OpenLDAP Collection
 
-Use the existing shell exporter; do not reimplement LDAP collection in Python. The exporter performs read-only LDAP queries and produces an artifact that EARE imports through the same engine as offline files.
+Use the existing shell exporter; do not reimplement LDAP collection in Python. The exporter performs read-only LDAP queries and produces an artifact that Aurora imports through the same engine as offline files.
 
 ```dotenv
-LDAP_URI=ldaps://ldap.example.test
-BASE_DN=dc=example,dc=test
-PROVIDER_NAME=ldap-prod
-PAGE_SIZE=500
-CONNECTION_TIMEOUT_SECONDS=10
-SEARCH_TIMEOUT_SECONDS=60
-SEARCH_SCOPE=sub
-LDAP_FILTER=(objectClass=*)
+AURORA_LDAP_URI=ldaps://ldap.example.test
+AURORA_BASE_DN=dc=example,dc=test
+AURORA_PROVIDER_NAME=ldap-prod
+AURORA_PAGE_SIZE=500
+AURORA_CONNECTION_TIMEOUT_SECONDS=10
+AURORA_SEARCH_TIMEOUT_SECONDS=60
+AURORA_SEARCH_SCOPE=sub
+AURORA_LDAP_FILTER=(objectClass=*)
 ```
 
-Authenticated bind requires LDAPS or StartTLS. TLS verification remains strict. `ALLOW_PARTIAL=1` keeps a diagnostic artifact after an error, but completeness becomes conservative.
+Authenticated bind requires LDAPS or StartTLS. TLS verification remains strict. `AURORA_ALLOW_PARTIAL=1` keeps a diagnostic artifact after an error, but completeness becomes conservative.
 
 ### Configuring an OpenLDAP source in the WebUI
 
@@ -279,18 +275,18 @@ bundle and network access to LDAP. For example:
 connection:
   uri: ldaps://crashtests-ldap:636
   base_dn: dc=example,dc=test
-  bind_dn: cn=svc-eare,ou=services,dc=example,dc=test
+  bind_dn: cn=svc-aurora,ou=services,dc=example,dc=test
 credentials:
-  password_env: EARE_LDAP_PASSWORD
+  password_env: AURORA_LDAP_PASSWORD
 ```
 
 The values above are an integration example. Use the actual provider and secret
-for each environment. A running OpenLDAP container alone is not enough; EARE
+for each environment. A running OpenLDAP container alone is not enough; Aurora
 also needs the connector, runtime secret, trusted CA and Docker connectivity.
 
 ### Synchronizing an OpenLDAP source
 
-Click **Synchronize** on the configured source. EARE queues a read-only job that
+Click **Synchronize** on the configured source. Aurora queues a read-only job that
 binds over LDAP, performs a paged search, creates a temporary ZIP/LDIF artifact,
 imports it through the normal importer, stores a new immutable Snapshot and
 deletes the temporary artifact. Synchronization never writes to LDAP.
@@ -388,7 +384,7 @@ Use **Download remediation CSV** to send the actionable list to technical admini
 
 #### 7. Read and distribute the final report
 
-Open **Reports** and choose the closed campaign. Reports is a native EARE
+Open **Reports** and choose the closed campaign. Reports is a native Aurora
 governance workspace, not an embedded standalone document. It presents the
 campaign profile, executive summary, deterministic observations, observed versus
 expected outcomes, review decisions, remediation/action-plan counts, coverage,
@@ -422,8 +418,8 @@ The campaign screen makes the following steps visible:
 1. **Prepare** — choose the scope, immutable observed Snapshot, optional Golden version, pilot and reviewers.
 2. **Review** — reviewers certify each access as Approve, Revoke or Not applicable.
 3. **Close** — once every review is decided, closing freezes the result and stops new decisions.
-4. **Remediate** — closing generates operational actions for administrators. EARE never writes to AD, LDAP, AWS or SaaS providers.
-5. **Report** — the native governance workspace is available in EARE; standalone HTML, PDF, CSV and JSON deliverables can be downloaded or opened separately.
+4. **Remediate** — closing generates operational actions for administrators. Aurora never writes to AD, LDAP, AWS or SaaS providers.
+5. **Report** — the native governance workspace is available in Aurora; standalone HTML, PDF, CSV and JSON deliverables can be downloaded or opened separately.
 6. **Update baseline** — optionally promote decisions to a new immutable Golden version.
 
 Preview is non-persistent: it calculates what would be reviewed. Opening the campaign freezes the Snapshot evidence, materializes ReviewItems, resolves reviewers and captures historical business context. Later synchronizations do not rewrite that campaign.
@@ -434,7 +430,7 @@ Promoting decisions to Golden is also separate from remediation. Promotion chang
 
 Review items include identity, access, expected/observed state, classification, findings, reviewer, decision and comment. Technical and business values from the Snapshot remain unchanged; only interface labels are translated.
 
-EARE exports remediation evidence. It does not apply remediation directly to directories.
+Aurora exports remediation evidence. It does not apply remediation directly to directories.
 
 ## 13. Security Notes
 
@@ -442,7 +438,7 @@ Never put secrets in connector YAML, exports, snapshots, reports, or diagnostics
 
 Collection errors should be treated as incomplete evidence, not proof that access is absent.
 
-EARE improves review reliability by preserving provenance and using conservative behavior for incomplete data.
+Aurora improves review reliability by preserving provenance and using conservative behavior for incomplete data.
 
 
 ## Remediation Exports
@@ -450,10 +446,10 @@ EARE improves review reliability by preserving provenance and using conservative
 After decisions have been recorded, export review-driven remediation actions without changing the provider:
 
 `bash
-eare export revocations --output reports/revocations.csv
+aurora export revocations --output reports/revocations.csv
 `
 
-The export is generated through the existing remediation service. EARE never applies revocations directly to an IDP.
+The export is generated through the existing remediation service. Aurora never applies revocations directly to an IDP.
 
 
 ## Golden Source Creation
@@ -461,9 +457,9 @@ The export is generated through the existing remediation service. EARE never app
 A Golden Source can start empty for a from-scratch review or be created from a CSV reference file:
 
 `bash
-eare golden create baseline
-eare golden create baseline --csv expected-access.csv
-eare golden edit baseline --csv updated-access.csv
+aurora golden create baseline
+aurora golden create baseline --csv expected-access.csv
+aurora golden edit baseline --csv updated-access.csv
 `
 
 CSV files use the columns access_provider, access_name, identity_provider, and identity_identifier. Optional native identifier columns are supported for stable matching. Each CSV operation creates an immutable Golden Source version.
@@ -476,10 +472,10 @@ Golden Source versions can record what an Access is expected to grant as well as
 
 The WebUI language is selected from the current-user menu. Available languages are English, Français, Español, Português, Italiano and العربية. English is used by default and whenever a translation is unavailable. The choice applies immediately and is persisted as a browser UI preference only; business data, technical values and user-entered comments are never translated. Arabic switches the interface to right-to-left layout.
 
-# EARE Guide
+# Aurora Guide
 
-EARE Guide is an optional, deterministic helper available from the authenticated header. It explains what is ready, what is missing, and the next authorized EARE screen for the current role and scope. It is guidance, not authorization: it cannot grant permissions or execute governance actions.
+Aurora Guide is an optional, deterministic helper available from the authenticated header. It explains what is ready, what is missing, and the next authorized Aurora screen for the current role and scope. It is guidance, not authorization: it cannot grant permissions or execute governance actions.
 
 The Guide is role-aware. Administrators are guided toward environment configuration and handing campaign governance to an Operator; Operators are guided through collection, Golden Source preparation, and campaigns; Group owners see their assigned reviews; Business Administrators and Remediation Managers see only authorized operational actions. Source and campaign scope filtering is enforced by the backend.
 
-The first introduction can be skipped, and the Guide can be disabled from its drawer. EARE derives progress from current data rather than storing a wizard step. It never modifies a source system or performs a business decision automatically.
+The first introduction can be skipped, and the Guide can be disabled from its drawer. Aurora derives progress from current data rather than storing a wizard step. It never modifies a source system or performs a business decision automatically.

@@ -5,7 +5,7 @@ ENV_FILE="${ENV_FILE:-.env}"
 if [[ -f "$ENV_FILE" ]]; then
   # The dotenv file supplies defaults; explicit process environment values win.
   declare -A provided_environment=()
-  recognized_variables=(LDAP_URI BASE_DN PROVIDER_NAME BIND_DN LDAP_PASSWORD LDAP_PASSWORD_FILE LDAP_CA_CERT SEARCH_SCOPE LDAP_FILTER START_TLS ALLOW_ANONYMOUS ALLOW_PARTIAL PAGE_SIZE CONNECTION_TIMEOUT_SECONDS SEARCH_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS CHECK_ONLY EXTRA_GROUP_ATTRIBUTES OUTPUT)
+  recognized_variables=(AURORA_LDAP_URI AURORA_BASE_DN AURORA_PROVIDER_NAME AURORA_BIND_DN AURORA_LDAP_PASSWORD AURORA_LDAP_PASSWORD_FILE AURORA_LDAP_CA_CERT AURORA_SEARCH_SCOPE AURORA_LDAP_FILTER AURORA_START_TLS AURORA_ALLOW_ANONYMOUS AURORA_ALLOW_PARTIAL AURORA_PAGE_SIZE AURORA_CONNECTION_TIMEOUT_SECONDS AURORA_SEARCH_TIMEOUT_SECONDS AURORA_COMMAND_TIMEOUT_SECONDS AURORA_CHECK_ONLY AURORA_EXTRA_GROUP_ATTRIBUTES AURORA_OUTPUT)
   for variable_name in "${recognized_variables[@]}"; do
     if [[ ${!variable_name+x} ]]; then
       provided_environment["$variable_name"]="${!variable_name}"
@@ -49,32 +49,32 @@ if [[ -f "$ENV_FILE" ]]; then
   unset provided_environment
 fi
 
-LDAP_URI="${LDAP_URI:-ldap://localhost}"
-BASE_DN="${BASE_DN:?BASE_DN is required}"
-PROVIDER_NAME="${PROVIDER_NAME:-openldap}"
-BIND_DN="${BIND_DN:-}"
-LDAP_PASSWORD="${LDAP_PASSWORD:-}"
-LDAP_PASSWORD_FILE="${LDAP_PASSWORD_FILE:-}"
-LDAP_CA_CERT="${LDAP_CA_CERT:-}"
-SEARCH_SCOPE="${SEARCH_SCOPE:-sub}"
-LDAP_FILTER="${LDAP_FILTER:-(|(objectClass=inetOrgPerson)(objectClass=posixAccount)(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup)(objectClass=pwdPolicy))}"
-START_TLS="${START_TLS:-0}"
-ALLOW_ANONYMOUS="${ALLOW_ANONYMOUS:-0}"
-ALLOW_PARTIAL="${ALLOW_PARTIAL:-0}"
-PAGE_SIZE="${PAGE_SIZE:-1000}"
-CONNECTION_TIMEOUT_SECONDS="${CONNECTION_TIMEOUT_SECONDS:-10}"
-SEARCH_TIMEOUT_SECONDS="${SEARCH_TIMEOUT_SECONDS:-120}"
-COMMAND_TIMEOUT_SECONDS="${COMMAND_TIMEOUT_SECONDS:-180}"
-CHECK_ONLY="${CHECK_ONLY:-0}"
-EXTRA_GROUP_ATTRIBUTES="${EXTRA_GROUP_ATTRIBUTES:-}"
-OUTPUT="${1:-openldap-export.zip}"
-if [[ "$OUTPUT" != /* ]]; then
-  OUTPUT="$PWD/$OUTPUT"
+AURORA_LDAP_URI="${AURORA_LDAP_URI:-ldap://localhost}"
+AURORA_BASE_DN="${AURORA_BASE_DN:?AURORA_BASE_DN is required}"
+AURORA_PROVIDER_NAME="${AURORA_PROVIDER_NAME:-openldap}"
+AURORA_BIND_DN="${AURORA_BIND_DN:-}"
+AURORA_LDAP_PASSWORD="${AURORA_LDAP_PASSWORD:-}"
+AURORA_LDAP_PASSWORD_FILE="${AURORA_LDAP_PASSWORD_FILE:-}"
+AURORA_LDAP_CA_CERT="${AURORA_LDAP_CA_CERT:-}"
+AURORA_SEARCH_SCOPE="${AURORA_SEARCH_SCOPE:-sub}"
+AURORA_LDAP_FILTER="${AURORA_LDAP_FILTER:-(|(objectClass=inetOrgPerson)(objectClass=posixAccount)(objectClass=groupOfNames)(objectClass=groupOfUniqueNames)(objectClass=posixGroup)(objectClass=pwdPolicy))}"
+AURORA_START_TLS="${AURORA_START_TLS:-0}"
+AURORA_ALLOW_ANONYMOUS="${AURORA_ALLOW_ANONYMOUS:-0}"
+AURORA_ALLOW_PARTIAL="${AURORA_ALLOW_PARTIAL:-0}"
+AURORA_PAGE_SIZE="${AURORA_PAGE_SIZE:-1000}"
+AURORA_CONNECTION_TIMEOUT_SECONDS="${AURORA_CONNECTION_TIMEOUT_SECONDS:-10}"
+AURORA_SEARCH_TIMEOUT_SECONDS="${AURORA_SEARCH_TIMEOUT_SECONDS:-120}"
+AURORA_COMMAND_TIMEOUT_SECONDS="${AURORA_COMMAND_TIMEOUT_SECONDS:-180}"
+AURORA_CHECK_ONLY="${AURORA_CHECK_ONLY:-0}"
+AURORA_EXTRA_GROUP_ATTRIBUTES="${AURORA_EXTRA_GROUP_ATTRIBUTES:-}"
+AURORA_OUTPUT="${1:-openldap-export.zip}"
+if [[ "$AURORA_OUTPUT" != /* ]]; then
+  AURORA_OUTPUT="$PWD/$AURORA_OUTPUT"
 fi
 COLLECTOR_VERSION="1"
 LDIF_ATTRIBUTES=(objectClass entryUUID uid cn mail description owner member uniqueMember memberUid pwdMinLength pwdInHistory pwdMinAge pwdMaxAge pwdMaxFailure pwdFailureCountInterval pwdLockout pwdLockoutDuration pwdMustChange pwdAllowUserChange pwdSafeModify pwdPolicySubentry)
 
-IFS=',' read -r -a configured_extra_attributes <<< "$EXTRA_GROUP_ATTRIBUTES"
+IFS=',' read -r -a configured_extra_attributes <<< "$AURORA_EXTRA_GROUP_ATTRIBUTES"
 for attribute in "${configured_extra_attributes[@]}"; do
   [[ -z "$attribute" ]] && continue
   if ! [[ "$attribute" =~ ^[A-Za-z][A-Za-z0-9-]{0,63}$ ]]; then
@@ -96,7 +96,7 @@ for attribute in "${configured_extra_attributes[@]}"; do
   LDIF_ATTRIBUTES+=("$attribute")
 done
 
-for value_name in PAGE_SIZE CONNECTION_TIMEOUT_SECONDS SEARCH_TIMEOUT_SECONDS COMMAND_TIMEOUT_SECONDS; do
+for value_name in AURORA_PAGE_SIZE AURORA_CONNECTION_TIMEOUT_SECONDS AURORA_SEARCH_TIMEOUT_SECONDS AURORA_COMMAND_TIMEOUT_SECONDS; do
   value="${!value_name}"
   if ! [[ "$value" =~ ^[0-9]+$ ]]; then
     echo "$value_name must be a positive integer" >&2
@@ -130,12 +130,12 @@ redact_literal() {
 }
 
 configured_secrets() {
-  if [[ -n "$LDAP_PASSWORD" ]]; then
-    printf '%s\n' "$LDAP_PASSWORD"
+  if [[ -n "$AURORA_LDAP_PASSWORD" ]]; then
+    printf '%s\n' "$AURORA_LDAP_PASSWORD"
   fi
-  if [[ -n "$LDAP_PASSWORD_FILE" && -r "$LDAP_PASSWORD_FILE" ]]; then
+  if [[ -n "$AURORA_LDAP_PASSWORD_FILE" && -r "$AURORA_LDAP_PASSWORD_FILE" ]]; then
     local file_secret
-    file_secret="$(tr -d $'\r\n' < "$LDAP_PASSWORD_FILE")"
+    file_secret="$(tr -d $'\r\n' < "$AURORA_LDAP_PASSWORD_FILE")"
     if [[ -n "$file_secret" ]]; then
       printf '%s\n' "$file_secret"
     fi
@@ -172,57 +172,57 @@ payload_contains_configured_secret() {
   return 1
 }
 
-if [[ "$LDAP_URI" == ldaps://* && "$START_TLS" == "1" ]]; then
-  echo "OpenLDAP export cannot combine ldaps:// with START_TLS=1" >&2
+if [[ "$AURORA_LDAP_URI" == ldaps://* && "$AURORA_START_TLS" == "1" ]]; then
+  echo "OpenLDAP export cannot combine ldaps:// with AURORA_START_TLS=1" >&2
   exit 2
 fi
-if [[ -n "$BIND_DN" && "$LDAP_URI" != ldaps://* && "$START_TLS" != "1" ]]; then
-  echo "Authenticated OpenLDAP export requires ldaps:// or START_TLS=1" >&2
+if [[ -n "$AURORA_BIND_DN" && "$AURORA_LDAP_URI" != ldaps://* && "$AURORA_START_TLS" != "1" ]]; then
+  echo "Authenticated OpenLDAP export requires ldaps:// or AURORA_START_TLS=1" >&2
   exit 2
 fi
-if [[ -z "$BIND_DN" && "$ALLOW_ANONYMOUS" != "1" ]]; then
-  echo "Anonymous OpenLDAP export requires ALLOW_ANONYMOUS=1" >&2
+if [[ -z "$AURORA_BIND_DN" && "$AURORA_ALLOW_ANONYMOUS" != "1" ]]; then
+  echo "Anonymous OpenLDAP export requires AURORA_ALLOW_ANONYMOUS=1" >&2
   exit 2
 fi
-if [[ -n "$BIND_DN" && -z "$LDAP_PASSWORD" && -z "$LDAP_PASSWORD_FILE" ]]; then
-  echo "Authenticated OpenLDAP export requires LDAP_PASSWORD or LDAP_PASSWORD_FILE" >&2
+if [[ -n "$AURORA_BIND_DN" && -z "$AURORA_LDAP_PASSWORD" && -z "$AURORA_LDAP_PASSWORD_FILE" ]]; then
+  echo "Authenticated OpenLDAP export requires AURORA_LDAP_PASSWORD or AURORA_LDAP_PASSWORD_FILE" >&2
   exit 2
 fi
 export LDAPTLS_REQCERT="demand"
 export LDAPTLS_REQSAN="demand"
-if [[ -n "$LDAP_CA_CERT" ]]; then
-  export LDAPTLS_CACERT="$LDAP_CA_CERT"
+if [[ -n "$AURORA_LDAP_CA_CERT" ]]; then
+  export LDAPTLS_CACERT="$AURORA_LDAP_CA_CERT"
 fi
 
 password_file=""
-if [[ -n "$LDAP_PASSWORD" ]]; then
+if [[ -n "$AURORA_LDAP_PASSWORD" ]]; then
   password_file="$tmp/ldap-password"
   umask 077
-  printf '%s' "$LDAP_PASSWORD" > "$password_file"
+  printf '%s' "$AURORA_LDAP_PASSWORD" > "$password_file"
   umask 022
-elif [[ -n "$LDAP_PASSWORD_FILE" ]]; then
-  password_file="$LDAP_PASSWORD_FILE"
+elif [[ -n "$AURORA_LDAP_PASSWORD_FILE" ]]; then
+  password_file="$AURORA_LDAP_PASSWORD_FILE"
 fi
-export -n LDAP_PASSWORD 2>/dev/null || true
+export -n AURORA_LDAP_PASSWORD 2>/dev/null || true
 
-cmd=(ldapsearch -LLL -x -H "$LDAP_URI" -b "$BASE_DN" -s "$SEARCH_SCOPE" -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "$SEARCH_TIMEOUT_SECONDS" -E "pr=${PAGE_SIZE}/noprompt")
-if [[ "$START_TLS" == "1" ]]; then
+cmd=(ldapsearch -LLL -x -H "$AURORA_LDAP_URI" -b "$AURORA_BASE_DN" -s "$AURORA_SEARCH_SCOPE" -o "nettimeout=${AURORA_CONNECTION_TIMEOUT_SECONDS}" -l "$AURORA_SEARCH_TIMEOUT_SECONDS" -E "pr=${AURORA_PAGE_SIZE}/noprompt")
+if [[ "$AURORA_START_TLS" == "1" ]]; then
   cmd+=(-ZZ)
 fi
-if [[ -n "$BIND_DN" ]]; then
-  cmd+=(-D "$BIND_DN" -y "$password_file")
+if [[ -n "$AURORA_BIND_DN" ]]; then
+  cmd+=(-D "$AURORA_BIND_DN" -y "$password_file")
 fi
-cmd+=("$LDAP_FILTER" "${LDIF_ATTRIBUTES[@]}")
+cmd+=("$AURORA_LDAP_FILTER" "${LDIF_ATTRIBUTES[@]}")
 
 runner=()
 if command -v timeout >/dev/null 2>&1; then
-  runner=(timeout --kill-after=5s "${COMMAND_TIMEOUT_SECONDS}s")
+  runner=(timeout --kill-after=5s "${AURORA_COMMAND_TIMEOUT_SECONDS}s")
 fi
 
-if [[ "${CHECK_ONLY}" == "1" ]]; then
-  check_cmd=(ldapsearch -LLL -x -H "${LDAP_URI}" -b "${BASE_DN}" -s base -o "nettimeout=${CONNECTION_TIMEOUT_SECONDS}" -l "${SEARCH_TIMEOUT_SECONDS}")
-  if [[ "${START_TLS}" == "1" ]]; then check_cmd+=(-ZZ); fi
-  if [[ -n "${BIND_DN}" ]]; then check_cmd+=(-D "${BIND_DN}" -y "${password_file}"); fi
+if [[ "${AURORA_CHECK_ONLY}" == "1" ]]; then
+  check_cmd=(ldapsearch -LLL -x -H "${AURORA_LDAP_URI}" -b "${AURORA_BASE_DN}" -s base -o "nettimeout=${AURORA_CONNECTION_TIMEOUT_SECONDS}" -l "${AURORA_SEARCH_TIMEOUT_SECONDS}")
+  if [[ "${AURORA_START_TLS}" == "1" ]]; then check_cmd+=(-ZZ); fi
+  if [[ -n "${AURORA_BIND_DN}" ]]; then check_cmd+=(-D "${AURORA_BIND_DN}" -y "${password_file}"); fi
   check_cmd+=("(objectClass=*)" dn)
   set +e
   "${runner[@]}" "${check_cmd[@]}" >/dev/null 2>"${tmp}/ldapsearch.stderr"
@@ -261,24 +261,24 @@ fi
 cat > "$tmp/manifest.yaml" <<EOF
 schema_version: 1
 source_type: openldap
-provider: $PROVIDER_NAME
+provider: $AURORA_PROVIDER_NAME
 collector_version: $COLLECTOR_VERSION
-base_dn: $BASE_DN
-ldap_uri_scheme: ${LDAP_URI%%://*}
-search_scope: $SEARCH_SCOPE
-filter: $LDAP_FILTER
+base_dn: $AURORA_BASE_DN
+ldap_uri_scheme: ${AURORA_LDAP_URI%%://*}
+search_scope: $AURORA_SEARCH_SCOPE
+filter: $AURORA_LDAP_FILTER
 ldapsearch_exit_code: $ldap_rc
 limited: $limited
 secret_in_authoritative_payload: $secret_in_payload
-connection_timeout_seconds: $CONNECTION_TIMEOUT_SECONDS
-search_timeout_seconds: $SEARCH_TIMEOUT_SECONDS
-command_timeout_seconds: $COMMAND_TIMEOUT_SECONDS
+connection_timeout_seconds: $AURORA_CONNECTION_TIMEOUT_SECONDS
+search_timeout_seconds: $AURORA_SEARCH_TIMEOUT_SECONDS
+command_timeout_seconds: $AURORA_COMMAND_TIMEOUT_SECONDS
 completeness: $completeness
 scope:
   type: all
-  base_dn: $BASE_DN
-  search_scope: $SEARCH_SCOPE
-  filter: $LDAP_FILTER
+  base_dn: $AURORA_BASE_DN
+  search_scope: $AURORA_SEARCH_SCOPE
+  filter: $AURORA_LDAP_FILTER
   completeness: $completeness
 statistics:
   collection_errors: $collection_errors
@@ -291,22 +291,22 @@ if [[ "$collection_errors" -ne 0 ]]; then
 ' ' ' < "$tmp/ldapsearch.stderr")"
     msg="$(redact_text "$msg")"
     if [[ "$secret_in_payload" -ne 0 ]]; then
-      msg="${msg:+$msg }configured connection secret appeared in authoritative LDAP payload; export rejected without redacting collected data"
+      msg="${msg:+$msg }configured connection secret appaurorad in authoritative LDAP payload; export rejected without redacting collected data"
     fi
-    echo "directory,$BASE_DN,,ldapsearch,$ldap_rc,${msg//,/;}"
+    echo "directory,$AURORA_BASE_DN,,ldapsearch,$ldap_rc,${msg//,/;}"
   } > "$tmp/collection-errors.csv"
 else
   echo 'ObjectType,ObjectIdentifier,ObjectSID,Operation,ErrorCode,ErrorMessage' > "$tmp/collection-errors.csv"
 fi
 
 if [[ "$secret_in_payload" -ne 0 ]]; then
-  echo "OpenLDAP collection rejected: configured connection secret appeared in authoritative LDAP payload. No export ZIP was written." >&2
+  echo "OpenLDAP collection rejected: configured connection secret appaurorad in authoritative LDAP payload. No export ZIP was written." >&2
   exit 1
 fi
 
-if [[ "$collection_errors" -ne 0 && "$ALLOW_PARTIAL" != "1" ]]; then
-  echo "OpenLDAP collection failed or was limited. Re-run with ALLOW_PARTIAL=1 to keep a diagnostic ZIP marked completeness: unknown." >&2
+if [[ "$collection_errors" -ne 0 && "$AURORA_ALLOW_PARTIAL" != "1" ]]; then
+  echo "OpenLDAP collection failed or was limited. Re-run with AURORA_ALLOW_PARTIAL=1 to keep a diagnostic ZIP marked completeness: unknown." >&2
   exit 1
 fi
 
-(cd "$tmp" && zip -q "$OUTPUT" manifest.yaml directory.ldif collection-errors.csv)
+(cd "$tmp" && zip -q "$AURORA_OUTPUT" manifest.yaml directory.ldif collection-errors.csv)

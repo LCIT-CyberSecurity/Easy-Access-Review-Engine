@@ -5,8 +5,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from access_review_engine.domain import IdentityStatus, IdentityType
-from access_review_engine.importers.ad import import_ad_zip
+from aurora.domain import IdentityStatus, IdentityType
+from aurora.importers.ad import import_ad_zip
 from ad_test_helpers import zip_fixture
 
 

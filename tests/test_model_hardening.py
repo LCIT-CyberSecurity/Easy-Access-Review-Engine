@@ -3,8 +3,8 @@ from __future__ import annotations
 import copy
 
 
-from access_review_engine.application import _reconcile_accesses
-from access_review_engine.domain import (
+from aurora.application import _reconcile_accesses
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -14,8 +14,8 @@ from access_review_engine.domain import (
     Permission,
     Target,
 )
-from access_review_engine.services import calculate_effective_accesses
-from access_review_engine.storage import Repository, hydrate_access
+from aurora.services import calculate_effective_accesses
+from aurora.storage import Repository, hydrate_access
 
 
 def _access(

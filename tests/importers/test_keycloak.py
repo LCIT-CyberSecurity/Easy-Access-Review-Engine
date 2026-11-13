@@ -8,15 +8,15 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import yaml
 
 import pytest
-from access_review_engine.application import import_file_to_repository, persist_import_result
-from access_review_engine.domain import PermissionCapabilityMapping, Provenance
-from access_review_engine.importers.keycloak import import_keycloak_zip
-from access_review_engine.services import (
+from aurora.application import import_file_to_repository, persist_import_result
+from aurora.domain import PermissionCapabilityMapping, Provenance
+from aurora.importers.keycloak import import_keycloak_zip
+from aurora.services import (
     calculate_effective_accesses,
     create_golden_source,
     promote_snapshot,
 )
-from access_review_engine.storage import Repository, hydrate_functional_model, hydrate_snapshot
+from aurora.storage import Repository, hydrate_functional_model, hydrate_snapshot
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "keycloak"
 
@@ -1154,7 +1154,7 @@ def test_archive_bounds_reject_oversized_record(tmp_path: Path) -> None:
 
 
 def test_keycloak_artifact_persists_and_scoped_replay_does_not_delete(tmp_path: Path) -> None:
-    db = tmp_path / "eare.db"
+    db = tmp_path / "aurora.db"
     full = _artifact(tmp_path)
     with Repository(db) as repo:
         import_file_to_repository(repo, full)

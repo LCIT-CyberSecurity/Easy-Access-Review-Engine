@@ -3,15 +3,15 @@ from __future__ import annotations
 import sqlite3
 
 import pytest
-from access_review_engine.chatbot.config import ChatbotConfig
-from access_review_engine.chatbot.guardrails import (
+from aurora.chatbot.config import ChatbotConfig
+from aurora.chatbot.guardrails import (
     GuardrailPolicy,
     apply_policy,
     load_policy,
     save_policy,
     validate_policy,
 )
-from access_review_engine.system_admin import init_system
+from aurora.system_admin import init_system
 
 
 def test_guardrail_defaults_lock_fundamental_controls_and_apply_bounds() -> None:
@@ -54,7 +54,7 @@ def test_disabled_domain_is_rejected_before_provider_use() -> None:
     payload = GuardrailPolicy.defaults().as_dict()
     payload["domains"]["authentication"] = False
     policy = validate_policy(payload)
-    assert policy.allows("EARE_ACCESS_GUIDANCE", "Quelle durée de session admin ?") == (
+    assert policy.allows("AURORA_ACCESS_GUIDANCE", "Quelle durée de session admin ?") == (
         False,
         "domain_disabled:authentication",
     )
@@ -64,7 +64,7 @@ def test_external_guidance_domain_is_not_publisher_specific() -> None:
     payload = GuardrailPolicy.defaults().as_dict()
     payload["domains"]["external_guidance"] = False
     policy = validate_policy(payload)
-    assert policy.allows("EARE_ACCESS_GUIDANCE", "Que recommande CISA sur IAM ?") == (
+    assert policy.allows("AURORA_ACCESS_GUIDANCE", "Que recommande CISA sur IAM ?") == (
         True,
         "allowed",
     )

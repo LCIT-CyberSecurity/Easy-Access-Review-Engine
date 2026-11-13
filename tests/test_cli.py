@@ -6,24 +6,24 @@ from unittest.mock import patch
 
 import pytest
 
-from access_review_engine.cli.config_loader import ConfigError, load_connector, secret_environment, template, validate_connector
-from access_review_engine.cli.main import main, parser
-from access_review_engine.cli.menu import run_global_menu
-from access_review_engine.cli.runner import RunnerResult, build_command
+from aurora.cli.config_loader import ConfigError, load_connector, secret_environment, template, validate_connector
+from aurora.cli.main import main, parser
+from aurora.cli.menu import run_global_menu
+from aurora.cli.runner import RunnerResult, build_command
 
 
 def test_connector_validation_and_secret_indirection() -> None:
     data = template("corp-ad", "active_directory")
     data["connection"]["server"] = "dc01.example.test"
-    data["credentials"] = {"password_env": "EARE_TEST_PASSWORD"}
+    data["credentials"] = {"password_env": "AURORA_TEST_PASSWORD"}
     validate_connector(data, "corp-ad")
-    with patch.dict(os.environ, {"EARE_TEST_PASSWORD": "never-print"}):
+    with patch.dict(os.environ, {"AURORA_TEST_PASSWORD": "never-print"}):
         assert secret_environment(data)["password"] == "never-print"
 
 
 def test_system_password_reset_uses_hidden_confirmation_and_updates_database(tmp_path: Path) -> None:
-    db = tmp_path / "access-review.db"
-    from access_review_engine.system_admin import init_system, upsert_user
+    db = tmp_path / "aurora.db"
+    from aurora.system_admin import init_system, upsert_user
     import sqlite3
 
     with sqlite3.connect(db) as conn:
@@ -31,10 +31,10 @@ def test_system_password_reset_uses_hidden_confirmation_and_updates_database(tmp
         init_system(conn)
         upsert_user(conn, {"username": "admin", "role": "ADMIN", "password": "old-secure-password"})
 
-    with patch("access_review_engine.cli.main.getpass.getpass", side_effect=["new-secure-password", "new-secure-password"]):
+    with patch("aurora.cli.main.getpass.getpass", side_effect=["new-secure-password", "new-secure-password"]):
         assert main(["--db", str(db), "system", "reset-password", "admin"]) == 0
 
-    from access_review_engine.system_admin import authenticate_user
+    from aurora.system_admin import authenticate_user
     with sqlite3.connect(db) as conn:
         conn.row_factory = sqlite3.Row
         assert authenticate_user(conn, "admin", "new-secure-password") is not None
@@ -73,7 +73,7 @@ def test_exporter_commands_use_existing_collectors_without_secret_arguments(tmp_
     ldap["connection"]["base_dn"] = "dc=example,dc=com"
     ldap_command, env = build_command(ldap, tmp_path / "ldap.zip", tmp_path)
     assert ldap_command[0] == "bash"
-    assert env["BASE_DN"] == "dc=example,dc=com"
+    assert env["AURORA_BASE_DN"] == "dc=example,dc=com"
 
 
 def test_exporter_check_only_flags_are_native(tmp_path: Path) -> None:
@@ -87,7 +87,7 @@ def test_exporter_check_only_flags_are_native(tmp_path: Path) -> None:
     ldap["connection"]["base_dn"] = "dc=example,dc=com"
     ldap["_check_only"] = True
     _, ldap_env = build_command(ldap, tmp_path / "check.zip", tmp_path)
-    assert ldap_env["CHECK_ONLY"] == "1"
+    assert ldap_env["AURORA_CHECK_ONLY"] == "1"
 
 
 def test_config_check_does_not_create_database(tmp_path: Path) -> None:
@@ -101,7 +101,7 @@ def test_config_check_does_not_create_database(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert main(["config", "check", "corp-ad"]) == 0
-    assert not (tmp_path / "access-review.db").exists()
+    assert not (tmp_path / "aurora.db").exists()
     os.chdir(old)
 
 
@@ -146,7 +146,7 @@ def test_provider_check_all_is_sequential_and_continues(tmp_path: Path) -> None:
             encoding="utf-8",
         )
     with patch(
-        "access_review_engine.cli.main.run_exporter",
+        "aurora.cli.main.run_exporter",
         side_effect=lambda config, output: RunnerResult([], Path(output), 0, "", ""),
     ) as exporter:
         assert main(["provider", "check", "--all"]) == 0
@@ -156,7 +156,7 @@ def test_provider_check_all_is_sequential_and_continues(tmp_path: Path) -> None:
 
 def test_golden_source_can_start_from_csv(tmp_path: Path) -> None:
     import os
-    from access_review_engine.storage import Repository
+    from aurora.storage import Repository
     csv_path = tmp_path / "golden.csv"
     csv_path.write_text(
         "access_provider,access_name,identity_provider,identity_identifier\n"
@@ -166,7 +166,7 @@ def test_golden_source_can_start_from_csv(tmp_path: Path) -> None:
     old = Path.cwd()
     os.chdir(tmp_path)
     assert main(["golden", "create", "baseline", "--csv", str(csv_path)]) == 0
-    repo = Repository(tmp_path / "access-review.db")
+    repo = Repository(tmp_path / "aurora.db")
     try:
         versions = repo.list_payloads("golden_source_versions")
         assert len(versions) == 1
@@ -232,7 +232,7 @@ def test_provider_all_output_is_directory_and_does_not_overwrite(tmp_path: Path)
             Path(output).write_text(str(config["provider"]), encoding="utf-8")
             return RunnerResult([], Path(output), 0, "", "")
 
-        with patch("access_review_engine.cli.main.run_exporter", side_effect=fake_exporter):
+        with patch("aurora.cli.main.run_exporter", side_effect=fake_exporter):
             assert main(["provider", "collect", "--all", "--output", "exports"]) == 0
         assert (tmp_path / "exports" / "one-export.zip").read_text(encoding="utf-8") == "one"
         assert (tmp_path / "exports" / "two-export.zip").read_text(encoding="utf-8") == "two"
@@ -242,7 +242,7 @@ def test_provider_all_output_is_directory_and_does_not_overwrite(tmp_path: Path)
 
 def test_exporter_command_resolves_collectors_outside_repo_cwd(tmp_path: Path) -> None:
     import os
-    from access_review_engine.cli.runner import build_command
+    from aurora.cli.runner import build_command
     old = Path.cwd()
     os.chdir(tmp_path)
     try:
@@ -258,7 +258,7 @@ def test_exporter_command_resolves_collectors_outside_repo_cwd(tmp_path: Path) -
 def test_golden_promote_sets_active_version(tmp_path: Path) -> None:
     import os
     from ad_test_helpers import zip_fixture
-    from access_review_engine.storage import Repository
+    from aurora.storage import Repository
     old = Path.cwd()
     root = Path(__file__).parent.parent
     os.chdir(root)
@@ -283,7 +283,7 @@ def test_golden_promote_sets_active_version(tmp_path: Path) -> None:
 
 def test_golden_edit_creates_new_version_without_mutating_history(tmp_path: Path) -> None:
     import os
-    from access_review_engine.storage import Repository
+    from aurora.storage import Repository
     csv_path = tmp_path / "golden.csv"
     csv_path.write_text(
         "access_provider,access_name,identity_provider,identity_identifier\n"
@@ -297,7 +297,7 @@ def test_golden_edit_creates_new_version_without_mutating_history(tmp_path: Path
         answers = ["a", "corp-ad", "HR", "corp-ad", "bob", "member", "", "", "s"]
         with patch("builtins.input", side_effect=answers):
             assert main(["golden", "edit", "baseline"]) == 0
-        repo = Repository(tmp_path / "access-review.db")
+        repo = Repository(tmp_path / "aurora.db")
         try:
             versions = sorted(repo.list_payloads("golden_source_versions"), key=lambda item: item["version"])
             source = repo.find_by_name("golden_sources", "baseline")
@@ -314,7 +314,7 @@ def test_golden_edit_creates_new_version_without_mutating_history(tmp_path: Path
 def test_campaign_decide_and_exports_use_selected_campaign_and_timestamped_names(tmp_path: Path) -> None:
     import os
     from ad_test_helpers import zip_fixture
-    from access_review_engine.storage import Repository
+    from aurora.storage import Repository
     old = Path.cwd()
     root = Path(__file__).parent.parent
     os.chdir(root)
@@ -362,7 +362,7 @@ def test_global_menu_delegates_covered_operations_without_name_error() -> None:
             calls.append(namespace)
             return 0
 
-        with patch("builtins.input", side_effect=inputs), patch("access_review_engine.cli.main.dispatch", side_effect=fake_dispatch):
+        with patch("builtins.input", side_effect=inputs), patch("aurora.cli.main.dispatch", side_effect=fake_dispatch):
             assert run_global_menu() == 0
         assert calls
         assert getattr(calls[0], "command") == expected[0]
@@ -371,9 +371,9 @@ def test_global_menu_delegates_covered_operations_without_name_error() -> None:
 
 
 def test_object_deltas_reports_updates_renames_disabled_and_deleted(tmp_path: Path) -> None:
-    from access_review_engine.cli.main import object_deltas
-    from access_review_engine.domain import Identity, IdentityStatus, IdentityType
-    from access_review_engine.storage import Repository
+    from aurora.cli.main import object_deltas
+    from aurora.domain import Identity, IdentityStatus, IdentityType
+    from aurora.storage import Repository
     before = tmp_path / "before.db"
     after = tmp_path / "after.db"
     original = Identity("corp-ad", "alice", IdentityType.USER_ACCOUNT, IdentityStatus.ACTIVE, native_id="sid-1", id="same")

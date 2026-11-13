@@ -1,6 +1,6 @@
 # CrashTests-AD
 
-`CrashTests-AD` validates EARE against a real Active Directory Domain Services environment.
+`CrashTests-AD` validates Aurora against a real Active Directory Domain Services environment.
 
 Current target, verified against Microsoft documentation:
 
@@ -25,7 +25,7 @@ The suite is separate from `CrashTests-CRM`. It validates AD-specific behavior:
 - nested group membership;
 - authoritative, scoped and unknown collections.
 
-The collected data must still enter EARE through the generic model: Provider, Identity, Access,
+The collected data must still enter Aurora through the generic model: Provider, Identity, Access,
 AccessAssignment, AccessRelation, Origin, Golden Source, snapshots and campaigns.
 
 ## Commands
@@ -44,9 +44,9 @@ and remoting configured, or directly on the Windows integration VM.
 To trigger a real AD export before pytest:
 
 ```bash
-EARE_AD_UAT_EXPORT=1 \
-EARE_AD_UAT_PROVIDER=crashtests-ad \
-EARE_AD_UAT_HOST=<integration_vm> \
+AURORA_AD_UAT_EXPORT=1 \
+AURORA_AD_UAT_PROVIDER=crashtests-ad \
+AURORA_AD_UAT_HOST=<integration_vm> \
 tests/UAT/CrashTests-AD/Run_CrashTests-AD.sh
 ```
 
@@ -72,7 +72,7 @@ Remote execution example:
 
 ```bash
 ssh vm-integrations \
-  'cd ~/Easy-Access-Review-Engine && tests/UAT/CrashTests-AD/Run_CrashTests-AD.sh'
+  'cd ~/Aurora && tests/UAT/CrashTests-AD/Run_CrashTests-AD.sh'
 ```
 
 ## Environment Contract
@@ -87,10 +87,10 @@ Execution model:
 Linux repository host
   -> Run_CrashTests-AD.sh
   -> pytest
-  -> tests/UAT/CrashTests-AD/powershell/Export-CrashTestsAD.ps1 when EARE_AD_UAT_EXPORT=1
+  -> tests/UAT/CrashTests-AD/powershell/Export-CrashTestsAD.ps1 when AURORA_AD_UAT_EXPORT=1
   -> pwsh / Windows integration VM
   -> AD export archive
-  -> generic EARE import and review
+  -> generic Aurora import and review
 ```
 
 Do not try to run Bash on the domain controller. The Windows-side implementation belongs in
@@ -99,8 +99,8 @@ PowerShell scripts or remote PowerShell commands.
 Use generic environment variables in local automation if needed:
 
 ```text
-EARE_AD_UAT_HOST
-EARE_AD_UAT_DOMAIN
+AURORA_AD_UAT_HOST
+AURORA_AD_UAT_DOMAIN
 ```
 
 Do not commit their values.
@@ -114,4 +114,4 @@ tests/UAT/CrashTests-AD/artifacts/
 ```
 
 Expected files include `pytest.xml`, `ad-environment.json`, `ad-export.zip`, `observed.json`,
-`snapshot.json`, `findings.json`, `eare.stdout.log` and `eare.stderr.log`.
+`snapshot.json`, `findings.json`, `aurora.stdout.log` and `aurora.stderr.log`.

@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: eare-crashtests-openldap:debian13-slim
-    container_name: eare-crashtests-openldap
+    image: aurora-crashtests-openldap:debian13-slim
+    container_name: aurora-crashtests-openldap
     network_mode: none
     ulimits:
       nofile:

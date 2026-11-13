@@ -1,18 +1,18 @@
-# EARE Current Implementation Specification
+# Aurora Current Implementation Specification
 
 **Status:** current implementation and integration-test specification
 **Date:** 2026-09-25
-**Branch:** `feat/eare-guided-assistant`
+**Branch:** `feat/aurora-guided-assistant`
 
-This document records the behavior that must remain true for the current EARE
-WebUI, API, OpenLDAP integration, Golden V2 editor, EARE Guide and Reports
+This document records the behavior that must remain true for the current Aurora
+WebUI, API, OpenLDAP integration, Golden V2 editor, Aurora Guide and Reports
 workspace. It complements the provider-neutral model specification and the
 Golden V2 specification; it does not replace `domain.py` or redefine any stable
 domain key.
 
 ## 1. Scope and non-goals
 
-EARE collects observed evidence, stores immutable Snapshots, compares
+Aurora collects observed evidence, stores immutable Snapshots, compares
 observations with an expected Golden Source, runs campaigns, records review
 decisions, creates remediation actions and presents governance evidence.
 
@@ -32,9 +32,9 @@ The supported Docker topology is:
 
 ```text
 browser :4173
-    -> eare-webui (Nginx static WebUI and /api proxy)
-    -> eare-api :8000
-       -> SQLite /data/access-review.db
+    -> aurora-webui (Nginx static WebUI and /api proxy)
+    -> aurora-api :8000
+       -> SQLite /data/aurora.db
        -> read-only collector/exporter
        -> OpenLDAP over LDAPS or StartTLS
 ```
@@ -58,7 +58,7 @@ type: openldap
 connection:
   uri: ldaps://crashtests-ldap:636
   base_dn: dc=example,dc=test
-  bind_dn: cn=svc-eare,ou=services,dc=example,dc=test
+  bind_dn: cn=svc-aurora,ou=services,dc=example,dc=test
 collection:
   search_scope: sub
   page_size: 1000
@@ -67,7 +67,7 @@ collection:
   command_timeout: 180
   allow_partial: false
 credentials:
-  password_env: EARE_LDAP_PASSWORD
+  password_env: AURORA_LDAP_PASSWORD
 ```
 
 These values are an integration example, not production credentials. The
@@ -161,7 +161,7 @@ descendant version is created.
 
 ## 8. Reports workspace contract
 
-Reports is a native EARE governance/restitution screen. It reads existing
+Reports is a native Aurora governance/restitution screen. It reads existing
 campaign-results and remediation APIs and contains:
 
 - campaign selector and campaign profile;
@@ -207,4 +207,4 @@ The implementation is conformant only when the following are checked:
   current provider content is in Operator scope;
 - Reports contains native restitution sections and no embedded report;
 - HTML, PDF, CSV and JSON standalone exports remain available;
-- `src/access_review_engine/domain.py` remains unchanged.
+- `src/aurora/domain.py` remains unchanged.

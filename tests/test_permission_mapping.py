@@ -1,5 +1,5 @@
-from access_review_engine.domain import PermissionCapabilityMapping
-from access_review_engine.services import map_native_permission
+from aurora.domain import PermissionCapabilityMapping
+from aurora.services import map_native_permission
 
 
 def test_mapping_is_explicit_provider_scoped_and_many_to_many_without_rewriting_native_values() -> (

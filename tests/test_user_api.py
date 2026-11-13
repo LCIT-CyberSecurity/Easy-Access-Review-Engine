@@ -7,11 +7,11 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from access_review_engine.api import create_app
-from access_review_engine.domain import GoldenSourceAssignment, Provider
-from access_review_engine.services import create_golden_source, create_golden_version, create_snapshot
-from access_review_engine.storage import Repository
-from access_review_engine.system_admin import external_user_api_enabled, init_system, set_external_user_api_enabled, upsert_user
+from aurora.api import create_app
+from aurora.domain import GoldenSourceAssignment, Provider
+from aurora.services import create_golden_source, create_golden_version, create_snapshot
+from aurora.storage import Repository
+from aurora.system_admin import external_user_api_enabled, init_system, set_external_user_api_enabled, upsert_user
 
 
 def _setup(tmp_path: Path) -> tuple[TestClient, Path]:
@@ -51,7 +51,7 @@ def _issue_key(client: TestClient) -> str:
 def test_api_key_is_hash_only_rotatable_and_never_authenticates_internal_routes(tmp_path):
     client, db = _setup(tmp_path)
     key_a = _issue_key(client)
-    assert key_a.startswith("eare_pat_")
+    assert key_a.startswith("aurora_pat_")
     status = client.get("/api/me/api-token").json()
     assert status["api_access_enabled"] is True
     assert status["external_user_api_enabled"] is True
@@ -242,7 +242,7 @@ def test_group_owner_and_business_admin_keep_existing_read_boundaries(tmp_path):
             repo.upsert("review_items", {
                 "id": review_id, "campaign_id": "owner-campaign", "identity_provider": "ad-france",
                 "identity_identifier": identity, "access_provider": "ad-france", "access_name": "staff",
-                "reviewer": {"provider": "eare", "identity": reviewer}, "findings": [],
+                "reviewer": {"provider": "aurora", "identity": reviewer}, "findings": [],
             })
     owner = TestClient(client.app)
     owner_key = _issue_key_as(owner, "reviewer", "reviewer-password")
@@ -392,7 +392,7 @@ def test_historical_all_scope_api_requires_snapshot_and_review_item_domains(tmp_
         assert api.get(f"/api/v1/campaigns/all-{status}", headers=headers).status_code == 200
 
 
-def test_disabling_eare_account_revokes_its_api_key(tmp_path):
+def test_disabling_aurora_account_revokes_its_api_key(tmp_path):
     client, _ = _setup(tmp_path)
     _login(client, "admin", "administrator-password")
     operator = TestClient(client.app)

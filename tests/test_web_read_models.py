@@ -1,7 +1,7 @@
 from dataclasses import asdict
 import sqlite3
 
-from access_review_engine.domain import (
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -12,9 +12,9 @@ from access_review_engine.domain import (
     Origin,
     Provider,
 )
-from access_review_engine.services import create_snapshot
-from access_review_engine.storage import Repository
-from access_review_engine.web_read_models import projected_rows, review_item_view
+from aurora.services import create_snapshot
+from aurora.storage import Repository
+from aurora.web_read_models import projected_rows, review_item_view
 
 
 def test_review_item_view_joins_latest_decision_without_mutating_review_item(tmp_path):
@@ -285,9 +285,9 @@ def test_identity_type_can_be_used_as_status_filter(tmp_path):
 
 def test_hydrated_identity_owner_is_usable_by_the_comparison():
     """A stored account owner must come back as an OwnerRef, or campaign preview crashes."""
-    from access_review_engine.domain import Identity, OwnerRef
-    from access_review_engine.services import owner_findings
-    from access_review_engine.storage import hydrate_identity
+    from aurora.domain import Identity, OwnerRef
+    from aurora.services import owner_findings
+    from aurora.storage import hydrate_identity
 
     stored = {
         "provider": "corp", "identifier": "svc-erp", "type": "technical_account", "status": "active",
@@ -329,8 +329,8 @@ def test_rows_can_be_sorted_on_a_column_with_empty_values_last(tmp_path):
 
 
 def test_scoped_campaign_and_review_projections_hide_disallowed_campaigns(tmp_path):
-    from access_review_engine.storage import Repository
-    from access_review_engine.web_read_models import projected_rows
+    from aurora.storage import Repository
+    from aurora.web_read_models import projected_rows
 
     db = tmp_path / "campaign-page-scope.db"
     with Repository(db) as repo:
@@ -359,8 +359,8 @@ def test_scoped_campaign_and_review_projections_hide_disallowed_campaigns(tmp_pa
 
 
 def test_operator_provider_projection_sanitizes_snapshots_and_filters_accesses(tmp_path):
-    from access_review_engine.storage import Repository
-    from access_review_engine.web_read_models import projected_rows
+    from aurora.storage import Repository
+    from aurora.web_read_models import projected_rows
 
     db = tmp_path / "provider-page-scope.db"
     with Repository(db) as repo:

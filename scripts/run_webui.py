@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from access_review_engine.api import create_app
+from aurora.api import create_app
 
 
 class SpaFallbackMiddleware(BaseHTTPMiddleware):
@@ -33,8 +33,8 @@ def build_app(db_path: str, dist_path: str = "web/dist"):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Serve the EARE API and WebUI")
-    parser.add_argument("--db", default="access-review.db")
+    parser = argparse.ArgumentParser(description="Serve the Aurora API and WebUI")
+    parser.add_argument("--db", default="aurora.db")
     parser.add_argument("--dist", default="web/dist")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)

@@ -23,8 +23,8 @@ def main() -> int:
     parser.add_argument("--allow-production-looking-target", action="store_true")
     args = parser.parse_args()
     spec = yaml.safe_load(Path(args.spec).read_text(encoding="utf-8")) or {}
-    if args.marker != "EARE-GOOGLE-LAB":
-        raise SystemExit("Refusing: --marker must be EARE-GOOGLE-LAB")
+    if args.marker != "Aurora-GOOGLE-LAB":
+        raise SystemExit("Refusing: --marker must be Aurora-GOOGLE-LAB")
     if not args.allow_production_looking_target and (args.customer_id or args.project):
         target = f"{args.customer_id or ''} {args.project or ''}".casefold()
         if any(word in target for word in ("prod", "production", "live")):

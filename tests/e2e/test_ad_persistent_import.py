@@ -4,16 +4,16 @@ import csv
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from access_review_engine.application import import_file_to_repository, persist_import_result
-from access_review_engine.domain import (
+from aurora.application import import_file_to_repository, persist_import_result
+from aurora.domain import (
     Finding,
     GoldenSourceAssignment,
     IdentityStatus,
     Snapshot,
 )
-from access_review_engine.importers.ad import import_ad_zip
-from access_review_engine.services import create_golden_source, create_golden_version, promote_snapshot
-from access_review_engine.storage import Repository
+from aurora.importers.ad import import_ad_zip
+from aurora.services import create_golden_source, create_golden_version, promote_snapshot
+from aurora.storage import Repository
 from ad_test_helpers import zip_fixture
 
 

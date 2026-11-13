@@ -11,9 +11,9 @@ try:
 except ModuleNotFoundError:
     TestClient = None
 
-from access_review_engine.api import create_app
-from access_review_engine.access_context import save_access_enrichment
-from access_review_engine.domain import (
+from aurora.api import create_app
+from aurora.access_context import save_access_enrichment
+from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
@@ -29,9 +29,9 @@ from access_review_engine.domain import (
     Permission,
     Provider,
 )
-from access_review_engine.services import create_golden_source, create_golden_version, create_snapshot
-from access_review_engine.storage import Repository
-from access_review_engine.system_admin import init_system, upsert_user
+from aurora.services import create_golden_source, create_golden_version, create_snapshot
+from aurora.storage import Repository
+from aurora.system_admin import init_system, upsert_user
 
 
 def _seed(db: Path) -> None:
@@ -54,7 +54,7 @@ def _seed(db: Path) -> None:
 
 
 def _client() -> TestClient:
-    db = Path(tempfile.mkstemp(prefix="eare-api-", suffix=".db")[1])
+    db = Path(tempfile.mkstemp(prefix="aurora-api-", suffix=".db")[1])
     app = create_app(str(db))
     conn = sqlite3.connect(db)
     conn.row_factory = sqlite3.Row
@@ -136,9 +136,9 @@ if TestClient is not None:
         assert response.json()["detail"] == "Too many login attempts"
 
     def test_explicit_session_secret_rejects_placeholders(monkeypatch):
-        monkeypatch.setenv("EARE_SESSION_SECRET", "changeme")
+        monkeypatch.setenv("AURORA_SESSION_SECRET", "changeme")
         with pytest.raises(RuntimeError):
-            create_app(str(Path(tempfile.mkstemp(prefix="eare-secret-", suffix=".db")[1])))
+            create_app(str(Path(tempfile.mkstemp(prefix="aurora-secret-", suffix=".db")[1])))
 
     def test_forbidden_roles_cannot_bypass_dashboard_or_campaign_api():
         client = _client()
@@ -219,7 +219,7 @@ if TestClient is not None:
         conn.close()
         client = TestClient(app)
         _login(client, "source-admin", "admin-password")
-        payload = {"provider": "corp-ad", "type": "active_directory", "connection": {"server": "dc01.example.test"}, "collection": {"timeout": 60, "allow_partial": False}, "credentials": {"password_env": "LDAP_PASSWORD"}}
+        payload = {"provider": "corp-ad", "type": "active_directory", "connection": {"server": "dc01.example.test"}, "collection": {"timeout": 60, "allow_partial": False}, "credentials": {"password_env": "AURORA_LDAP_PASSWORD"}}
         saved = client.post("/api/system/sources", json=payload)
         assert saved.status_code == 200
         assert client.get("/api/system/sources").json()["sources"][0]["provider"] == "corp-ad"
@@ -234,7 +234,7 @@ if TestClient is not None:
 
 
     def test_campaign_promotion_rejects_missing_golden_reference_when_multiple_sources_exist():
-        db = Path(tempfile.mkstemp(prefix="eare-promotion-", suffix=".db")[1])
+        db = Path(tempfile.mkstemp(prefix="aurora-promotion-", suffix=".db")[1])
         app = create_app(str(db))
         conn = sqlite3.connect(db)
         conn.row_factory = sqlite3.Row
@@ -591,7 +591,7 @@ if TestClient is not None:
                     "identity_status": "active", "control_object": {}, "permission": {},
                     "target": None, "description": None, "origin": None,
                     "expected": True, "observed": True, "classification": "match",
-                    "reviewer": {"provider": "eare", "identity": reviewer} if reviewer else None,
+                    "reviewer": {"provider": "aurora", "identity": reviewer} if reviewer else None,
                     "findings": [],
                 })
 
