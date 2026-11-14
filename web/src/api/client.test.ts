@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { getGuidance, getJson, getRows, postDecision } from "./client";
+import { getGuidance, getJson, getRows, login, postDecision } from "./client";
 
 describe("API client", () => {
   it("does not fabricate data when the API is unavailable", async () => {
@@ -21,6 +21,23 @@ describe("API client", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ value: "approve", comment: "Reviewed" }),
+      }),
+    );
+  });
+
+  it("sends the selected authentication method with credentials", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ username: "alice", role: "OPERATOR" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await login("alice", "test-password", "directory");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/login",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ username: "alice", password: "test-password", authentication_method: "directory" }),
       }),
     );
   });

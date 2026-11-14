@@ -589,8 +589,10 @@ function takeSignedOut(): boolean {
 function Login() {
   const c = useQueryClient(),
     sso = useQuery({ queryKey: ["public-oidc-login"], queryFn: () => getJson("auth/oidc/config"), retry: false }),
+    methods = useQuery({ queryKey: ["public-auth-methods"], queryFn: () => getJson("auth/methods"), retry: false }),
     [u, setU] = useState(""),
     [p, setP] = useState(""),
+    [localSignIn, setLocalSignIn] = useState(false),
     [visible, setVisible] = useState(false),
     [signedOut, setSignedOut] = useState(takeSignedOut),
     [e, setE] = useState("");
@@ -602,31 +604,37 @@ function Login() {
       sso_account_disabled: "This Aurora account is disabled. Contact an administrator.",
       sso_account_not_authorized: "This Aurora account is not authorized to access the application.",
       sso_provider_changed: "The SSO provider changed during sign-in. Start again.",
-      sso_not_configured: "Single sign-on is not configured. Use local sign-in or contact an administrator.",
+      sso_not_configured: "Single sign-on is not configured. Use another sign-in method or contact an administrator.",
       sso_configuration: "The SSO client secret is not available to Aurora. Contact an administrator.",
-      sso_unavailable: "The identity provider is unavailable. You can still sign in locally.",
-      sso_authentication_failed: "SSO sign-in failed. Try again or use local sign-in.",
+      sso_unavailable: "The identity provider is unavailable. Use another sign-in method below.",
+      sso_authentication_failed: "SSO sign-in failed. Try again or use another sign-in method below.",
       invalid_sso_response: "The SSO response is invalid or expired. Start sign-in again.",
     };
-    setE(messages[reason] || "SSO sign-in failed. You can still sign in locally.");
+    setE(messages[reason] || "SSO sign-in failed. Use another sign-in method below.");
     window.history.replaceState({}, "", window.location.pathname);
   }, []);
   const m = useMutation({
-    mutationFn: () => login(u, p),
+    mutationFn: () => login(u, p, methods.data?.directory_enabled && !localSignIn ? "directory" : "local"),
     onSuccess: (x) => c.setQueryData(["session"], x),
     onError: (x) => setE(s(x, "Unable to sign in")),
   });
+  const oidcEnabled = Boolean(sso.data?.enabled),
+    directoryEnabled = Boolean(methods.data?.directory_enabled),
+    localAvailable = Boolean(methods.data?.local_available) || methods.isError,
+    localChoiceVisible = localAvailable && (oidcEnabled || directoryEnabled),
+    showCredentials = (methods.isSuccess && sso.isSuccess && (!oidcEnabled || directoryEnabled || localSignIn)) || methods.isError || sso.isError,
+    directorySignIn = directoryEnabled && !localSignIn;
   return (
     <AuthFrame>
-      {sso.data?.enabled ? (
+      {oidcEnabled ? (
         <section className="login-card sso-login-card">
           <span className="auth-eyebrow">SINGLE SIGN-ON · OIDC</span>
           <h1>Welcome to Aurora</h1>
-          <p>Continue securely with {s(sso.data.name, "your organization's identity provider")}.</p>
+          <p>Continue securely with {s(sso.data?.name, "your organization's identity provider")}.</p>
           <a className="button primary" href="/api/auth/oidc/login">
-            {s(sso.data.button_label, "Continue with SSO")}
+            {s(sso.data?.button_label, "Continue with SSO")}
           </a>
-          <div className="auth-divider"><span>Local sign-in</span></div>
+          <div className="auth-divider"><span>Other sign-in methods</span></div>
         </section>
       ) : null}
       <form
@@ -638,8 +646,25 @@ function Login() {
           m.mutate();
         }}
       >
-        <h1>{sso.data?.enabled ? "Local sign-in" : ui("auth.welcomeBack")}</h1>
-        {!sso.data?.enabled ? <p>{ui("auth.signInContinue")}</p> : <p>Use your Aurora local account if SSO is unavailable.</p>}
+        <h1>{showCredentials ? directorySignIn ? "Directory sign-in" : oidcEnabled ? "Local sign-in" : ui("auth.welcomeBack") : "Other sign-in methods"}</h1>
+        {showCredentials
+          ? directorySignIn
+            ? <p>Sign in with your directory account.</p>
+            : oidcEnabled
+              ? <p>Use your Aurora local account if SSO is unavailable.</p>
+              : <p>{ui("auth.signInContinue")}</p>
+          : <p>Use the SSO button above, or select local sign-in to use an Aurora account.</p>}
+        {localChoiceVisible ? (
+          <label className="auth-local-choice">
+            <input
+              type="checkbox"
+              checked={localSignIn}
+              onChange={(x) => setLocalSignIn(x.target.checked)}
+            />
+            Use a local Aurora account
+          </label>
+        ) : null}
+        {showCredentials ? <>
         <label>
           {ui("auth.username")}
           <input
@@ -679,6 +704,7 @@ function Login() {
         <button className="button primary" disabled={m.isPending}>
           {m.isPending ? ui("auth.signingIn") : ui("auth.signIn")}
         </button>
+        </> : null}
       </form>
     </AuthFrame>
   );

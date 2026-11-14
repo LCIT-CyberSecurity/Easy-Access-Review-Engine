@@ -29,7 +29,7 @@ A directory account stores no password in Aurora. At sign-in, Aurora resolves th
 
 Roles and scopes are always managed in Aurora, never derived from directory groups. Keep at least one local administrator: it is the way back in when the directory is unreachable.
 
-Aurora also supports one active OpenID Connect provider per instance. Local sign-in remains available when OIDC is enabled, and LDAP directory sign-in remains a separate authentication method. Authentication providers do not grant roles: an administrator must first create and authorize each Aurora user. See [sso-oidc.md](sso-oidc.md) for provider setup, account linking, recovery, and troubleshooting.
+Aurora also supports one active OpenID Connect provider per instance. When configured, its SSO button is the primary option. If LDAP sign-in is configured, the username/password form defaults to directory authentication; a small **Use a local Aurora account** checkbox switches that form to local password authentication. With OIDC but no LDAP, the local form stays hidden until the user selects that checkbox. Authentication providers do not grant roles: an administrator must first create and authorize each Aurora user. See [sso-oidc.md](sso-oidc.md) for provider setup, account linking, recovery, and troubleshooting.
 
 ## Configure a directory
 

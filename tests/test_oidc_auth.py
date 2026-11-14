@@ -269,6 +269,76 @@ def test_oidc_url_policy_requires_explicit_allowlist_for_http_private_hosts(monk
     assert oidc.validate_oidc_url("http://127.0.0.1:8080/realms/test", kind="keycloak")
 
 
+def test_public_auth_methods_enable_directory_choice_without_exposing_configuration(auth_client):
+    client, _ = auth_client
+    response = client.get("/api/auth/methods")
+    assert response.status_code == 200
+    assert response.json() == {"directory_enabled": False, "local_available": True}
+
+    configured = client.post(
+        "/api/system/identity-providers",
+        json={
+            "name": "Lab OpenLDAP",
+            "kind": "LDAP",
+            "endpoint": "ldaps://ldap.example.test",
+            "enabled": True,
+            "settings": {"base_dn": "dc=example,dc=test", "login_attribute": "uid"},
+        },
+    )
+    assert configured.status_code == 200
+    assert client.get("/api/auth/methods").json() == {
+        "directory_enabled": True,
+        "local_available": True,
+    }
+
+
+def test_login_method_choice_enforces_local_versus_directory_account(auth_client, monkeypatch):
+    client, db_path = auth_client
+    assert client.post(
+        "/api/system/identity-providers",
+        json={
+            "name": "Lab OpenLDAP",
+            "kind": "LDAP",
+            "endpoint": "ldaps://ldap.example.test",
+            "enabled": True,
+            "settings": {"base_dn": "dc=example,dc=test", "login_attribute": "uid"},
+        },
+    ).status_code == 200
+    with sqlite3.connect(db_path) as conn:
+        upsert_user(
+            conn,
+            {
+                "username": "directory-alice",
+                "display_name": "Directory Alice",
+                "role": "OPERATOR",
+                "auth_source": "Lab OpenLDAP",
+                "external_id": "uid=alice,dc=example,dc=test",
+            },
+        )
+    monkeypatch.setattr("aurora.api.directory_authenticate", lambda *_args, **_kwargs: {"dn": "uid=alice"})
+
+    local_attempt = client.post(
+        "/api/auth/login",
+        json={
+            "username": "directory-alice",
+            "password": "directory-password",
+            "authentication_method": "local",
+        },
+    )
+    assert local_attempt.status_code == 401
+
+    directory_attempt = client.post(
+        "/api/auth/login",
+        json={
+            "username": "directory-alice",
+            "password": "directory-password",
+            "authentication_method": "directory",
+        },
+    )
+    assert directory_attempt.status_code == 200
+    assert directory_attempt.json()["role"] == "OPERATOR"
+
+
 def test_oidc_callback_access_log_redacts_code_and_state():
     code = "authorization-code-canary"
     state = "state-canary"

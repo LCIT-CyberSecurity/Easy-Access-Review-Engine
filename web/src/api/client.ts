@@ -42,10 +42,14 @@ export async function getSession(): Promise<Principal> {
 export async function getGuidance(route: string): Promise<Row> {
   return getJson("guidance", { route });
 }
-export async function login(username: string, password: string): Promise<Principal> {
+export async function login(
+  username: string,
+  password: string,
+  authenticationMethod?: "local" | "directory",
+): Promise<Principal> {
   return request("/api/auth/login", {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, authentication_method: authenticationMethod }),
   }) as Promise<Principal>;
 }
 export async function logout(): Promise<void> {

@@ -142,6 +142,7 @@ def test_directory_users_authenticate_through_their_directory_only():
     conn.row_factory = sqlite3.Row
     init_system(conn)
     upsert_user(conn, {"username": "alice", "display_name": "Alice", "role": "OPERATOR", "auth_source": "corp-directory", "external_id": "uid=alice,ou=people,dc=example,dc=test"})
+    upsert_user(conn, {"username": "local-admin", "display_name": "Local Admin", "role": "ADMIN", "password": "local-password-long"})
     stored = {user["username"]: user for user in list_users(conn)}["alice"]
     assert stored["auth_source"] == "corp-directory"
     assert conn.execute("SELECT password_hash FROM system_users WHERE username='alice'").fetchone()[0] is None
@@ -150,8 +151,12 @@ def test_directory_users_authenticate_through_their_directory_only():
         return (source, username, external_id, password) == ("corp-directory", "alice", stored["external_id"], "right")
 
     assert authenticate_user(conn, "alice", "right", directory)["role"] == "OPERATOR"
+    assert authenticate_user(conn, "alice", "right", directory, "directory")["role"] == "OPERATOR"
     assert authenticate_user(conn, "alice", "wrong", directory) is None
+    assert authenticate_user(conn, "alice", "right", directory, "local") is None
     assert authenticate_user(conn, "alice", "right") is None
+    assert authenticate_user(conn, "local-admin", "local-password-long", authentication_method="local")["role"] == "ADMIN"
+    assert authenticate_user(conn, "local-admin", "local-password-long", authentication_method="directory") is None
 
 
 def test_directory_users_reject_a_stored_password():

@@ -1630,6 +1630,8 @@ html:has(.login-page), body:has(.login-page) { background: #081a30; }
 .login-card h1 { margin:-4px 0 -11px; color:#152339; font-size:34px; line-height:1.16; letter-spacing:-.04em; }
 .login-card > p { margin:0 0 14px; color:#607087; font-size: 15.5px; line-height:1.5; }
 .login-card label { gap:8px; color:#344054; font-size: 14.5px; font-weight:650; }
+.login-card .auth-local-choice { display:flex; align-items:center; gap:9px; margin-top:-7px; color:#536178; font-size:13px; font-weight:500; cursor:pointer; }
+.login-card .auth-local-choice input { width:16px; min-height:16px; height:16px; margin:0; padding:0; accent-color:#65459b; }
 .login-card input { width:100%; min-height:48px; padding:0 14px; border:1px solid #c5cfdd; border-radius:9px; background:#fff; color:#14233a; font-size: 15.5px; box-shadow:0 1px 2px rgba(16,35,68,.03); }
 .login-card input:hover { border-color:#9eabc0; }
 .login-card input:focus-visible { outline:3px solid #e1d8f3; outline-offset:0; border-color:#7657a9; }

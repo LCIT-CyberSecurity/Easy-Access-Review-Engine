@@ -845,6 +845,20 @@ def create_app(db_path: str | None = None) -> Any:
         """Public, non-secret information needed to render the login page."""
         return _oidc_public_provider(_active_oidc_provider())
 
+    @app.get("/api/auth/methods")
+    def auth_methods():
+        """Expose only which non-secret sign-in methods are available to the login page."""
+        directories = [
+            item["name"]
+            for item in list_idps(system_conn)
+            if item.get("enabled") and str(item.get("kind", "")).upper() == "LDAP"
+        ]
+        local_available = system_conn.execute(
+            "SELECT 1 FROM system_users WHERE enabled = 1 AND password_hash IS NOT NULL "
+            "AND COALESCE(auth_source, 'local') = 'local' LIMIT 1"
+        ).fetchone() is not None
+        return {"directory_enabled": bool(directories), "local_available": local_available}
+
     @app.get("/api/auth/oidc/login")
     async def oidc_login(request: Request):
         provider = _active_oidc_provider()
@@ -1244,7 +1258,12 @@ def create_app(db_path: str | None = None) -> Any:
                 detail="Too many login attempts",
                 headers={"Retry-After": str(LOGIN_BLOCK_SECONDS)},
             )
-        principal = authenticate_user(system_conn, username, password, _directory_login)
+        authentication_method = payload.get("authentication_method")
+        if authentication_method not in (None, "local", "directory"):
+            raise HTTPException(status_code=400, detail="Invalid authentication method")
+        principal = authenticate_user(
+            system_conn, username, password, _directory_login, authentication_method
+        )
         if principal is None:
             with login_failures_lock:
                 login_failures[key] = [*login_failures.get(key, []), now][-LOGIN_FAILURE_LIMIT:]

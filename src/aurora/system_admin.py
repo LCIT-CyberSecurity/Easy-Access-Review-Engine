@@ -304,7 +304,13 @@ def _password_matches(password: str, encoded: str | None) -> bool:
         return False
 
 
-def authenticate_user(conn: Any, username: str, password: str, directory: Callable[[str, str, str | None, str], bool] | None = None) -> dict[str, Any] | None:
+def authenticate_user(
+    conn: Any,
+    username: str,
+    password: str,
+    directory: Callable[[str, str, str | None, str], bool] | None = None,
+    authentication_method: str | None = None,
+) -> dict[str, Any] | None:
     """Authenticate a local account against its hash, or a directory account against its directory.
 
     ``directory`` receives the directory name, the username, the stored external id and the
@@ -314,6 +320,10 @@ def authenticate_user(conn: Any, username: str, password: str, directory: Callab
     if row is None or not row["enabled"]:
         return None
     source = row["auth_source"] or LOCAL_SOURCE
+    if authentication_method == "local" and source != LOCAL_SOURCE:
+        return None
+    if authentication_method == "directory" and source == LOCAL_SOURCE:
+        return None
     if source == LOCAL_SOURCE:
         if not _password_matches(password, row["password_hash"]):
             return None
