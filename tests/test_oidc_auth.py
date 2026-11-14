@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+import logging
+import time
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-import time
 
 from aurora import oidc
-from aurora.api import create_app
+from aurora.api import _RedactOIDCCallbackAccessLog, create_app
 from aurora.oidc import IdentityClaims, OIDCError, ProviderMetadata
 from aurora.system_admin import init_system, upsert_user
 from authlib.jose import JsonWebKey
@@ -266,6 +267,25 @@ def test_oidc_url_policy_requires_explicit_allowlist_for_http_private_hosts(monk
         oidc.validate_oidc_url("http://127.0.0.1:8080/realms/test", kind="keycloak")
     monkeypatch.setenv("AURORA_OIDC_ALLOWED_HOSTS", "127.0.0.1")
     assert oidc.validate_oidc_url("http://127.0.0.1:8080/realms/test", kind="keycloak")
+
+
+def test_oidc_callback_access_log_redacts_code_and_state():
+    code = "authorization-code-canary"
+    state = "state-canary"
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/1.1" %s',
+        ("127.0.0.1", "GET", f"/api/auth/oidc/callback?code={code}&state={state}", 303),
+        None,
+    )
+
+    assert _RedactOIDCCallbackAccessLog().filter(record)
+    assert "/api/auth/oidc/callback" in record.getMessage()
+    assert code not in record.getMessage()
+    assert state not in record.getMessage()
 
 
 def test_local_admin_fallback_is_required_for_oidc_activation(auth_client, monkeypatch):
