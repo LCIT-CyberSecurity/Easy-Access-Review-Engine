@@ -169,6 +169,7 @@
 html { -webkit-text-size-adjust: 100%; }
 
 body {
+  zoom: 0.8;
   margin: 0;
   background: var(--canvas-wash), var(--background);
   background-attachment: fixed;
