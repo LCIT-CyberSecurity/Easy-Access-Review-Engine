@@ -372,14 +372,17 @@ td > a:hover, .link-button:hover { text-decoration: underline; text-underline-of
   display: flex;
   flex-direction: column;
   width: 280px;
-  height: 100vh;
+  /* The WebUI is globally zoomed to 80%, so compensate viewport units to keep
+     the rail flush with the physical viewport edges. */
+  height: 125vh;
   padding: 22px 16px 16px;
   background: var(--rail);
   border-right: 1px solid var(--border);
 }
 /* The links share the rail's height: each grows from 44px up to 58px, so the
    navigation fills a tall screen without turning into oversized buttons. */
-.sidebar nav { display: flex; flex: 1; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; }
+.sidebar nav { display: flex; flex: 1; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.sidebar nav::-webkit-scrollbar { display: none; }
 
 .brand { display: flex; align-items: center; gap: 12px; padding: 2px 0 26px 2px; }
 .brand > div { min-width: 0; white-space: nowrap; }
