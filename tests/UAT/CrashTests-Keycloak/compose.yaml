@@ -7,7 +7,13 @@ services:
       LDAP_ORGANISATION: Aurora
       LDAP_DOMAIN: aurora.test
       LDAP_ADMIN_PASSWORD: ${AURORA_LDAP_PASSWORD:?set in .env.runtime}
-      LDAP_TLS: "false"
+      LDAP_TLS: "true"
+      LDAP_TLS_CRT_FILENAME: ldap.crt
+      LDAP_TLS_KEY_FILENAME: ldap.key
+      LDAP_TLS_CA_CRT_FILENAME: ca.crt
+      LDAP_TLS_VERIFY_CLIENT: never
+    volumes:
+      - ./certs:/container/service/slapd/assets/certs
     healthcheck:
       test: ["CMD-SHELL", "ldapsearch -x -H ldap://127.0.0.1:389 -D cn=admin,dc=aurora,dc=test -w \"$$LDAP_ADMIN_PASSWORD\" -b dc=aurora,dc=test -s base >/dev/null"]
       interval: 5s
@@ -46,7 +52,7 @@ services:
       openldap:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8180:8080"
+      - "${AURORA_LAB_BIND_IP:-127.0.0.1}:8180:8080"
     networks:
       - default
     healthcheck:
@@ -65,10 +71,12 @@ services:
       AURORA_ADMIN_USERNAME: admin
       AURORA_ADMIN_PASSWORD: ${AURORA_ADMIN_PASSWORD:?set in .env.runtime}
       AURORA_COOKIE_SECURE: "false"
+      LDAPTLS_CACERT: /run/secrets/lab-openldap-ca.crt
     env_file:
       - .env.runtime
     volumes:
       - aurora-data:/data
+      - ./certs/ca.crt:/run/secrets/lab-openldap-ca.crt:ro
     depends_on:
       keycloak:
         condition: service_healthy
@@ -86,7 +94,7 @@ services:
       aurora-api:
         condition: service_healthy
     ports:
-      - "192.168.1.5:4175:80"
+      - "${AURORA_LAB_BIND_IP:-127.0.0.1}:4175:80"
 
 volumes:
   keycloak-db-data:

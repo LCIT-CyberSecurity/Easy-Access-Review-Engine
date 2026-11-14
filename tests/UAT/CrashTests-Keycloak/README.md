@@ -1,7 +1,8 @@
 # Keycloak crash-test lab
 
 This lab is isolated as the Compose project `aurora-keycloak-crashtest`. It uses
-its own named volumes and publishes the Aurora UI on `127.0.0.1:4175`; it does
+its own named volumes and publishes the Aurora UI on `127.0.0.1:4175` by default;
+set `AURORA_LAB_BIND_IP` to the Docker host's address for browser access. It does
 not call `docker compose` for any other project and never removes arbitrary
 volumes. In particular, a running `4173` stack is left untouched.
 

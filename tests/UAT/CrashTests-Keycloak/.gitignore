@@ -1,5 +1,6 @@
 .env
 .env.runtime
+certs/
 *.log
 *-export.zip
 connection-check.json

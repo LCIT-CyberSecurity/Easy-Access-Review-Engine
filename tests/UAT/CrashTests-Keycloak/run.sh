@@ -152,6 +152,22 @@ AURORA_SESSION_SECRET=$(openssl rand -hex 32)
 AURORA_KEYCLOAK_CLIENT_SECRET=AURORA_KEYCLOAK_SECRET_CANARY_DO_NOT_LEAK
 AURORA_LDAP_PASSWORD=$(openssl rand -hex 24)
 EOF
+mkdir -p certs
+if [[ ! -s certs/ca.crt || ! -s certs/ldap.crt || ! -s certs/ldap.key ]]; then
+  openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+    -keyout certs/ca.key -out certs/ca.crt -subj '/CN=Aurora Lab OpenLDAP CA' >/dev/null 2>&1
+  openssl req -newkey rsa:2048 -nodes \
+    -keyout certs/ldap.key -out certs/ldap.csr -subj '/CN=openldap' >/dev/null 2>&1
+  cat > certs/ldap.ext <<'EOF'
+subjectAltName=DNS:openldap
+extendedKeyUsage=serverAuth
+keyUsage=digitalSignature,keyEncipherment
+EOF
+  openssl x509 -req -in certs/ldap.csr -CA certs/ca.crt -CAkey certs/ca.key \
+    -CAcreateserial -out certs/ldap.crt -days 365 -sha256 -extfile certs/ldap.ext >/dev/null 2>&1
+  chmod 0600 certs/ca.key certs/ldap.key
+  chmod 0644 certs/ca.crt certs/ldap.crt
+fi
 set -a
 source .env.runtime
 set +a
