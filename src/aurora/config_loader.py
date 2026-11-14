@@ -142,7 +142,7 @@ def secret_environment(data: dict[str, Any]) -> dict[str, str]:
 
 def template(provider: str, kind: str) -> dict[str, Any]:
     if kind == "active_directory":
-        return {"provider": provider, "type": kind, "connection": {"server": "", "protocol": "adws", "base_dn": "", "tls_mode": "ldaps"}, "collection": {"timeout": 300, "allow_partial": False, "read_only_account": False}, "business_mapping": validate_business_mapping(kind, None)}
+        return {"provider": provider, "type": kind, "connection": {"server": "", "protocol": "ldap", "base_dn": "", "tls_mode": "ldaps"}, "collection": {"timeout": 300, "allow_partial": False, "read_only_account": False}, "business_mapping": validate_business_mapping(kind, None)}
     if kind == "openldap":
         return {"provider": provider, "type": kind, "connection": {"uri": "ldaps://", "base_dn": "", "bind_dn": ""}, "collection": {"search_scope": "sub", "page_size": 1000, "connection_timeout": 10, "search_timeout": 120, "command_timeout": 180, "allow_partial": False, "allow_anonymous": False, "read_only_account": False}, "business_mapping": validate_business_mapping(kind, None)}
     if kind == "google_workspace":

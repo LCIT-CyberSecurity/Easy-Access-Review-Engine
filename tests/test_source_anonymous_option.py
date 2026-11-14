@@ -39,6 +39,7 @@ def test_openldap_anonymous_option_must_be_boolean() -> None:
 def test_read_only_account_confirmation_defaults_off_and_must_be_boolean() -> None:
     config = template("corp-ad", "active_directory")
     config["connection"]["server"] = "dc01.corp.example"
+    config["connection"]["base_dn"] = "DC=corp,DC=example"
     assert config["collection"]["read_only_account"] is False
     config["collection"]["read_only_account"] = "yes"
 

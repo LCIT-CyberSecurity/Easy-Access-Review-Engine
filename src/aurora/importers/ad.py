@@ -13,6 +13,7 @@ from aurora.domain import (
     Access,
     AccessAssignment,
     AccessRelation,
+    AccessRelationType,
     AssignmentType,
     AuthenticationPosture,
     Capability,
@@ -129,6 +130,19 @@ def import_ad_zip(
                 if "collection-errors.csv" in unique_names
                 else []
             )
+            _validate_manifest_statistics(
+                manifest,
+                {
+                    "users": len(users),
+                    "groups": len(groups),
+                    "computers": len(computers),
+                    "service_accounts": len(service_accounts),
+                    # Legacy exporters used differing meanings for "memberships".
+                    # New collectors declare membership_rows for an exact CSV row count.
+                    "membership_rows": len(memberships),
+                    "collection_errors": len(collection_errors),
+                },
+            )
             authentication_posture = (
                 _read_authentication_posture(
                     zf.read("authentication-posture.json"), str(provider_name)
@@ -153,7 +167,9 @@ def import_ad_zip(
 
     group_row_by_sid = {row.get("SID", ""): row for row in groups if row.get("SID")}
     group_row_by_name = {
-        row.get("SamAccountName", ""): row for row in groups if row.get("SamAccountName")
+        row.get("SamAccountName", "").casefold(): row
+        for row in groups
+        if row.get("SamAccountName")
     }
     identity_by_sid = {
         identity.native_id: identity for identity in identities if identity.native_id
@@ -165,19 +181,35 @@ def import_ad_zip(
         if identity.type == IdentityType.GROUP
     }
     group_by_name = {
-        identity.identifier: identity
+        identity.identifier.casefold(): identity
         for identity in identities
         if identity.type == IdentityType.GROUP
     }
 
     accesses: list[Access] = []
     assignments: list[AccessAssignment] = []
+    access_relations: list[AccessRelation] = []
+    seen_relations: set[tuple[str, str, str, str, str]] = set()
     unresolved_group_memberships: list[dict[str, str]] = []
     seen_accesses: set[str] = set()
     seen_assignments: set[tuple[str, str, str, str, str]] = set()
+
+    # Empty AD groups still define a catalogue access that can be promoted to Golden.
+    for group_identity in (item for item in identities if item.type == IdentityType.GROUP):
+        access_name = f"{group_identity.identifier}:member"
+        if access_name in seen_accesses:
+            continue
+        group_row = (
+            group_row_by_sid.get(group_identity.native_id or "")
+            or group_row_by_name.get(group_identity.identifier.casefold())
+            or {}
+        )
+        accesses.append(_group_access(provider.name, group_identity, group_row, source_config))
+        seen_accesses.add(access_name)
+
     for row in memberships:
         group_id = row.get("GroupSID") or row.get("Group")
-        group = group_by_sid.get(group_id) or group_by_name.get(row.get("Group", ""))
+        group = group_by_sid.get(group_id) or group_by_name.get(row.get("Group", "").casefold())
         if group is None:
             unresolved_group_memberships.append(
                 {
@@ -193,7 +225,7 @@ def import_ad_zip(
         if access_name not in seen_accesses:
             group_row = (
                 group_row_by_sid.get(group.native_id or "")
-                or group_row_by_name.get(group.identifier)
+                or group_row_by_name.get(group.identifier.casefold())
                 or {}
             )
             accesses.append(_group_access(provider.name, group, group_row, source_config))
@@ -204,6 +236,54 @@ def import_ad_zip(
         if not member_identifier:
             continue
         membership_type = row.get("MembershipType") or "direct"
+        if row.get("MemberType", "").casefold() == "group" and membership_type == "direct":
+            member_identity = next(
+                (
+                    identity
+                    for identity in [*identities, *(known_identities or [])]
+                    if identity.provider == member_provider
+                    and identity.identifier == member_identifier
+                    and identity.type == IdentityType.GROUP
+                ),
+                None,
+            )
+            if member_identity is not None:
+                parent_access = f"{member_identity.identifier}:member"
+                child_access = f"{group.identifier}:member"
+                relation_key = (
+                    member_provider,
+                    parent_access,
+                    provider.name,
+                    child_access,
+                    str(AccessRelationType.GRANTS),
+                )
+                if relation_key not in seen_relations:
+                    seen_relations.add(relation_key)
+                    access_relations.append(
+                        AccessRelation(
+                            parent_provider=member_provider,
+                            parent_access_name=parent_access,
+                            child_provider=provider.name,
+                            child_access_name=child_access,
+                            relation_type=AccessRelationType.GRANTS,
+                            origin=Origin(
+                                assignment_type=AssignmentType.INHERITED,
+                                direct=False,
+                                inherited=True,
+                                source="Active Directory nested group",
+                                raw={
+                                    "membership_type": "direct",
+                                    "member_sid": row.get("MemberSID") or None,
+                                    "member_dn": row.get("MemberDN") or None,
+                                    "container_group_sid": row.get("GroupSID") or None,
+                                },
+                            ),
+                            metadata={
+                                "source": "active_directory_nested_group",
+                                "direct_membership": True,
+                            },
+                        )
+                    )
         assignment_type = (
             "primary_group" if membership_type == "primary_group" else AssignmentType.GROUP
         )
@@ -274,6 +354,7 @@ def import_ad_zip(
         identities,
         accesses,
         assignments,
+        access_relations=access_relations,
         authentication_posture=authentication_posture,
     )
 
@@ -403,6 +484,33 @@ def _validate_collection_error_count(manifest: dict[str, object], actual_errors:
         raise ValueError("manifest.yaml collection_errors does not match collection-errors.csv")
 
 
+def _validate_manifest_statistics(
+    manifest: dict[str, object], actual: dict[str, int]
+) -> None:
+    statistics = manifest.get("statistics")
+    if statistics is None:
+        return
+    if not isinstance(statistics, dict):
+        raise ValueError("manifest.yaml statistics must be a mapping")
+    for name, actual_count in actual.items():
+        if name not in statistics:
+            continue
+        if name != "collection_errors" and manifest.get("completeness") != "full":
+            # Partial/unknown historical exports may report the successful remote object
+            # count while omitting objects that could not be written to their CSV files.
+            # Their import is already fail-closed and cannot be promoted as authoritative.
+            continue
+        declared = statistics[name]
+        if not isinstance(declared, int) or declared < 0:
+            raise ValueError(f"manifest.yaml statistics.{name} must be a non-negative integer")
+        if declared != actual_count:
+            raise ValueError(f"manifest.yaml statistics.{name} does not match the archive")
+    if "membership_rows" in statistics:
+        declared_memberships = statistics.get("memberships")
+        if declared_memberships is not None and declared_memberships != statistics["membership_rows"]:
+            raise ValueError("manifest.yaml statistics.memberships does not match membership_rows")
+
+
 def _read_manifest(text: str) -> dict[str, object]:
     result: dict[str, object] = {}
     stack: list[str] = []
@@ -526,6 +634,7 @@ def _group_identity(provider: str, row: dict[str, str]) -> Identity:
             "distinguished_name": row.get("DistinguishedName") or None,
             "group_scope": row.get("GroupScope") or None,
             "group_category": row.get("GroupCategory") or None,
+            "object_guid": row.get("ObjectGUID") or None,
         },
     )
 

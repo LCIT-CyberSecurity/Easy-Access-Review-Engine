@@ -15,6 +15,7 @@ from aurora.cli.runner import RunnerResult, build_command
 def test_connector_validation_and_secret_indirection() -> None:
     data = template("corp-ad", "active_directory")
     data["connection"]["server"] = "dc01.example.test"
+    data["connection"]["base_dn"] = "DC=example,DC=test"
     data["credentials"] = {"password_env": "AURORA_TEST_PASSWORD"}
     validate_connector(data, "corp-ad")
     with patch.dict(os.environ, {"AURORA_TEST_PASSWORD": "never-print"}):
@@ -64,6 +65,7 @@ def test_config_loader_reads_yaml_and_rejects_name_mismatch(tmp_path: Path) -> N
 def test_exporter_commands_use_existing_collectors_without_secret_arguments(tmp_path: Path) -> None:
     ad = template("corp-ad", "active_directory")
     ad["connection"]["server"] = "dc01"
+    ad["connection"]["protocol"] = "adws"
     command, _ = build_command(ad, tmp_path / "ad.zip", tmp_path)
     assert command[0] == "pwsh"
     assert "dc01" in command
@@ -79,6 +81,7 @@ def test_exporter_commands_use_existing_collectors_without_secret_arguments(tmp_
 def test_exporter_check_only_flags_are_native(tmp_path: Path) -> None:
     ad = template("corp-ad", "active_directory")
     ad["connection"]["server"] = "dc01"
+    ad["connection"]["protocol"] = "adws"
     ad["_check_only"] = True
     ad_command, _ = build_command(ad, tmp_path / "check.zip", tmp_path)
     assert "-CheckOnly" in ad_command
@@ -248,6 +251,7 @@ def test_exporter_command_resolves_collectors_outside_repo_cwd(tmp_path: Path) -
     try:
         ad = template("corp-ad", "active_directory")
         ad["connection"]["server"] = "dc01"
+        ad["connection"]["protocol"] = "adws"
         command, _ = build_command(ad, tmp_path / "ad.zip")
         assert Path(command[1]).is_file()
         assert "exporters/active-directory/export-active-directory.ps1" in command[1]

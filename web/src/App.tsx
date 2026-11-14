@@ -6368,7 +6368,7 @@ function Sources({ principal }: { principal: Principal }) {
   const blank = () => ({
     provider: "",
     type: "active_directory",
-    connection: { server: "", protocol: "adws", base_dn: "", tls_mode: "ldaps" },
+    connection: { server: "", protocol: "ldap", base_dn: "", tls_mode: "ldaps" },
     collection: { timeout: 300, allow_partial: false },
     credentials: { username_env: "", password_env: "" },
     business_mapping: Object.fromEntries(["display_name", "description", "application", "business_permission", "resource", "owner"].map((field) => [field, { mode: "default" }])),
@@ -6535,12 +6535,13 @@ function Sources({ principal }: { principal: Principal }) {
               <>
                 <label>Connection protocol
                   <select value={s((editing.connection as Row | undefined)?.protocol, "adws")} onChange={(e) => updateNested("connection", "protocol", e.target.value)}>
-                    <option value="adws">Active Directory Web Services</option>
-                    <option value="ldap">LDAP</option>
+                    <option value="ldap">LDAP / LDAPS direct (recommandé)</option>
+                    <option value="adws">ADWS historique (PowerShell requis)</option>
                   </select>
                 </label>
+                {s((editing.connection as Row | undefined)?.protocol, "ldap") === "adws" ? <p className="field-note">ADWS est conservé pour les sources existantes. Pour une nouvelle connexion depuis Aurora sous Linux/Docker, utilise LDAP/LDAPS. L’export PowerShell hors ligne reste disponible séparément.</p> : null}
                 <label>Server
-                  <input required placeholder="dc.example.org or 192.168.1.100" value={s((editing.connection as Row | undefined)?.server, "")} onChange={(e) => updateNested("connection", "server", e.target.value)} />
+                  <input required placeholder="dc.example.org or 192.0.2.10" value={s((editing.connection as Row | undefined)?.server, "")} onChange={(e) => updateNested("connection", "server", e.target.value)} />
                 </label>
                 {(editing.connection as Row | undefined)?.protocol === "ldap" ? <>
                   <label>Base DN<input required placeholder="DC=example,DC=org" value={s((editing.connection as Row | undefined)?.base_dn, "")} onChange={(e) => updateNested("connection", "base_dn", e.target.value)} /></label>

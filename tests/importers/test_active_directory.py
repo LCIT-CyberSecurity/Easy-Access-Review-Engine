@@ -7,6 +7,7 @@ import pytest
 
 from aurora.domain import IdentityStatus, IdentityType
 from aurora.importers.ad import import_ad_zip
+from aurora.services import calculate_effective_accesses
 from ad_test_helpers import zip_fixture
 
 
@@ -51,6 +52,43 @@ def test_primary_group_membership_is_represented_without_flattening_nested_group
     assert ("Domain Users:member", "jean.dupont", "primary_group") in assignments
     assert ("GG_ALL_FINANCE:member", "GG_FINANCE", "direct") in assignments
     assert ("GG_ALL_FINANCE:member", "jean.dupont", "direct") not in assignments
+
+
+def test_empty_group_is_catalogued_and_nested_group_creates_access_relation(tmp_path: Path) -> None:
+    result = import_ad_zip(zip_fixture(tmp_path, "standard"))
+    accesses = {(item.provider, item.name) for item in result.accesses}
+    assert ("corp-ad", "DL_OFFICE:member") in accesses
+    assert len(result.access_relations or []) == 1
+    relation = result.access_relations[0]
+    assert relation.parent_access_name == "GG_FINANCE:member"
+    assert relation.child_access_name == "GG_ALL_FINANCE:member"
+    assert relation.origin.direct is False
+    assert relation.origin.inherited is True
+    evaluation = calculate_effective_accesses(
+        result.assignments, result.access_relations or [], result.accesses
+    )
+    effective = {
+        (item.identity_identifier, item.access_name): item.direct
+        for item in evaluation.effective_accesses
+    }
+    assert effective[("jean.dupont", "GG_FINANCE:member")] is True
+    assert effective[("jean.dupont", "GG_ALL_FINANCE:member")] is False
+
+
+def test_new_membership_row_statistic_is_validated_but_legacy_statistic_is_compatible(tmp_path: Path) -> None:
+    legacy_archive = zip_fixture(tmp_path, "standard")
+    assert import_ad_zip(legacy_archive).batch.completeness == "full"
+
+    inconsistent = tmp_path / "bad-membership-stats.zip"
+    with ZipFile(legacy_archive) as source, ZipFile(inconsistent, "w", ZIP_DEFLATED) as target:
+        for name in source.namelist():
+            content = source.read(name)
+            if name == "manifest.yaml":
+                manifest = content.decode("utf-8").replace("  memberships: 9", "  memberships: 10\n  membership_rows: 10")
+                content = manifest.encode("utf-8")
+            target.writestr(name, content)
+    with pytest.raises(ValueError, match="membership_rows"):
+        import_ad_zip(inconsistent)
 
 
 def test_unicode_and_csv_quoting_are_preserved(tmp_path: Path) -> None:
