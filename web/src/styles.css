@@ -1639,6 +1639,16 @@ html:has(.login-page), body:has(.login-page) { background: #081a30; }
 .login-card .button.primary { min-height:49px; justify-content:center; margin-top:9px; background:#65459b; box-shadow:0 6px 16px rgba(79,48,134,.18); font-size: 15.5px; }
 .login-card .button.primary:hover { background:#553888; }
 .login-card .form-error { margin:0; padding:11px 13px; border:1px solid #f0c8c4; border-radius:8px; background:#fff2f0; color:#a22720; font-size: 14.5px; }
+.auth-form-wrap .sso-login-card { padding: 16px 0 0; gap: 12px; }
+.sso-login-card .button.primary { text-decoration: none; }
+.auth-divider { display:flex; align-items:center; gap:12px; margin-top:8px; color:#778398; font-size:13px; }
+.auth-divider::before, .auth-divider::after { content:""; height:1px; flex:1; background:#dce1e8; }
+.auth-divider span { white-space:nowrap; }
+.oidc-provider-row, .oidc-link-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 0; border-top:1px solid var(--border); }
+.oidc-provider-row > div:first-child, .oidc-link-row > div:first-child { display:grid; gap:4px; }
+.oidc-provider-row small, .oidc-link-row small { color:var(--text-muted); overflow-wrap:anywhere; }
+.oidc-link-form { display:grid; gap:12px; padding:14px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-secondary); }
+@media (max-width: 700px) { .oidc-provider-row, .oidc-link-row { align-items:stretch; flex-direction:column; } }
 .auth-form-foot { margin:0; padding-top:18px; border-top:1px solid #dce2ec; color:#8793a5; font-size: 12.5px; }
 
 /* --- Campaigns ----------------------------------------------------------- */

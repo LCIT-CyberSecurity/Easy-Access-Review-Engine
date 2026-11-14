@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import os
 import secrets
 import tempfile
@@ -17,6 +18,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import yaml
@@ -24,7 +26,7 @@ import yaml
 try:
     from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
     from fastapi.openapi.docs import get_swagger_ui_html
-    from fastapi.responses import HTMLResponse, StreamingResponse
+    from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
     from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 except ModuleNotFoundError:  # pragma: no cover
     FastAPI = None  # type: ignore[assignment]
@@ -174,6 +176,15 @@ from aurora.system_admin import (
     create_mcp_token,
     enabled_admins,
     ensure_bootstrap_user,
+    activate_oidc_provider,
+    disable_oidc_provider,
+    enabled_local_password_admins,
+    get_oidc_provider,
+    link_oidc_account,
+    list_oidc_account_links,
+    list_oidc_providers,
+    unlink_oidc_account,
+    upsert_oidc_provider,
     external_user_api_enabled,
     init_system,
     list_idps,
@@ -189,6 +200,16 @@ from aurora.system_admin import (
     set_mcp_enabled,
     upsert_idp,
     upsert_user,
+)
+from aurora.oidc import (
+    OIDCError,
+    build_authorization_request,
+    discover_provider,
+    exchange_code,
+    hash_transaction_value,
+    normalize_issuer,
+    resolve_client_secret,
+    validate_provider_config,
 )
 from aurora.system_admin import (
     change_password as update_password,
@@ -227,6 +248,20 @@ ROLES = ("ADMIN", "OPERATOR", "GROUP_OWNER", "BUSINESS_ADMIN", "REMEDIATION_MANA
 
 def _golden_version_provider_domains(version: dict[str, Any]) -> set[str]:
     return golden_required_providers([version])
+
+
+class _RedactOIDCCallbackAccessLog(logging.Filter):
+    """Authorization codes and state must never appear in Uvicorn's access log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3:
+            request_target = args[2]
+            if isinstance(request_target, str) and request_target.startswith(
+                "/api/auth/oidc/callback?"
+            ):
+                record.args = (*args[:2], "/api/auth/oidc/callback", *args[3:])
+        return True
 
 
 @dataclass(frozen=True)
@@ -401,6 +436,9 @@ def create_app(db_path: str | None = None) -> Any:
         openapi_url=None,
         lifespan=lifespan,
     )
+    access_logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, _RedactOIDCCallbackAccessLog) for item in access_logger.filters):
+        access_logger.addFilter(_RedactOIDCCallbackAccessLog())
     # The Streamable HTTP endpoint is intentionally available at exactly /mcp;
     # avoid a slash redirect that can discard an Authorization header in clients.
     app.router.redirect_slashes = False
@@ -721,6 +759,225 @@ def create_app(db_path: str | None = None) -> Any:
         event.details = details or {}
         with Repository(db_path) as repo:
             repo.insert_append_only("audit_events", event)
+
+    def _active_oidc_provider() -> dict[str, Any] | None:
+        return next(
+            (item for item in list_oidc_providers(system_conn) if item["enabled"] and item["active"]),
+            None,
+        )
+
+    def _oidc_callback_uri(request: Request) -> str:
+        base = os.environ.get("AURORA_PUBLIC_BASE_URL", "").strip().rstrip("/")
+        if not base:
+            if request.url.hostname not in {"localhost", "127.0.0.1", "testserver"}:
+                raise OIDCError("Set AURORA_PUBLIC_BASE_URL to Aurora's externally reachable URL")
+            base = str(request.base_url).rstrip("/")
+        parsed = urlsplit(base)
+        if parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
+            raise OIDCError("Set AURORA_PUBLIC_BASE_URL to Aurora's external URL")
+        if parsed.scheme != "https" and os.environ.get("AURORA_OIDC_ALLOW_HTTP") != "1" and parsed.hostname not in {"localhost", "127.0.0.1", "testserver"}:
+            raise OIDCError("OIDC callback URL must use HTTPS")
+        return base + "/api/auth/oidc/callback"
+
+    def _validated_oidc_provider(payload: dict[str, Any]) -> dict[str, Any]:
+        candidate = dict(payload)
+        for flag in ("enabled", "active"):
+            if flag in candidate and not isinstance(candidate[flag], bool):
+                raise HTTPException(status_code=400, detail=f"{flag} must be a boolean")
+        candidate["name"] = str(candidate.get("name", "")).strip()
+        candidate["kind"] = str(candidate.get("kind", "")).strip().lower()
+        candidate["client_id"] = str(candidate.get("client_id", "")).strip()
+        candidate["issuer"] = normalize_issuer(
+            candidate["kind"], str(candidate.get("issuer", ""))
+        )
+        try:
+            validate_provider_config(candidate)
+        except OIDCError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if len(candidate["name"]) > 120 or len(candidate["client_id"]) > 255:
+            raise HTTPException(status_code=400, detail="Provider name or client ID is too long")
+        for key in ("client_secret_env", "client_secret_file_env"):
+            value = candidate.get(key)
+            if value is not None and not isinstance(value, str):
+                raise HTTPException(status_code=400, detail="Secret references must be text")
+        return candidate
+
+    def _oidc_failure(request: Request, reason: str, *, provider_id: str = "oidc") -> RedirectResponse:
+        record_sign_in_event("auth.oidc_sign_in_failed", provider_id, {"reason": reason})
+        response = RedirectResponse(url=f"/?auth_error={reason}", status_code=303)
+        response.delete_cookie(
+            "aurora_oidc_flow",
+            path="/api/auth/oidc",
+            secure=os.environ.get("AURORA_COOKIE_SECURE") == "1",
+            httponly=True,
+            samesite="lax",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    def _clear_oidc_flow_cookie(response: Response) -> None:
+        response.delete_cookie(
+            "aurora_oidc_flow",
+            path="/api/auth/oidc",
+            secure=os.environ.get("AURORA_COOKIE_SECURE") == "1",
+            httponly=True,
+            samesite="lax",
+        )
+
+    def _oidc_public_provider(provider: dict[str, Any] | None) -> dict[str, Any]:
+        if provider is None:
+            return {"enabled": False}
+        button = {
+            "entra": "Continue with Microsoft",
+            "keycloak": "Continue with Keycloak",
+            "google": "Continue with Google",
+            "generic": "Continue with SSO",
+        }.get(str(provider["kind"]), "Continue with SSO")
+        return {
+            "enabled": True,
+            "name": provider["name"],
+            "kind": provider["kind"],
+            "button_label": button,
+        }
+
+    @app.get("/api/auth/oidc/config")
+    def oidc_login_config():
+        """Public, non-secret information needed to render the login page."""
+        return _oidc_public_provider(_active_oidc_provider())
+
+    @app.get("/api/auth/oidc/login")
+    async def oidc_login(request: Request):
+        provider = _active_oidc_provider()
+        if provider is None:
+            return _oidc_failure(request, "sso_not_configured")
+        try:
+            issuer = validate_provider_config(provider)
+            resolve_client_secret(provider)
+            metadata = await discover_provider(issuer, str(provider["kind"]))
+            redirect_uri = _oidc_callback_uri(request)
+            authorization = build_authorization_request(
+                metadata, client_id=str(provider["client_id"]), redirect_uri=redirect_uri
+            )
+            browser_flow = secrets.token_urlsafe(32)
+            now = int(time.time())
+            flow_hash = hash_transaction_value(browser_flow)
+            state_hash = hash_transaction_value(authorization.state)
+            system_conn.execute("DELETE FROM oidc_login_transactions WHERE created_at < ?", (now - 600,))
+            system_conn.execute(
+                """INSERT INTO oidc_login_transactions
+                   (state_hash, flow_cookie_hash, provider_id, issuer, client_id, redirect_uri,
+                    nonce, code_verifier, created_at) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (state_hash, flow_hash, provider["id"], issuer, provider["client_id"],
+                 redirect_uri, authorization.nonce, authorization.code_verifier, now),
+            )
+            system_conn.commit()
+        except (OIDCError, ValueError) as exc:
+            reason = "sso_unavailable" if "secret" not in str(exc).lower() else "sso_configuration"
+            return _oidc_failure(request, reason, provider_id=str(provider["id"]))
+        response = RedirectResponse(authorization.url, status_code=302)
+        response.set_cookie(
+            "aurora_oidc_flow",
+            browser_flow,
+            max_age=300,
+            httponly=True,
+            secure=os.environ.get("AURORA_COOKIE_SECURE") == "1",
+            samesite="lax",
+            path="/api/auth/oidc",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    @app.get("/api/auth/oidc/callback")
+    async def oidc_callback(request: Request):
+        code = request.query_params.get("code", "")
+        state = request.query_params.get("state", "")
+        browser_flow = request.cookies.get("aurora_oidc_flow", "")
+        if not code or len(code) > 4096 or not state or len(state) > 512 or not browser_flow:
+            return _oidc_failure(request, "invalid_sso_response")
+        state_hash = hash_transaction_value(state)
+        row = system_conn.execute(
+            "SELECT flow_cookie_hash FROM oidc_login_transactions WHERE state_hash = ?",
+            (state_hash,),
+        ).fetchone()
+        if row is None or not hmac.compare_digest(
+            str(row["flow_cookie_hash"]), hash_transaction_value(browser_flow)
+        ):
+            return _oidc_failure(request, "invalid_sso_response")
+        transaction = system_conn.execute(
+            """DELETE FROM oidc_login_transactions
+               WHERE state_hash = ? AND flow_cookie_hash = ? AND created_at >= ?
+               RETURNING provider_id, issuer, client_id, redirect_uri, nonce, code_verifier""",
+            (state_hash, hash_transaction_value(browser_flow), int(time.time()) - 300),
+        ).fetchone()
+        system_conn.commit()
+        if transaction is None:
+            return _oidc_failure(request, "invalid_sso_response")
+        provider = get_oidc_provider(system_conn, str(transaction["provider_id"]))
+        if (
+            provider is None
+            or not provider["enabled"]
+            or not provider["active"]
+            or provider["issuer"] != transaction["issuer"]
+            or provider["client_id"] != transaction["client_id"]
+        ):
+            return _oidc_failure(request, "sso_provider_changed", provider_id=str(transaction["provider_id"]))
+        try:
+            secret = resolve_client_secret(provider)
+            metadata = await discover_provider(str(transaction["issuer"]), str(provider["kind"]))
+            claims = await exchange_code(
+                metadata,
+                code=code,
+                redirect_uri=str(transaction["redirect_uri"]),
+                client_id=str(transaction["client_id"]),
+                client_secret=secret,
+                code_verifier=str(transaction["code_verifier"]),
+                expected_nonce=str(transaction["nonce"]),
+            )
+        except OIDCError:
+            return _oidc_failure(request, "sso_authentication_failed", provider_id=str(provider["id"]))
+        linked = system_conn.execute(
+            """SELECT u.id, u.username, u.display_name, u.role, u.scopes, u.enabled,
+                      u.must_change_password, u.session_version, u.auth_source
+               FROM oidc_account_links l JOIN system_users u ON u.id = l.user_id
+               WHERE l.provider_id = ? AND l.issuer = ? AND l.subject = ?""",
+            (provider["id"], claims.issuer, claims.subject),
+        ).fetchone()
+        if linked is None:
+            return _oidc_failure(request, "sso_account_not_linked", provider_id=str(provider["id"]))
+        if not linked["enabled"]:
+            return _oidc_failure(request, "sso_account_disabled", provider_id=str(provider["id"]))
+        role = str(linked["role"])
+        if role not in ROLES:
+            return _oidc_failure(request, "sso_account_not_authorized", provider_id=str(provider["id"]))
+        principal = {
+            "subject": str(linked["id"]),
+            "username": str(linked["username"]),
+            "display_name": str(linked["display_name"] or claims.display_name or linked["username"]),
+            "role": role,
+            "scopes": json.loads(linked["scopes"]),
+            "must_change_password": bool(linked["must_change_password"])
+            and str(linked["auth_source"] or LOCAL_SOURCE) == LOCAL_SOURCE,
+            "session_version": int(linked["session_version"]),
+        }
+        record_sign_in_event(
+            "auth.oidc_signed_in", principal["username"],
+            {"provider_id": str(provider["id"]), "issuer": claims.issuer},
+        )
+        response = RedirectResponse(url="/", status_code=303)
+        response.set_cookie(
+            SESSION_COOKIE,
+            _encode_session(principal, session_secret),
+            httponly=True,
+            secure=os.environ.get("AURORA_COOKIE_SECURE") == "1",
+            samesite="strict",
+            max_age=SESSION_TTL_SECONDS,
+            path="/",
+        )
+        _clear_oidc_flow_cookie(response)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @app.get("/api/health")
     def health():
@@ -1414,6 +1671,8 @@ def create_app(db_path: str | None = None) -> Any:
         return {
             "users": users,
             "identity_providers": list_idps(system_conn),
+            "oidc_providers": list_oidc_providers(system_conn),
+            "oidc_account_links": list_oidc_account_links(system_conn),
             "providers": providers,
             "roles": sorted(ROLES),
             "external_user_api_enabled": external_user_api_enabled(system_conn),
@@ -1427,6 +1686,128 @@ def create_app(db_path: str | None = None) -> Any:
             )["configured"],
             "chatbot_guardrails": load_policy(system_conn).as_dict(),
         }
+
+    @app.post("/api/system/oidc-providers/test")
+    async def oidc_provider_test(request: Request, payload: dict[str, Any] = Body(...)):
+        _require(current_user(request), ("ADMIN",))
+        candidate = _validated_oidc_provider(payload)
+        try:
+            resolve_client_secret(candidate)
+            metadata = await discover_provider(
+                str(candidate["issuer"]), str(candidate["kind"]), force_refresh=True
+            )
+            callback_uri = _oidc_callback_uri(request)
+        except OIDCError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "ok": True,
+            "status": "configuration_valid",
+            "message": "OIDC discovery and provider endpoints are reachable. Complete a browser sign-in to test authentication.",
+            "issuer": metadata.issuer,
+            "authorization_endpoint": metadata.authorization_endpoint,
+            "token_endpoint": metadata.token_endpoint,
+            "jwks_uri": metadata.jwks_uri,
+            "redirect_uri": callback_uri,
+            "authentication_tested": False,
+        }
+
+    @app.post("/api/system/oidc-providers")
+    def oidc_provider_save(request: Request, payload: dict[str, Any] = Body(...)):
+        principal = _require(current_user(request), ("ADMIN",))
+        candidate = _validated_oidc_provider(payload)
+        was_active = bool(
+            candidate.get("id")
+            and (get_oidc_provider(system_conn, str(candidate["id"])) or {}).get("active")
+        )
+        # Editing a live provider must be tested and explicitly activated again.
+        if was_active and any(
+            str(candidate.get(key, "")) != str((get_oidc_provider(system_conn, str(candidate["id"])) or {}).get(key, ""))
+            for key in ("issuer", "client_id", "client_secret_env", "client_secret_file_env")
+        ):
+            candidate["active"] = False
+        try:
+            result = upsert_oidc_provider(system_conn, candidate)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail="An OIDC provider with this name already exists") from exc
+        with Repository(db_path) as repo:
+            record_audit(
+                repo, request, "system.oidc_provider_saved", "oidc_provider", str(result["id"]),
+                {"kind": result["kind"], "enabled": result["enabled"], "active": result["active"]},
+            )
+        return result
+
+    @app.post("/api/system/oidc-providers/{provider_id}/activate")
+    async def oidc_provider_activate(provider_id: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN",))
+        provider = get_oidc_provider(system_conn, provider_id)
+        if provider is None:
+            raise HTTPException(status_code=404, detail="OIDC provider not found")
+        if enabled_local_password_admins(system_conn) < 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Keep an active local administrator with a valid local password before enabling SSO",
+            )
+        try:
+            validate_provider_config(provider)
+            resolve_client_secret(provider)
+            await discover_provider(str(provider["issuer"]), str(provider["kind"]), force_refresh=True)
+            _oidc_callback_uri(request)
+            result = activate_oidc_provider(system_conn, provider_id)
+        except (OIDCError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        with Repository(db_path) as repo:
+            record_audit(
+                repo, request, "system.oidc_provider_activated", "oidc_provider", provider_id,
+                {"kind": result["kind"]},
+            )
+        return result
+
+    @app.post("/api/system/oidc-providers/{provider_id}/disable")
+    def oidc_provider_disable(provider_id: str, request: Request):
+        _require(current_user(request), ("ADMIN",))
+        try:
+            result = disable_oidc_provider(system_conn, provider_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        with Repository(db_path) as repo:
+            record_audit(repo, request, "system.oidc_provider_disabled", "oidc_provider", provider_id)
+        return result
+
+    @app.post("/api/system/users/{username}/oidc-links")
+    def oidc_account_link_create(
+        username: str, request: Request, payload: dict[str, Any] = Body(...)
+    ):
+        principal = _require(current_user(request), ("ADMIN",))
+        try:
+            result = link_oidc_account(
+                system_conn,
+                username,
+                str(payload.get("provider_id", "")),
+                str(payload.get("subject", "")),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        with Repository(db_path) as repo:
+            record_audit(
+                repo, request, "system.oidc_account_linked", "user", username.strip().lower(),
+                {"provider_id": result["provider_id"], "linked_by": principal.username},
+            )
+        return result
+
+    @app.delete("/api/system/users/{username}/oidc-links/{link_id}")
+    def oidc_account_link_delete(username: str, link_id: str, request: Request):
+        principal = _require(current_user(request), ("ADMIN",))
+        links = [row for row in list_oidc_account_links(system_conn) if row["id"] == link_id and row["username"] == username.strip().lower()]
+        if not links or not unlink_oidc_account(system_conn, link_id):
+            raise HTTPException(status_code=404, detail="OIDC account link not found")
+        with Repository(db_path) as repo:
+            record_audit(
+                repo, request, "system.oidc_account_unlinked", "user", username.strip().lower(),
+                {"provider_id": links[0]["provider_id"], "unlinked_by": principal.username},
+            )
+        return {"removed": True}
 
     @app.get("/api/campaign-pilots")
     def campaign_pilots(request: Request):
@@ -1495,13 +1876,34 @@ def create_app(db_path: str | None = None) -> Any:
         return {"from": origin, "to": target, "review_items": moved}
 
     def _guard_admin_access(
-        principal: WebPrincipal, username: str, *, role: str | None = None, enabled: bool = True
+        principal: WebPrincipal,
+        username: str,
+        *,
+        role: str | None = None,
+        enabled: bool = True,
+        auth_source: str | None = None,
     ) -> None:
         """Refuse a change that would lock the administrator, or Aurora itself, out."""
         target = str(username).strip().lower()
         stored = _stored_user(target)
         if stored is None:
             return
+        losing_local_fallback = (
+            str(stored.get("role")) == "ADMIN"
+            and bool(stored.get("enabled"))
+            and (stored.get("auth_source") or LOCAL_SOURCE) == LOCAL_SOURCE
+            and enabled_local_password_admins(system_conn, excluding=target) == 0
+            and (
+                not enabled
+                or (role is not None and role != "ADMIN")
+                or (auth_source is not None and auth_source != LOCAL_SOURCE)
+            )
+        )
+        if losing_local_fallback:
+            raise HTTPException(
+                status_code=409,
+                detail="Keep an active local administrator with a valid local password for SSO and directory outages.",
+            )
         losing_admin = str(stored.get("role")) == "ADMIN" and (
             not enabled or (role is not None and role != "ADMIN")
         )
@@ -1531,6 +1933,7 @@ def create_app(db_path: str | None = None) -> Any:
             payload.get("username", ""),
             role=str(payload.get("role", "")).upper() or None,
             enabled=bool(payload.get("enabled", True)),
+            auth_source=str(payload.get("auth_source") or LOCAL_SOURCE),
         )
         role = str(payload.get("role", "")).upper()
         raw_scopes = payload.get("scopes", [])

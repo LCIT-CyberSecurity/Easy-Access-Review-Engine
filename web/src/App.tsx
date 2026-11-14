@@ -588,11 +588,29 @@ function takeSignedOut(): boolean {
 }
 function Login() {
   const c = useQueryClient(),
+    sso = useQuery({ queryKey: ["public-oidc-login"], queryFn: () => getJson("auth/oidc/config"), retry: false }),
     [u, setU] = useState(""),
     [p, setP] = useState(""),
     [visible, setVisible] = useState(false),
     [signedOut, setSignedOut] = useState(takeSignedOut),
     [e, setE] = useState("");
+  useEffect(() => {
+    const reason = new URLSearchParams(window.location.search).get("auth_error");
+    if (!reason) return;
+    const messages: Record<string, string> = {
+      sso_account_not_linked: "This identity is not linked to an Aurora account. Ask an Aurora administrator to associate it.",
+      sso_account_disabled: "This Aurora account is disabled. Contact an administrator.",
+      sso_account_not_authorized: "This Aurora account is not authorized to access the application.",
+      sso_provider_changed: "The SSO provider changed during sign-in. Start again.",
+      sso_not_configured: "Single sign-on is not configured. Use local sign-in or contact an administrator.",
+      sso_configuration: "The SSO client secret is not available to Aurora. Contact an administrator.",
+      sso_unavailable: "The identity provider is unavailable. You can still sign in locally.",
+      sso_authentication_failed: "SSO sign-in failed. Try again or use local sign-in.",
+      invalid_sso_response: "The SSO response is invalid or expired. Start sign-in again.",
+    };
+    setE(messages[reason] || "SSO sign-in failed. You can still sign in locally.");
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
   const m = useMutation({
     mutationFn: () => login(u, p),
     onSuccess: (x) => c.setQueryData(["session"], x),
@@ -600,6 +618,17 @@ function Login() {
   });
   return (
     <AuthFrame>
+      {sso.data?.enabled ? (
+        <section className="login-card sso-login-card">
+          <span className="auth-eyebrow">SINGLE SIGN-ON · OIDC</span>
+          <h1>Welcome to Aurora</h1>
+          <p>Continue securely with {s(sso.data.name, "your organization's identity provider")}.</p>
+          <a className="button primary" href="/api/auth/oidc/login">
+            {s(sso.data.button_label, "Continue with SSO")}
+          </a>
+          <div className="auth-divider"><span>Local sign-in</span></div>
+        </section>
+      ) : null}
       <form
         className="login-card"
         onSubmit={(x) => {
@@ -609,8 +638,8 @@ function Login() {
           m.mutate();
         }}
       >
-        <h1>{ui("auth.welcomeBack")}</h1>
-        <p>{ui("auth.signInContinue")}</p>
+        <h1>{sso.data?.enabled ? "Local sign-in" : ui("auth.welcomeBack")}</h1>
+        {!sso.data?.enabled ? <p>{ui("auth.signInContinue")}</p> : <p>Use your Aurora local account if SSO is unavailable.</p>}
         <label>
           {ui("auth.username")}
           <input
@@ -7173,8 +7202,12 @@ function UsersPage() {
     [confirming, setConfirming] = useState<{ action: string; user: Row } | null>(null),
     [newPassword, setNewPassword] = useState(""),
     [reassignTo, setReassignTo] = useState(""),
+    [oidcProviderId, setOidcProviderId] = useState(""),
+    [oidcSubject, setOidcSubject] = useState(""),
     [form, setForm] = useState<Row>(blankUser()),
     directories = arr(q.data?.identity_providers).filter((r) => r.enabled && s(r.kind) === "LDAP"),
+    oidcProviders = arr(q.data?.oidc_providers).filter((provider) => provider.enabled),
+    oidcLinks = arr(q.data?.oidc_account_links).filter((link) => link.user_id === form.id),
     configuredProviders = arr(q.data?.providers),
     source = s(form.auth_source, LOCAL_SOURCE),
     fromDirectory = source !== LOCAL_SOURCE,
@@ -7263,6 +7296,16 @@ function UsersPage() {
       },
       onError: (e) => setError(s(e, "Unable to reassign the reviews")),
     }),
+    createOidcLink = useMutation({
+      mutationFn: () => postJson(`system/users/${encodeURIComponent(s(form.username))}/oidc-links`, { provider_id: oidcProviderId, subject: oidcSubject }),
+      onSuccess: async () => { setOidcSubject(""); setError(""); setNotice("OIDC identity linked to this Aurora account."); await c.invalidateQueries({ queryKey: ["system"] }); },
+      onError: (e) => setError(s(e, "Unable to link the OIDC identity")),
+    }),
+    removeOidcLink = useMutation({
+      mutationFn: (link: Row) => deleteJson(`system/users/${encodeURIComponent(s(form.username))}/oidc-links/${encodeURIComponent(s(link.id))}`),
+      onSuccess: async () => { setError(""); setNotice("OIDC identity unlinked."); await c.invalidateQueries({ queryKey: ["system"] }); },
+      onError: (e) => setError(s(e, "Unable to unlink the OIDC identity")),
+    }),
     users = arr(q.data?.users).filter(
       (r) =>
         !search ||
@@ -7275,6 +7318,8 @@ function UsersPage() {
   const edit = (r?: Row) => {
     setError("");
     setForm(r ? { ...r, scopes: vals(r.scopes), password: "" } : blankUser());
+    setOidcProviderId(oidcProviders[0] ? s(oidcProviders[0].id) : "");
+    setOidcSubject("");
     setOpen(true);
   };
   const confirmUserAction = (action: string, user: Row) => {
@@ -7292,6 +7337,8 @@ function UsersPage() {
       display_name: s(account.display_name, s(account.login)),
       external_id: s(account.dn),
     });
+    setOidcProviderId(oidcProviders[0] ? s(oidcProviders[0].id) : "");
+    setOidcSubject("");
     setPicking(null);
     setOpen(true);
   };
@@ -7329,10 +7376,9 @@ function UsersPage() {
         onSave={(value) => chatbotGuardrails.mutate(value)}
         pending={chatbotGuardrails.isPending}
       />
-      {!directories.length && (
+      {!directories.length && !oidcProviders.length && (
         <p className="muted">
-          Only local accounts can sign in today. Configure a directory in Authentication to import accounts
-          from it.
+          Local accounts remain available if an external identity provider is unavailable. Configure LDAP directories in Authentication to import directory accounts.
         </p>
       )}
       {notice && <p className="muted">{notice}</p>}
@@ -7344,7 +7390,7 @@ function UsersPage() {
         rows={users.map((r) => [
           s(r.display_name),
           s(r.username),
-          s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE ? "Local account" : s(r.auth_source),
+          <div>{s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE ? "Local account" : s(r.auth_source)}{arr(q.data?.oidc_account_links).some((link) => link.user_id === r.id) ? <small className="field-note">SSO identity linked</small> : null}</div>,
           <Status v={r.role} />,
           s(r.role) === "ADMIN" ? "All domains" : s(r.role) === "GROUP_OWNER" ? "Assigned reviews" : s(vals(r.scopes).join(", "), "None"),
           <div>
@@ -7565,6 +7611,25 @@ function UsersPage() {
                 <span className="field-note">Select every provider where this role may act. A campaign spanning any other provider will be wholly unavailable.</span>
               </label>
             )}
+            {form.id ? (
+              <>
+                <h4>OIDC ACCOUNT ASSOCIATIONS</h4>
+                <p className="field-note">Only identities explicitly linked here can use SSO. Aurora matches the validated issuer and subject exactly; e-mail and username are never used to auto-link accounts.</p>
+                {oidcLinks.map((link) => (
+                  <div className="oidc-link-row" key={s(link.id)}>
+                    <div><strong>{s(link.provider_name)}</strong><small>{s(link.issuer)}</small><small>Subject: {s(link.subject)}</small></div>
+                    <button className="button subtle" type="button" disabled={removeOidcLink.isPending} onClick={() => removeOidcLink.mutate(link)}>Unlink</button>
+                  </div>
+                ))}
+                {oidcProviders.length ? (
+                  <div className="oidc-link-form">
+                    <label>OIDC provider<select value={oidcProviderId} onChange={(event) => setOidcProviderId(event.target.value)}>{oidcProviders.map((provider) => <option key={s(provider.id)} value={s(provider.id)}>{s(provider.name)} · {s(provider.kind)}</option>)}</select></label>
+                    <label>OIDC subject (`sub` claim)<input required maxLength={255} value={oidcSubject} onChange={(event) => setOidcSubject(event.target.value)} placeholder="Stable subject from the provider" /></label>
+                    <button className="button subtle" type="button" disabled={!oidcProviderId || !oidcSubject.trim() || createOidcLink.isPending} onClick={() => createOidcLink.mutate()}>{createOidcLink.isPending ? "Linking…" : "Link identity"}</button>
+                  </div>
+                ) : <p className="field-note">Configure and enable an OIDC provider in System → Authentication before linking an identity.</p>}
+              </>
+            ) : null}
             {s(form.role) === "GROUP_OWNER" && (
               <p className="field-note">
                 The username must match the reviewer identifier in the audited source, otherwise no review is
@@ -7704,6 +7769,7 @@ function Auth() {
   const c = useQueryClient(),
     q = useQuery({ queryKey: ["system"], queryFn: () => getJson("system") }),
     [editing, setEditing] = useState<Row | null>(null),
+    [editingOidc, setEditingOidc] = useState<Row | null>(null),
     [notice, setNotice] = useState<{ tone: string; text: string } | null>(null),
     directories = arr(q.data?.identity_providers),
     localCount = arr(q.data?.users).filter((r) => s(r.auth_source, LOCAL_SOURCE) === LOCAL_SOURCE).length,
@@ -7723,7 +7789,34 @@ function Auth() {
         await c.invalidateQueries({ queryKey: ["system"] });
       },
       onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to save the directory") }),
+    }),
+    oidcProviders = arr(q.data?.oidc_providers),
+    activeOidc = oidcProviders.find((provider) => provider.enabled && provider.active),
+    oidcTest = useMutation({
+      mutationFn: (body: Row) => postJson("system/oidc-providers/test", body),
+      onSuccess: () => setNotice({ tone: "ok", text: "OIDC discovery succeeded. This does not test a browser sign-in." }),
+      onError: (e) => setNotice({ tone: "error", text: s(e, "OIDC configuration test failed") }),
+    }),
+    oidcSave = useMutation({
+      mutationFn: (body: Row) => postJson("system/oidc-providers", body),
+      onSuccess: async (provider) => {
+        setEditingOidc(null);
+        setNotice({ tone: "ok", text: `SSO provider “${s(provider.name)}” saved. Test it, then activate it explicitly.` });
+        await c.invalidateQueries({ queryKey: ["system"] });
+      },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to save the SSO provider") }),
+    }),
+    oidcActivate = useMutation({
+      mutationFn: (id: string) => postJson(`system/oidc-providers/${encodeURIComponent(id)}/activate`),
+      onSuccess: async (provider) => { setNotice({ tone: "ok", text: `SSO provider “${s(provider.name)}” is enabled.` }); await c.invalidateQueries({ queryKey: ["system"] }); },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to activate SSO") }),
+    }),
+    oidcDisable = useMutation({
+      mutationFn: (id: string) => postJson(`system/oidc-providers/${encodeURIComponent(id)}/disable`),
+      onSuccess: async () => { setNotice({ tone: "ok", text: "SSO has been disabled. Local and LDAP sign-in remain available." }); await c.invalidateQueries({ queryKey: ["system"] }); },
+      onError: (e) => setNotice({ tone: "error", text: s(e, "Unable to disable SSO") }),
     });
+  const newOidc = (): Row => ({ name: "", kind: "keycloak", issuer: "", client_id: "", client_secret_env: "", client_secret_file_env: "", secret_mode: "environment", enabled: false, active: false });
   return (
     <>
       <Head title="Authentication">
@@ -7786,9 +7879,40 @@ function Auth() {
           </div>
         </section>
       ))}
-      <section className="panel auth-method">
-        <div className="auth-method-head"><h2>Single sign-on (OIDC / SAML)</h2><Status v="NOT_YET_ACTIVE" /></div>
-        <p>Not available yet. People sign in with a local account or with a configured LDAP directory.</p>
+      <section className="panel auth-method" aria-labelledby="oidc-auth-title">
+        <div className="auth-method-head">
+          <h2 id="oidc-auth-title">Single sign-on (OIDC)</h2>
+          <Status v={activeOidc ? "Enabled" : oidcProviders.length ? "Configured · inactive" : "Not configured"} />
+        </div>
+        {activeOidc ? (
+          <>
+            <p>{s(activeOidc.name)} · {s(activeOidc.kind)} · OpenID Connect</p>
+            <p className="field-note">Enabled means Aurora will offer this provider. It does not mean the identity provider is currently healthy. Test configuration checks discovery only; a browser sign-in is required to test authentication.</p>
+          </>
+        ) : oidcProviders.length ? (
+          <p>OIDC providers are saved, but none is active. Choose and activate one to show SSO on the sign-in page.</p>
+        ) : (
+          <p>Allow users to sign in with their organization's identity provider, such as Microsoft Entra ID or Keycloak.</p>
+        )}
+        {oidcProviders.map((provider) => (
+          <div className="oidc-provider-row" key={s(provider.id)}>
+            <div><strong>{s(provider.name)}</strong><small>{s(provider.kind)} · OIDC · {provider.enabled ? provider.active ? "Enabled" : "Configured, inactive" : "Disabled"}</small></div>
+            <div className="button-row">
+              <button className="button subtle" type="button" disabled={oidcTest.isPending} onClick={() => oidcTest.mutate(provider)}>Test connection</button>
+              <button className="button subtle" type="button" onClick={() => { oidcTest.reset(); setNotice(null); setEditingOidc({ ...provider, secret_mode: provider.client_secret_file_env ? "file" : "environment" }); }}>Edit</button>
+              {provider.active ? (
+                <button className="button subtle" type="button" disabled={oidcDisable.isPending} onClick={() => oidcDisable.mutate(s(provider.id))}>Disable</button>
+              ) : provider.enabled ? (
+                <button className="button primary" type="button" disabled={oidcActivate.isPending} onClick={() => oidcActivate.mutate(s(provider.id))}>Activate</button>
+              ) : null}
+            </div>
+          </div>
+        ))}
+        <div className="button-row">
+          <button className="button primary" type="button" onClick={() => { oidcTest.reset(); setNotice(null); setEditingOidc(newOidc()); }}>
+            Configure SSO
+          </button>
+        </div>
       </section>
       {editing && (
         <Drawer
@@ -7819,8 +7943,17 @@ function Auth() {
                 required
                 placeholder="ldaps://ldap.example.org"
                 value={s(editing.endpoint, "")}
-                onChange={(e) => setEditing({ ...editing, endpoint: e.target.value })}
+                onChange={(e) => setEditing({ ...editing, endpoint: e.target.value, settings: { ...settings, start_tls: e.target.value.toLowerCase().startsWith("ldaps://") ? false : settings.start_tls } })}
               />
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={Boolean(settings.start_tls)}
+                disabled={s(editing.endpoint, "").toLowerCase().startsWith("ldaps://")}
+                onChange={(e) => updateSettings("start_tls", e.target.checked)}
+              />
+              Use StartTLS with ldap:// (otherwise use ldaps://)
             </label>
             <label>
               Base DN
@@ -7894,6 +8027,31 @@ function Auth() {
               <button type="submit" className="button primary" disabled={save.isPending}>
                 Save
               </button>
+            </div>
+          </form>
+        </Drawer>
+      )}
+      {editingOidc && (
+        <Drawer title={editingOidc.id ? "Configure OIDC provider" : "Configure SSO"} close={() => setEditingOidc(null)}>
+          <form className="drawer-form" onSubmit={(event) => { event.preventDefault(); const { secret_mode: _secretMode, ...payload } = editingOidc; oidcSave.mutate(payload); }}>
+            <h4>SINGLE SIGN-ON · OIDC</h4>
+            <label>Provider name<input required maxLength={120} value={s(editingOidc.name, "")} onChange={(event) => setEditingOidc({ ...editingOidc, name: event.target.value })} placeholder="Corporate Keycloak" /></label>
+            <label>Provider type<select value={s(editingOidc.kind, "keycloak")} onChange={(event) => {
+              const kind = event.target.value;
+              setEditingOidc({ ...editingOidc, kind, issuer: kind === "google" ? "https://accounts.google.com" : "" });
+            }}><option value="entra">Microsoft Entra ID</option><option value="keycloak">Keycloak</option><option value="google">Google Identity</option><option value="generic">Generic OIDC</option></select></label>
+            <label>{s(editingOidc.kind) === "entra" ? "Tenant ID or Issuer URL" : "Issuer URL"}<input required type={s(editingOidc.kind) === "entra" && !String(editingOidc.issuer || "").includes("://") ? "text" : "url"} value={s(editingOidc.issuer, "")} onChange={(event) => setEditingOidc({ ...editingOidc, issuer: event.target.value })} placeholder={s(editingOidc.kind) === "keycloak" ? "https://keycloak.example.com/realms/aurora" : s(editingOidc.kind) === "entra" ? "Tenant UUID or https://login.microsoftonline.com/{tenant}/v2.0" : s(editingOidc.kind) === "google" ? "https://accounts.google.com" : "https://idp.example.com"} disabled={s(editingOidc.kind) === "google"} /></label>
+            <label>Client ID<input required maxLength={255} value={s(editingOidc.client_id, "")} onChange={(event) => setEditingOidc({ ...editingOidc, client_id: event.target.value })} /></label>
+            <label>Client secret reference<select value={s(editingOidc.secret_mode, "environment")} onChange={(event) => setEditingOidc({ ...editingOidc, secret_mode: event.target.value, client_secret_env: event.target.value === "environment" ? s(editingOidc.client_secret_env, "") : "", client_secret_file_env: event.target.value === "file" ? s(editingOidc.client_secret_file_env, "") : "" })}><option value="environment">Environment variable containing secret</option><option value="file">Environment variable containing secret-file path</option></select></label>
+            <label>{s(editingOidc.secret_mode) === "file" ? "Secret-file path variable name" : "Client secret variable name"}<input required value={s(s(editingOidc.secret_mode) === "file" ? editingOidc.client_secret_file_env : editingOidc.client_secret_env, "")} onChange={(event) => setEditingOidc({ ...editingOidc, client_secret_env: s(editingOidc.secret_mode) === "file" ? "" : event.target.value, client_secret_file_env: s(editingOidc.secret_mode) === "file" ? event.target.value : "" })} placeholder={s(editingOidc.secret_mode) === "file" ? "AURORA_OIDC_CLIENT_SECRET_FILE" : "AURORA_OIDC_CLIENT_SECRET"} /></label>
+            <p className="field-note">Aurora stores only this reference. Put the client secret in the API container environment or a mounted secret file; it is never returned by the API.</p>
+            <label>Redirect URI<input readOnly value={s(oidcTest.data?.redirect_uri, `${window.location.origin}/api/auth/oidc/callback`)} /></label>
+            <label className="check-row"><input type="checkbox" checked={Boolean(editingOidc.enabled)} onChange={(event) => setEditingOidc({ ...editingOidc, enabled: event.target.checked, active: event.target.checked ? editingOidc.active : false })} /> Provider enabled</label>
+            <p className="field-note">Use Test connection to check OIDC discovery and endpoint reachability. This does not perform a browser authentication. Activate the provider only after it is tested and an Aurora user has an explicit account link.</p>
+            {notice && <p className={notice.tone === "ok" ? "form-success" : "form-error"} role="status">{notice.text}</p>}
+            <div className="button-row">
+              <button className="button subtle" type="button" disabled={oidcTest.isPending} onClick={() => oidcTest.mutate(editingOidc)}>{oidcTest.isPending ? "Testing…" : "Test connection"}</button>
+              <button className="button primary" type="submit" disabled={oidcSave.isPending}>{oidcSave.isPending ? "Saving…" : "Save provider"}</button>
             </div>
           </form>
         </Drawer>

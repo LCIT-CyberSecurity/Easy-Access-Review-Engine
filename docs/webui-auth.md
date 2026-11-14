@@ -29,6 +29,8 @@ A directory account stores no password in Aurora. At sign-in, Aurora resolves th
 
 Roles and scopes are always managed in Aurora, never derived from directory groups. Keep at least one local administrator: it is the way back in when the directory is unreachable.
 
+Aurora also supports one active OpenID Connect provider per instance. Local sign-in remains available when OIDC is enabled, and LDAP directory sign-in remains a separate authentication method. Authentication providers do not grant roles: an administrator must first create and authorize each Aurora user. See [sso-oidc.md](sso-oidc.md) for provider setup, account linking, recovery, and troubleshooting.
+
 ## Configure a directory
 
 In **System → Authentication**, add an LDAP directory:
@@ -36,7 +38,7 @@ In **System → Authentication**, add an LDAP directory:
 | Field | Meaning |
 | --- | --- |
 | Name | Identifies the directory in Aurora, and is what the user list shows as the sign-in source |
-| LDAP URI | For example `ldaps://ldap.example.org` |
+| LDAP URI | Prefer `ldaps://ldap.example.org`; alternatively use `ldap://ldap.example.org` and enable **Use StartTLS** |
 | Base DN | Where accounts are searched, for example `dc=example,dc=org` |
 | Login attribute | `uid`, or `sAMAccountName` on Active Directory |
 | User filter | Optional, defaults to `(objectClass=person)` |
@@ -50,6 +52,8 @@ AURORA_DIRECTORY_PASSWORD=<service-account-secret>
 ```
 
 **Test connection** checks the configuration, including the password variable, before saving. Clearing **Allow people from this directory to sign in** immediately blocks every account from that directory without deleting them.
+
+Directory sign-in refuses to send a user's password over plain LDAP. Use LDAPS with a trusted server certificate, or StartTLS with `ldap://`; configure the API container's system trust store for a private CA. Aurora does not disable certificate checks or silently downgrade TLS.
 
 ## Import accounts
 

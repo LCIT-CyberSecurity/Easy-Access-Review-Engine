@@ -17,6 +17,11 @@ def init_system(conn: Any) -> None:
     CREATE TABLE IF NOT EXISTS system_users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, role TEXT NOT NULL, scopes TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1, password_hash TEXT, must_change_password INTEGER NOT NULL DEFAULT 0, api_access_enabled INTEGER NOT NULL DEFAULT 0, mcp_access_enabled INTEGER NOT NULL DEFAULT 0, chatbot_access_enabled INTEGER NOT NULL DEFAULT 0, session_version INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS identity_provider_configs (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, endpoint TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, settings TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS oidc_providers (id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, issuer TEXT NOT NULL, client_id TEXT NOT NULL, client_secret_env TEXT, client_secret_file_env TEXT, enabled INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_oidc_provider_active ON oidc_providers(active) WHERE active = 1;
+    CREATE TABLE IF NOT EXISTS oidc_account_links (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, provider_id TEXT NOT NULL, issuer TEXT NOT NULL, subject TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(issuer, subject), UNIQUE(user_id, provider_id));
+    CREATE INDEX IF NOT EXISTS ix_oidc_account_links_user ON oidc_account_links(user_id);
+    CREATE TABLE IF NOT EXISTS oidc_login_transactions (state_hash TEXT PRIMARY KEY, flow_cookie_hash TEXT NOT NULL, provider_id TEXT NOT NULL, issuer TEXT NOT NULL, client_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, nonce TEXT NOT NULL, code_verifier TEXT NOT NULL, created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_prefix TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT);
     CREATE INDEX IF NOT EXISTS ix_api_tokens_user ON api_tokens(user_id);
     CREATE UNIQUE INDEX IF NOT EXISTS uq_api_tokens_one_active ON api_tokens(user_id) WHERE revoked_at IS NULL;
@@ -390,7 +395,10 @@ def set_enabled(conn: Any, username: str, enabled: bool) -> dict[str, Any]:
     normalized = username.strip().lower()
     if conn.execute("SELECT 1 FROM system_users WHERE username = ?", (normalized,)).fetchone() is None:
         raise ValueError("user not found")
-    conn.execute("UPDATE system_users SET enabled = ? WHERE username = ?", (int(bool(enabled)), normalized))
+    conn.execute(
+        "UPDATE system_users SET enabled = ?, session_version = session_version + 1 WHERE username = ?",
+        (int(bool(enabled)), normalized),
+    )
     conn.commit()
     if not enabled:
         revoke_api_tokens(conn, normalized)
@@ -415,6 +423,146 @@ def enabled_admins(conn: Any, excluding: str | None = None) -> int:
     """Count the administrators who could still sign in, to keep at least one."""
     rows = conn.execute("SELECT username FROM system_users WHERE role = 'ADMIN' AND enabled = 1")
     return sum(1 for row in rows if row["username"] != (excluding or "").strip().lower())
+
+
+def enabled_local_password_admins(conn: Any, excluding: str | None = None) -> int:
+    """Count active local administrators with a structurally valid password hash."""
+    rows = conn.execute(
+        "SELECT username, password_hash FROM system_users "
+        "WHERE role = 'ADMIN' AND enabled = 1 AND COALESCE(auth_source, 'local') = 'local'"
+    )
+    excluded = (excluding or "").strip().lower()
+    count = 0
+    for row in rows:
+        if str(row["username"]).lower() == excluded:
+            continue
+        encoded = str(row["password_hash"] or "")
+        try:
+            algorithm, rounds, salt, digest = encoded.split("$", 3)
+            if algorithm == "pbkdf2_sha256" and int(rounds) >= 100_000 and len(bytes.fromhex(salt)) >= 16 and len(bytes.fromhex(digest)) == 32:
+                count += 1
+        except (TypeError, ValueError):
+            continue
+    return count
+
+
+def list_oidc_providers(conn: Any) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        "SELECT id, name, kind, issuer, client_id, client_secret_env, "
+        "client_secret_file_env, enabled, active, created_at, updated_at "
+        "FROM oidc_providers ORDER BY name"
+    )
+    return [{**dict(row), "enabled": bool(row["enabled"]), "active": bool(row["active"])} for row in rows]
+
+
+def get_oidc_provider(conn: Any, provider_id: str) -> dict[str, Any] | None:
+    return next((row for row in list_oidc_providers(conn) if row["id"] == provider_id), None)
+
+
+def upsert_oidc_provider(conn: Any, data: dict[str, Any]) -> dict[str, Any]:
+    from uuid import uuid4
+
+    now = datetime.now(timezone.utc).isoformat()
+    provider_id = str(data.get("id") or uuid4())
+    current = get_oidc_provider(conn, provider_id)
+    if current is None and data.get("id"):
+        raise ValueError("OIDC provider not found")
+    name = str(data.get("name", "")).strip()
+    kind = str(data.get("kind", "")).strip().lower()
+    issuer = str(data.get("issuer", "")).strip().rstrip("/")
+    client_id = str(data.get("client_id", "")).strip()
+    secret_env = str(data.get("client_secret_env", "")).strip() or None
+    secret_file_env = str(data.get("client_secret_file_env", "")).strip() or None
+    if not name or kind not in {"entra", "keycloak", "google", "generic"} or not issuer or not client_id:
+        raise ValueError("name, supported OIDC kind, issuer and client ID are required")
+    if bool(secret_env) == bool(secret_file_env):
+        raise ValueError("Configure exactly one client secret environment or file reference")
+    enabled = bool(data.get("enabled", False))
+    active = bool(data.get("active", current["active"] if current else False))
+    if active and not enabled:
+        raise ValueError("An active OIDC provider must be enabled")
+    created_at = str(current["created_at"]) if current else now
+    if active:
+        conn.execute("UPDATE oidc_providers SET active = 0 WHERE active = 1")
+    conn.execute(
+        """INSERT INTO oidc_providers(id, name, kind, issuer, client_id, client_secret_env,
+           client_secret_file_env, enabled, active, created_at, updated_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind,
+           issuer=excluded.issuer, client_id=excluded.client_id,
+           client_secret_env=excluded.client_secret_env,
+           client_secret_file_env=excluded.client_secret_file_env, enabled=excluded.enabled,
+           active=excluded.active, updated_at=excluded.updated_at""",
+        (provider_id, name, kind, issuer, client_id, secret_env, secret_file_env,
+         int(enabled), int(active), created_at, now),
+    )
+    conn.commit()
+    return get_oidc_provider(conn, provider_id) or {}
+
+
+def activate_oidc_provider(conn: Any, provider_id: str) -> dict[str, Any]:
+    provider = get_oidc_provider(conn, provider_id)
+    if provider is None:
+        raise ValueError("OIDC provider not found")
+    if not provider["enabled"]:
+        raise ValueError("Enable the OIDC provider before activating it")
+    conn.execute("UPDATE oidc_providers SET active = 0 WHERE active = 1")
+    conn.execute("UPDATE oidc_providers SET active = 1, updated_at = ? WHERE id = ?", (datetime.now(timezone.utc).isoformat(), provider_id))
+    conn.commit()
+    return get_oidc_provider(conn, provider_id) or {}
+
+
+def disable_oidc_provider(conn: Any, provider_id: str) -> dict[str, Any]:
+    if get_oidc_provider(conn, provider_id) is None:
+        raise ValueError("OIDC provider not found")
+    conn.execute(
+        "UPDATE oidc_providers SET enabled = 0, active = 0, updated_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), provider_id),
+    )
+    conn.commit()
+    return get_oidc_provider(conn, provider_id) or {}
+
+
+def list_oidc_account_links(conn: Any) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT l.id, l.user_id, u.username, u.display_name, l.provider_id,
+           p.name AS provider_name, l.issuer, l.subject, l.created_at
+           FROM oidc_account_links l JOIN system_users u ON u.id = l.user_id
+           JOIN oidc_providers p ON p.id = l.provider_id ORDER BY u.username, p.name"""
+    )
+    return [dict(row) for row in rows]
+
+
+def link_oidc_account(conn: Any, username: str, provider_id: str, subject: str) -> dict[str, Any]:
+    from uuid import uuid4
+
+    normalized = username.strip().lower()
+    user = conn.execute("SELECT id FROM system_users WHERE username = ?", (normalized,)).fetchone()
+    provider = get_oidc_provider(conn, provider_id)
+    subject = subject.strip()
+    if user is None:
+        raise ValueError("Aurora user not found")
+    if provider is None or not provider["enabled"]:
+        raise ValueError("OIDC provider is not configured or enabled")
+    if not subject or len(subject) > 255 or any(ord(char) < 0x20 for char in subject):
+        raise ValueError("OIDC subject must be between 1 and 255 printable characters")
+    link_id = str(uuid4())
+    try:
+        conn.execute(
+            "INSERT INTO oidc_account_links(id,user_id,provider_id,issuer,subject,created_at) VALUES(?,?,?,?,?,?)",
+            (link_id, user["id"], provider_id, provider["issuer"], subject, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        raise ValueError("That OIDC identity or Aurora account is already linked") from exc
+    return next((row for row in list_oidc_account_links(conn) if row["id"] == link_id), {})
+
+
+def unlink_oidc_account(conn: Any, link_id: str) -> bool:
+    result = conn.execute("DELETE FROM oidc_account_links WHERE id = ?", (link_id,))
+    conn.commit()
+    return result.rowcount > 0
 
 def change_password(conn: Any, username: str, password: str) -> dict[str, Any]:
     if not isinstance(password, str) or len(password) < 12:
