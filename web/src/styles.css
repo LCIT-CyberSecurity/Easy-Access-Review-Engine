@@ -362,7 +362,9 @@ td > a:hover, .link-button:hover { text-decoration: underline; text-underline-of
 
 /* --- Shell --------------------------------------------------------------- */
 
-.app-shell { display: flex; min-height: 100vh; }
+/* body zooms the UI to 80%, so compensate horizontally as the sidebar does
+   vertically. This keeps the workspace flush with the real viewport. */
+.app-shell { display: flex; width: 125vw; min-height: 100vh; }
 
 .sidebar {
   position: sticky;
@@ -538,8 +540,9 @@ td > a:hover, .link-button:hover { text-decoration: underline; text-underline-of
 .user-name { font-size: 15.5px; font-weight: 600; line-height: 18px; }
 .user-name span { display: block; color: var(--text-faint); font-size: 13.5px; font-weight: 400; }
 
-/* Wide screens get the room: the page is only capped far beyond common monitor widths. */
-main { width: 100%; max-width: 1840px; margin: 0 auto; padding: 34px clamp(24px, 2.6vw, 48px) 64px; }
+/* The content follows the full workspace; prose and form helpers set local
+   reading widths where needed instead of narrowing every page. */
+main { width: 100%; margin: 0; padding: 34px clamp(24px, 2.6vw, 48px) 64px; }
 
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 26px; }
 .page-header > div:first-child { min-width: 0; }
