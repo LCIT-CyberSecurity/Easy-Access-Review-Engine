@@ -817,6 +817,11 @@ const navEntries = (role: string): NavEntry[] =>
       .filter((item) => item.roles.includes(role))
       .map((item) => ({ to: item.to, label: item.label, icon: item.icon, section: section.heading })),
   );
+export function sidebarNavigationForRole(role: string) {
+  return navSections
+    .map((section) => ({ heading: section.heading, items: section.items.filter((item) => item.roles.includes(role)) }))
+    .filter((section) => section.items.length > 0);
+}
 /** Routes the rail does not list, so a detail page still says where it sits. */
 const NESTED_ROUTES: { match: RegExp; parent: string; labelKey: string }[] = [
   { match: /^\/campaigns\/new$/, parent: "/campaigns", labelKey: "ui.createCampaign" },
@@ -824,6 +829,80 @@ const NESTED_ROUTES: { match: RegExp; parent: string; labelKey: string }[] = [
   { match: /^\/campaigns\/[^/]+$/, parent: "/campaigns", labelKey: "labels.campaign" },
   { match: /^\/sources\/[^/]+\/browse$/, parent: "/sources", labelKey: "nav.sources" },
 ];
+type SidebarGroup = "ACCESS & REFERENCE" | "AUDIT" | "SYSTEM";
+/** Find the visible sidebar group for a route, including the existing detail routes. */
+export function activeSidebarGroup(pathname: string, role: string): SidebarGroup | null {
+  const nested = NESTED_ROUTES.find((route) => route.match.test(pathname));
+  const target = nested?.parent ?? pathname;
+  for (const section of sidebarNavigationForRole(role)) {
+    if (!section.heading) continue;
+    const visible = section.items.some((item) =>
+      item.roles.includes(role) && (target === item.to || target.startsWith(`${item.to}/`)),
+    );
+    if (visible) return section.heading as SidebarGroup;
+  }
+  return null;
+}
+export function SidebarNavigation({ role, onNavigate }: { role: string; onNavigate?: () => void }) {
+  const location = useLocation();
+  const [openNavGroup, setOpenNavGroup] = useState<SidebarGroup | null>(() => activeSidebarGroup(location.pathname, role));
+  useEffect(() => {
+    setOpenNavGroup(activeSidebarGroup(location.pathname, role));
+  }, [location.pathname, role]);
+  return (
+    <nav aria-label={ui("nav.workspace")}>
+      {sidebarNavigationForRole(role).map((section) => section.heading ? (
+        <div className="nav-section nav-group" key={section.heading}>
+          {(() => {
+            const expanded = openNavGroup === section.heading;
+            const listId = `aurora-nav-${section.heading.toLowerCase().replace(/[^a-z]+/g, "-")}`;
+            return <>
+              <button
+                type="button"
+                className={expanded ? "nav-group-toggle expanded" : "nav-group-toggle"}
+                aria-expanded={expanded}
+                aria-controls={listId}
+                onClick={() => setOpenNavGroup(expanded ? null : section.heading as SidebarGroup)}
+              >
+                <span>{ui(NAV_KEYS[section.heading] ?? section.heading)}</span>
+                <ChevronDown size={16} aria-hidden="true" />
+              </button>
+              <div id={listId} className="nav-group-items" hidden={!expanded}>
+                {section.items.map(({ to, label, icon: I }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={to === "/"}
+                    onClick={onNavigate}
+                    className={({ isActive }) => (isActive ? "nav-link nav-group-link active" : "nav-link nav-group-link")}
+                  >
+                    <I size={18} aria-hidden="true" />
+                    {ui(NAV_KEYS[label] ?? label)}
+                  </NavLink>
+                ))}
+              </div>
+            </>
+          })()}
+        </div>
+      ) : (
+        <div className="nav-section" key="product">
+          {section.items.map(({ to, label, icon: I }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === "/"}
+              onClick={onNavigate}
+              className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+            >
+              <I size={20} aria-hidden="true" />
+              {ui(NAV_KEYS[label] ?? label)}
+            </NavLink>
+          ))}
+        </div>
+      ))}
+    </nav>
+  );
+}
 export function breadcrumbTrail(pathname: string, role: string): { section: string | null; page: string | null; leaf: string | null } {
   const entries = navEntries(role);
   const nested = NESTED_ROUTES.find((route) => route.match.test(pathname));
@@ -956,13 +1035,13 @@ function CommandPalette({ role, close }: { role: string; close: () => void }) {
   );
 }
 function Shell({ principal }: { principal: Principal }) {
+  const location = useLocation();
   const [c, setC] = useState(false),
     [assistantOpen, setAssistantOpen] = useState(false),
     [guideOpen, setGuideOpen] = useState(false),
     [paletteOpen, setPaletteOpen] = useState(false),
     [guideEnabled, setGuideEnabled] = useState(() => readGuidePreference(principal, "enabled", true)),
     [onboardingSeen, setOnboardingSeen] = useState(() => readGuidePreference(principal, "seen", false)),
-    location = useLocation(),
     toast = useToast(),
     [guideFocus, setGuideFocus] = useState<string[]>([]),
     stepStatuses = useRef<Record<string, string> | null>(null),
@@ -1049,28 +1128,7 @@ function Shell({ principal }: { principal: Principal }) {
             <small>Access governance</small>
           </div>
         </div>
-        <nav>
-          {navSections.map((section) => {
-            const items = section.items.filter((x) => x.roles.includes(principal.role));
-            return items.length ? (
-              <div className="nav-section" key={section.heading ?? "product"}>
-                {section.heading && <div className="nav-heading">{ui(NAV_KEYS[section.heading] ?? section.heading)}</div>}
-                {items.map(({ to, label, icon: I }) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    end={to === "/"}
-                    onClick={() => setC(false)}
-                    className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-                  >
-                    <I size={20} />
-                    {ui(NAV_KEYS[label] ?? label)}
-                  </NavLink>
-                ))}
-              </div>
-            ) : null;
-          })}
-        </nav>
+        <SidebarNavigation role={principal.role} onNavigate={() => setC(false)} />
         <div className="sidebar-footer">
           {ui("auth.productBy")} <strong>LCIT Cybersecurity</strong>
         </div>

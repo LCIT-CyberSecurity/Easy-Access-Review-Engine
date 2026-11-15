@@ -381,7 +381,7 @@ td > a:hover, .link-button:hover { text-decoration: underline; text-underline-of
 }
 /* The links share the rail's height: each grows from 44px up to 58px, so the
    navigation fills a tall screen without turning into oversized buttons. */
-.sidebar nav { display: flex; flex: 1; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; scrollbar-width: none; }
+.sidebar nav { display: flex; flex: 1; flex-direction: column; gap: 3px; min-height: 0; overflow-y: auto; scrollbar-width: none; }
 .sidebar nav::-webkit-scrollbar { display: none; }
 
 .brand { display: flex; align-items: center; gap: 12px; padding: 2px 0 26px 2px; }
@@ -412,6 +412,7 @@ td > a:hover, .link-button:hover { text-decoration: underline; text-underline-of
 .brand-sub { align-self: flex-end; margin-bottom: 3px; margin-left: -4px; color: var(--text-faint); font-size: 12.5px; font-weight: 500; }
 
 .nav-section { display: contents; }
+.nav-group { display: flex; flex: none; flex-direction: column; gap: 2px; margin-top: 12px; }
 .nav-heading {
   flex: none;
   margin-top: 18px;
@@ -422,14 +423,45 @@ td > a:hover, .link-button:hover { text-decoration: underline; text-underline-of
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
+.nav-group-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 680;
+  letter-spacing: 0.075em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.nav-group-toggle:hover,
+.nav-group-toggle.expanded { color: var(--text-secondary); background: var(--surface-secondary); }
+.nav-group-toggle svg { flex: none; transition: transform var(--normal) var(--ease); }
+.nav-group-toggle.expanded svg { transform: rotate(180deg); }
+.nav-group-items { display: flex; flex-direction: column; gap: 2px; padding-left: 9px; }
+.nav-group-items[hidden] { display: none; }
+.nav-group-items:not([hidden]) { animation: aurora-nav-expand 150ms var(--ease) both; }
+@keyframes aurora-nav-expand {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .nav-link {
   position: relative;
   display: flex;
   align-items: center;
-  flex: 1 1 0;
+  flex: none;
   gap: 12px;
-  min-height: 44px;
-  max-height: 54px;
+  min-height: 42px;
   padding: 0 14px;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
@@ -454,6 +486,8 @@ td > a:hover, .link-button:hover { text-decoration: underline; text-underline-of
   background: var(--primary-edge);
   border-radius: 0 3px 3px 0;
 }
+.nav-group-link { min-height: 39px; gap: 10px; padding-left: 12px; font-size: 14px; }
+.nav-group-link.active::before { left: -9px; }
 
 .sidebar-footer {
   display: block;
