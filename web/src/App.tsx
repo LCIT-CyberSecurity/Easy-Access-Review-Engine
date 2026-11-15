@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -485,17 +485,11 @@ function AuthFrame({ children }: { children: ReactNode }) {
         <aside className="auth-intro">
           <div className="auth-product">
             <span className="auth-product-icon"><ShieldCheck size={22} strokeWidth={1.8} /></span>
-            <span><strong>Aurora</strong><small>Access Review Engine</small></span>
+            <span><strong>Aurora</strong><small>{ui("auth.productSubtitle")}</small></span>
           </div>
           <div className="auth-message">
             <span className="auth-eyebrow">{ui("auth.accessGovernance")}</span>
-            <h2>{ui("auth.everyAccess")}<br /><em>{ui("auth.accountedFor")}</em></h2>
-            <p>{ui("auth.intro")}</p>
-          </div>
-          <div className="auth-process">
-            <div><span>01</span><strong>{ui("auth.collect")}</strong><small>{ui("auth.knowCurrentState")}</small></div>
-            <div><span>02</span><strong>{ui("auth.compare")}</strong><small>{ui("auth.findAttention")}</small></div>
-            <div><span>03</span><strong>{ui("auth.certify")}</strong><small>{ui("auth.recordDecision")}</small></div>
+            <h2>{ui("auth.loginTagline")}</h2>
           </div>
           <div className="auth-foot">{ui("auth.productBy")} <strong>LCIT Cybersecurity</strong></div>
         </aside>
@@ -586,13 +580,13 @@ function takeSignedOut(): boolean {
     return false;
   }
 }
-function Login() {
+export function Login() {
   const c = useQueryClient(),
     sso = useQuery({ queryKey: ["public-oidc-login"], queryFn: () => getJson("auth/oidc/config"), retry: false }),
     methods = useQuery({ queryKey: ["public-auth-methods"], queryFn: () => getJson("auth/methods"), retry: false }),
     [u, setU] = useState(""),
     [p, setP] = useState(""),
-    [localSignIn, setLocalSignIn] = useState(false),
+    [credentialMethod, setCredentialMethod] = useState<"directory" | "local" | null>(null),
     [visible, setVisible] = useState(false),
     [signedOut, setSignedOut] = useState(takeSignedOut),
     [e, setE] = useState("");
@@ -600,113 +594,121 @@ function Login() {
     const reason = new URLSearchParams(window.location.search).get("auth_error");
     if (!reason) return;
     const messages: Record<string, string> = {
-      sso_account_not_linked: "This identity is not linked to an Aurora account. Ask an Aurora administrator to associate it.",
-      sso_account_disabled: "This Aurora account is disabled. Contact an administrator.",
-      sso_account_not_authorized: "This Aurora account is not authorized to access the application.",
-      sso_provider_changed: "The SSO provider changed during sign-in. Start again.",
-      sso_not_configured: "Single sign-on is not configured. Use another sign-in method or contact an administrator.",
-      sso_configuration: "The SSO client secret is not available to Aurora. Contact an administrator.",
-      sso_unavailable: "The identity provider is unavailable. Use another sign-in method below.",
-      sso_authentication_failed: "SSO sign-in failed. Try again or use another sign-in method below.",
-      invalid_sso_response: "The SSO response is invalid or expired. Start sign-in again.",
+      sso_account_not_linked: "auth.ssoAccountNotLinked",
+      sso_account_disabled: "auth.ssoAccountDisabled",
+      sso_account_not_authorized: "auth.ssoAccountNotAuthorized",
+      sso_provider_changed: "auth.ssoProviderChanged",
+      sso_not_configured: "auth.ssoNotConfigured",
+      sso_configuration: "auth.ssoConfiguration",
+      sso_unavailable: "auth.ssoUnavailable",
+      sso_authentication_failed: "auth.ssoAuthenticationFailed",
+      invalid_sso_response: "auth.invalidSsoResponse",
     };
-    setE(messages[reason] || "SSO sign-in failed. Use another sign-in method below.");
+    setE(ui(messages[reason] || "auth.ssoAuthenticationFailed"));
     window.history.replaceState({}, "", window.location.pathname);
   }, []);
   const m = useMutation({
-    mutationFn: () => login(u, p, methods.data?.directory_enabled && !localSignIn ? "directory" : "local"),
+    mutationFn: (method: "local" | "directory") => login(u, p, method),
     onSuccess: (x) => c.setQueryData(["session"], x),
     onError: (x) => setE(s(x, "Unable to sign in")),
   });
   const oidcEnabled = Boolean(sso.data?.enabled),
     directoryEnabled = Boolean(methods.data?.directory_enabled),
+    // Keep the existing local recovery path available if the public options endpoint is down.
     localAvailable = Boolean(methods.data?.local_available) || methods.isError,
-    localChoiceVisible = localAvailable && (oidcEnabled || directoryEnabled),
-    showCredentials = (methods.isSuccess && sso.isSuccess && (!oidcEnabled || directoryEnabled || localSignIn)) || methods.isError || sso.isError,
-    directorySignIn = directoryEnabled && !localSignIn;
+    configLoading = sso.isLoading || methods.isLoading,
+    primaryCredentialMethod = directoryEnabled ? "directory" : "local",
+    credentialAvailable = (credentialMethod ?? primaryCredentialMethod) === "directory" ? directoryEnabled : localAvailable,
+    hasAlternativeCredentials = directoryEnabled || localAvailable,
+    noMethods = !configLoading && !oidcEnabled && !directoryEnabled && !localAvailable,
+    showPrimaryCredentials = !configLoading && !oidcEnabled && !noMethods,
+    showSsoAlternatives = !configLoading && oidcEnabled && hasAlternativeCredentials,
+    showCredentialForm = !configLoading && (showPrimaryCredentials || showSsoAlternatives) && credentialAvailable;
   return (
     <AuthFrame>
-      {oidcEnabled ? (
-        <section className="login-card sso-login-card">
-          <span className="auth-eyebrow">SINGLE SIGN-ON · OIDC</span>
-          <h1>Welcome to Aurora</h1>
-          <p>Continue securely with {s(sso.data?.name, "your organization's identity provider")}.</p>
-          <a className="button primary" href="/api/auth/oidc/login">
-            {s(sso.data?.button_label, "Continue with SSO")}
-          </a>
-          <div className="auth-divider"><span>Other sign-in methods</span></div>
-        </section>
-      ) : null}
-      <form
-        className="login-card"
-        onSubmit={(x) => {
-          x.preventDefault();
-          setE("");
-          setSignedOut(false);
-          m.mutate();
-        }}
-      >
-        <h1>{showCredentials ? directorySignIn ? "Directory sign-in" : oidcEnabled ? "Local sign-in" : ui("auth.welcomeBack") : "Other sign-in methods"}</h1>
-        {showCredentials
-          ? directorySignIn
-            ? <p>Sign in with your directory account.</p>
-            : oidcEnabled
-              ? <p>Use your Aurora local account if SSO is unavailable.</p>
-              : <p>{ui("auth.signInContinue")}</p>
-          : <p>Use the SSO button above, or select local sign-in to use an Aurora account.</p>}
-        {localChoiceVisible ? (
-          <label className="auth-local-choice">
-            <input
-              type="checkbox"
-              checked={localSignIn}
-              onChange={(x) => setLocalSignIn(x.target.checked)}
-            />
-            Use a local Aurora account
-          </label>
-        ) : null}
-        {showCredentials ? <>
-        <label>
-          {ui("auth.username")}
-          <input
-            required
-            autoFocus
-            autoComplete="username"
-            value={u}
-            onChange={(x) => setU(x.target.value)}
-          />
-        </label>
-        <label>
-          {ui("auth.password")}
-          <span className="password-field">
-            <input
-              required
-              autoComplete="current-password"
-              type={visible ? "text" : "password"}
-              value={p}
-              onChange={(x) => setP(x.target.value)}
-            />
-            <button
-              type="button"
-              className="text-button"
-              aria-label={visible ? "Hide password" : "Show password"}
-              onClick={() => setVisible(!visible)}
-            >
-              {visible ? ui("common.hide") : ui("common.show")}
-            </button>
-          </span>
-        </label>
-        {signedOut && !e ? (
-          <p className="form-notice" role="status">
-            <Check size={15} /> {ui("auth.signedOut")}
-          </p>
-        ) : null}
+      <section className="login-card">
+        <span className="auth-eyebrow">{ui("auth.secureAccess")}</span>
+        <h1>{ui("auth.loginTitle")}</h1>
+        <p>{ui("auth.loginDescription")}</p>
+        {configLoading ? <p className="auth-methods-loading" role="status" aria-live="polite">{ui("auth.loadingMethods")}</p> : null}
         {e && <p className="form-error" role="alert">{e}</p>}
-        <button className="button primary" disabled={m.isPending}>
-          {m.isPending ? ui("auth.signingIn") : ui("auth.signIn")}
-        </button>
-        </> : null}
-      </form>
+        {oidcEnabled && !configLoading ? (
+          <a className="button primary" href="/api/auth/oidc/login">{ui("auth.ssoSignIn")}</a>
+        ) : null}
+        {showPrimaryCredentials && !directoryEnabled && localAvailable ? (
+          <LoginCredentials
+            method="local" signedOut={signedOut && !e} autofocus pending={m.isPending}
+            username={u} password={p} passwordVisible={visible} onUsername={setU} onPassword={setP}
+            onTogglePassword={() => setVisible(!visible)} onSubmit={(x) => {
+              x.preventDefault(); setE(""); setSignedOut(false); m.mutate("local");
+            }}
+          />
+        ) : null}
+        {showPrimaryCredentials && directoryEnabled ? (
+          <LoginCredentials
+            method="directory" signedOut={signedOut && !e} autofocus pending={m.isPending}
+            username={u} password={p} passwordVisible={visible} onUsername={setU} onPassword={setP}
+            onTogglePassword={() => setVisible(!visible)} onSubmit={(x) => {
+              x.preventDefault(); setE(""); setSignedOut(false); m.mutate("directory");
+            }}
+          />
+        ) : null}
+        {showSsoAlternatives ? (
+          <details className="auth-methods">
+            <summary>{ui("auth.otherMethods")}</summary>
+            {directoryEnabled && localAvailable ? (
+              <fieldset className="auth-method-choice">
+                <legend>{ui("auth.chooseMethod")}</legend>
+                <label><input type="radio" name="credential-method" value="directory" checked={(credentialMethod ?? "directory") === "directory"} onChange={() => setCredentialMethod("directory")} />{ui("auth.directorySignIn")}</label>
+                <label><input type="radio" name="credential-method" value="local" checked={credentialMethod === "local"} onChange={() => setCredentialMethod("local")} />{ui("auth.localSignIn")}</label>
+              </fieldset>
+            ) : null}
+            {showCredentialForm ? (
+              <LoginCredentials
+                method={directoryEnabled && (credentialMethod ?? "directory") === "directory" ? "directory" : "local"}
+                signedOut={signedOut && !e} pending={m.isPending} username={u} password={p} passwordVisible={visible}
+                onUsername={setU} onPassword={setP} onTogglePassword={() => setVisible(!visible)}
+                onSubmit={(x) => { x.preventDefault(); setE(""); setSignedOut(false); m.mutate(directoryEnabled && (credentialMethod ?? "directory") === "directory" ? "directory" : "local"); }}
+              />
+            ) : null}
+          </details>
+        ) : null}
+        {noMethods ? <p className="form-error" role="alert">{ui("auth.noMethods")}</p> : null}
+        {showPrimaryCredentials && directoryEnabled && localAvailable ? (
+          <details className="auth-methods">
+            <summary>{ui("auth.localSignIn")}</summary>
+            <LoginCredentials
+              method="local" signedOut={signedOut && !e} pending={m.isPending}
+              username={u} password={p} passwordVisible={visible} onUsername={setU} onPassword={setP}
+              onTogglePassword={() => setVisible(!visible)} onSubmit={(x) => {
+                x.preventDefault(); setE(""); setSignedOut(false); m.mutate("local");
+              }}
+            />
+          </details>
+        ) : null}
+      </section>
     </AuthFrame>
+  );
+}
+
+function LoginCredentials({
+  method, signedOut, autofocus = false, pending, username, password, passwordVisible, onUsername, onPassword, onTogglePassword, onSubmit,
+}: {
+  method: "directory" | "local"; signedOut: boolean; autofocus?: boolean; pending: boolean; username: string; password: string;
+  passwordVisible: boolean; onUsername: (value: string) => void; onPassword: (value: string) => void;
+  onTogglePassword: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <form className="auth-credentials" onSubmit={onSubmit}>
+      <p className="auth-method-description">{ui(method === "directory" ? "auth.directoryDescription" : "auth.localDescription")}</p>
+      <label>{ui("auth.username")}<input required autoFocus={autofocus} autoComplete="username" value={username} onChange={(event) => onUsername(event.target.value)} /></label>
+      <label>{ui("auth.password")}<span className="password-field">
+        <input required autoComplete="current-password" type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => onPassword(event.target.value)} />
+        <button type="button" className="text-button" aria-label={passwordVisible ? ui("auth.hidePassword") : ui("auth.showPassword")} onClick={onTogglePassword}>{passwordVisible ? ui("common.hide") : ui("common.show")}</button>
+      </span></label>
+      {signedOut ? <p className="form-notice" role="status"><Check size={15} /> {ui("auth.signedOut")}</p> : null}
+      <button className="button primary" disabled={pending}>{pending ? ui("auth.signingIn") : ui("auth.signIn")}</button>
+    </form>
   );
 }
 const NAV_KEYS: Record<string, string> = {
