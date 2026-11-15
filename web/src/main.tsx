@@ -5,7 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./i18n";
 import "@fontsource-variable/inter";
-import "./styles.css";
+import "./styles/tailwind.css";
 import { applyAppearance, applyTheme, readAppearance, readTheme } from "./theme";
 
 // Applied before the first render so a stored style or appearance never flashes

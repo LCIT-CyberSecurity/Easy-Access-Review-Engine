@@ -1,0 +1,47 @@
+/* Tailwind utilities are added in their own layer. The existing Aurora sheet is
+   preserved intact in `legacy`; Tailwind preflight is intentionally excluded. */
+@layer theme, legacy, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "../styles.css" layer(legacy);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Semantic classes follow Aurora's existing tokens and therefore its current
+   light/dark appearance and user-selected visual themes. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--text-primary);
+  --color-surface: var(--surface);
+  --color-card: var(--surface);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--text-on-accent);
+  --color-secondary: var(--surface-secondary);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted: var(--surface-sunken);
+  --color-muted-foreground: var(--text-muted);
+  --color-accent: var(--primary-soft);
+  --color-accent-foreground: var(--primary);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--text-on-accent);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-border: var(--border);
+  --color-input: var(--border-strong);
+  --color-ring: var(--primary);
+
+  --font-sans: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --radius-aurora-xs: var(--radius-xs);
+  --radius-aurora-sm: var(--radius-sm);
+  --radius-aurora: var(--radius);
+  --radius-aurora-lg: var(--radius-lg);
+  --radius-aurora-xl: var(--radius-xl);
+}
+
+@custom-variant dark (&:where([data-appearance="dark"], [data-appearance="dark"] *));
