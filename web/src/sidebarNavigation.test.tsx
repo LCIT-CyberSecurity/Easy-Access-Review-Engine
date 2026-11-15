@@ -25,7 +25,7 @@ function renderNavigation(role = "ADMIN", path = "/") {
   document.body.append(host);
   root = createRoot(host);
   act(() => {
-    root!.render(createElement(MemoryRouter, { initialEntries: [path], future: { v7_startTransition: true, v7_relativeSplatPath: true } },
+    root!.render(createElement(MemoryRouter, { initialEntries: [path] },
       createElement("div", null, createElement(SidebarNavigation, { role }), createElement(RouteControls))));
   });
   return host;
