@@ -1,4 +1,4 @@
-FROM node:22-bookworm AS build
+FROM node:22-trixie AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./
